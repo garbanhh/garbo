@@ -77,25 +77,48 @@ impl ApplicationHandler<UserEvent> for App {
 
     fn new_events(&mut self, _el: &ActiveEventLoop, cause: StartCause) {
         if let StartCause::ResumeTimeReached { .. } = cause {
+            let blink = self.cfg.terminal.cursor_blink;
             if let Some(st) = self.st.as_mut() {
-                st.cursor_on = !st.cursor_on;
-                st.next_blink = Instant::now() + BLINK;
-                st.window.request_redraw();
+                let now = Instant::now();
+                if blink && now >= st.next_blink {
+                    st.cursor_on = !st.cursor_on;
+                    st.next_blink = now + BLINK;
+                    st.window.request_redraw();
+                }
+                // "hace N s" del panel de agentes
+                if st.panel.agents {
+                    st.window.request_redraw();
+                }
             }
         }
     }
 
     fn about_to_wait(&mut self, el: &ActiveEventLoop) {
+        self.refresh_sessions();
         let blink = self.cfg.terminal.cursor_blink;
-        match self.st.as_ref() {
-            Some(st) if blink && st.focused => el.set_control_flow(ControlFlow::WaitUntil(st.next_blink)),
-            _ => el.set_control_flow(ControlFlow::Wait),
+        let tick = self.next_tick();
+        let blink_at = self.st.as_ref().filter(|st| blink && st.focused).map(|st| st.next_blink);
+        // Sin animaciones ni parpadeo pendientes, la app duerme hasta el siguiente evento.
+        match (blink_at, tick) {
+            (Some(a), Some(b)) => el.set_control_flow(ControlFlow::WaitUntil(a.min(b))),
+            (Some(t), None) | (None, Some(t)) => el.set_control_flow(ControlFlow::WaitUntil(t)),
+            (None, None) => el.set_control_flow(ControlFlow::Wait),
         }
     }
 
     fn user_event(&mut self, el: &ActiveEventLoop, event: UserEvent) {
         let (id, ev) = match event {
             UserEvent::Term(id, ev) => (id, ev),
+            UserEvent::Ports(list) => {
+                if let Some(st) = self.st.as_mut() {
+                    st.panel.ports_loaded = true;
+                    if st.panel.ports_data != list {
+                        st.panel.ports_data = list;
+                        st.window.request_redraw();
+                    }
+                }
+                return;
+            }
             UserEvent::Update(state) => {
                 if let Some(st) = self.st.as_mut() {
                     let first = st.update.is_none();
@@ -114,6 +137,7 @@ impl ApplicationHandler<UserEvent> for App {
         let is_active = idx == st.active;
         match ev {
             TermEvent::Wakeup => {
+                st.tabs[idx].last_output = Instant::now();
                 // Las pestañas en segundo plano no gastan GPU.
                 if is_active {
                     st.window.request_redraw();
@@ -132,6 +156,10 @@ impl ApplicationHandler<UserEvent> for App {
                 st.window.request_redraw();
             }
             TermEvent::Bell => {
+                let viewing = is_active && st.focused;
+                if st.tabs[idx].session.bell(viewing, Instant::now()) {
+                    st.window.request_redraw();
+                }
                 if !st.focused {
                     st.window.request_user_attention(Some(winit::window::UserAttentionType::Informational));
                 }
@@ -356,6 +384,26 @@ impl App {
             }
             return;
         }
+        if let Some((px, py, pw, ph)) = geo.panel {
+            let n = st.tabs.iter().filter(|t| t.session.agent.is_some()).count();
+            let lh = st.glyphs.ui.metrics.height;
+            let hit = st.panel.hit(x, y, n, px, py, pw, ph, st.scale, lh);
+            if hit != st.panel.hover {
+                st.panel.hover = hit;
+                st.window.request_redraw();
+            }
+            if hit.is_some() {
+                let icon = match hit {
+                    Some(crate::panel::Hit::Panel) => CursorIcon::Default,
+                    _ => CursorIcon::Pointer,
+                };
+                if st.cursor_icon != icon {
+                    st.cursor_icon = icon;
+                    st.window.set_cursor(icon);
+                }
+                return;
+            }
+        }
         let hover = geo.tab_bar.as_ref().and_then(|tb| tb.hit(x, y));
         if hover != st.hover {
             st.hover = hover;
@@ -468,6 +516,21 @@ impl App {
             }
         }
 
+        // Panel lateral
+        if let Some((px, py, pw, ph)) = geo.panel {
+            if x >= px && y >= py {
+                if pressed && button == MouseButton::Left {
+                    let st = self.st();
+                    let n = st.tabs.iter().filter(|t| t.session.agent.is_some()).count();
+                    let lh = st.glyphs.ui.metrics.height;
+                    if let Some(hit) = st.panel.hit(x, y, n, px, py, pw, ph, st.scale, lh) {
+                        self.on_panel_click(hit);
+                    }
+                }
+                return false;
+            }
+        }
+
         // Barra de pestañas
         if let Some(tb) = geo.tab_bar.as_ref().filter(|tb| y < tb.height) {
             if pressed {
@@ -481,6 +544,8 @@ impl App {
                     | (Some(TabHit::Close(i)), MouseButton::Left) => return self.close_tab(i),
                     (Some(TabHit::NewTab), _) => self.new_tab(),
                     (Some(TabHit::Update), MouseButton::Left) => return self.on_update_click(),
+                    (Some(TabHit::Agents), MouseButton::Left) => self.toggle_panel(true),
+                    (Some(TabHit::Ports), MouseButton::Left) => self.toggle_panel(false),
                     (Some(TabHit::Settings), MouseButton::Left) => {
                         self.run_action(crate::keybindings::Action::Settings);
                     }

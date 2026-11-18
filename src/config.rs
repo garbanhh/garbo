@@ -29,7 +29,7 @@ impl Default for Config {
             window: WindowConfig::default(),
             shell: ShellConfig::default(),
             terminal: TerminalConfig::default(),
-            theme: "garbo-dark".into(),
+            theme: "garbo-black".into(),
             colors: ColorOverrides::default(),
             keybindings: HashMap::new(),
             check_updates: true,
@@ -44,7 +44,7 @@ pub struct FontConfig {
     pub size: f32,
     pub line_height: f32,
     pub fallback: Vec<String>,
-    /// Fuente proporcional de la interfaz (pestañas, paleta, ajustes).
+    /// Fuente de la interfaz (pestañas, paneles, paleta, ajustes). Vacía = la del terminal.
     pub ui_family: String,
     pub ui_size: f32,
 }
@@ -68,7 +68,7 @@ impl Default for FontConfig {
                 "Noto Emoji".into(),
                 "Symbola".into(),
             ],
-            ui_family: "Adwaita Sans".into(),
+            ui_family: String::new(),
             ui_size: 10.5,
         }
     }
@@ -227,8 +227,8 @@ impl Config {
 
     pub fn theme(&self) -> Theme {
         let mut t = Theme::builtin(&self.theme).unwrap_or_else(|| {
-            log::warn!("Tema '{}' no existe, usando garbo-dark", self.theme);
-            Theme::builtin("garbo-dark").unwrap()
+            log::warn!("Tema '{}' no existe, usando garbo-black", self.theme);
+            Theme::builtin("garbo-black").unwrap()
         });
         let c = &self.colors;
         let set = |slot: &mut Rgb, v: &Option<String>| {
@@ -301,6 +301,7 @@ pub struct Theme {
 
 impl Theme {
     pub const NAMES: &'static [&'static str] = &[
+        "garbo-black",
         "garbo-dark",
         "garbo-light",
         "tokyo-night",
@@ -312,6 +313,13 @@ impl Theme {
     pub fn builtin(name: &str) -> Option<Theme> {
         let (fg, bg, cursor, sel, bar, active, accent, pal): (u32, u32, u32, u32, u32, u32, u32, [u32; 16]) =
             match name {
+                "garbo-black" => (
+                    0xD4D4D4, 0x000000, 0xD4D4D4, 0x264F78, 0x0A0A0A, 0x1C1C1C, 0x7AA2F7,
+                    [
+                        0x1E1E1E, 0xF14C4C, 0x23D18B, 0xE5C07B, 0x3B8EEA, 0xC586C0, 0x29B8DB, 0xCCCCCC,
+                        0x5C5C5C, 0xF48771, 0x4EE6A5, 0xF5DA82, 0x6FB3FF, 0xD7A3D1, 0x56D4EC, 0xFFFFFF,
+                    ],
+                ),
                 "garbo-dark" => (
                     0xD7DAE0, 0x16181D, 0x7AA2F7, 0x2E3A55, 0x0F1115, 0x1F232B, 0x7AA2F7,
                     [

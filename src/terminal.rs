@@ -21,6 +21,7 @@ use winit::event_loop::EventLoopProxy;
 pub enum UserEvent {
     Term(u64, TermEvent),
     Update(crate::update::UpdateState),
+    Ports(Vec<crate::ports::PortInfo>),
 }
 
 #[derive(Clone)]
@@ -60,6 +61,14 @@ pub struct Tab {
     /// Bloque seleccionado (navegación con Ctrl+Shift+↑/↓ o clic en el margen).
     pub selected_block: Option<u32>,
     sender: PtySender,
+    /// Copia del descriptor maestro del PTY (para saber qué proceso está en primer plano).
+    master: Option<std::fs::File>,
+    /// Última vez que el programa escribió en pantalla.
+    pub last_output: std::time::Instant,
+    pub session: crate::sessions::Session,
+    /// Directorio actual abreviado (título de la pestaña).
+    pub cwd_label: String,
+    cwd_checked: Option<std::time::Instant>,
     pub title: String,
     pub child_pid: u32,
     pub exited: bool,
@@ -130,6 +139,7 @@ impl Tab {
 
         let pty = tty::new(&opts, ws, id)?;
         let child_pid = pty.child().id();
+        let master = pty.file().try_clone().ok();
         let blocks = Arc::new(Mutex::new(BlockState::default()));
         let pty_loop = PtyLoop::new(term.clone(), listener, pty, blocks.clone())?;
         let sender = pty_loop.sender();
@@ -143,7 +153,21 @@ impl Tab {
             .and_then(|s| s.rsplit('/').next().map(str::to_owned))
             .unwrap_or_else(|| "shell".into());
 
-        Ok(Self { id, term, blocks, selected_block: None, sender, title, child_pid, exited: false })
+        Ok(Self {
+            id,
+            term,
+            blocks,
+            selected_block: None,
+            sender,
+            master,
+            last_output: std::time::Instant::now(),
+            session: Default::default(),
+            cwd_label: String::new(),
+            cwd_checked: None,
+            title,
+            child_pid,
+            exited: false,
+        })
     }
 
     pub fn write<B: Into<Cow<'static, [u8]>>>(&self, bytes: B) {
@@ -157,6 +181,28 @@ impl Tab {
         self.sender.send(Msg::Resize(ws));
         let size = TermSize { columns: ws.num_cols as usize, lines: ws.num_lines as usize };
         self.term.lock().resize(size);
+    }
+
+    /// Actualiza sesión (agente y estado) y directorio. Devuelve `true` si cambió algo visible.
+    pub fn refresh_session(&mut self, viewing: bool, now: std::time::Instant) -> bool {
+        use std::os::fd::AsRawFd;
+        let fd = self.master.as_ref().map(|f| f.as_raw_fd());
+        let mut changed = self.session.refresh(fd, self.last_output, viewing, now);
+        if self.cwd_checked.is_none_or(|t| now.duration_since(t).as_millis() >= 1000) {
+            self.cwd_checked = Some(now);
+            if let Some(l) = crate::sessions::cwd_label(self.child_pid) {
+                if l != self.cwd_label {
+                    self.cwd_label = l;
+                    changed = true;
+                }
+            }
+        }
+        changed
+    }
+
+    /// Título visible de la pestaña: el directorio actual (o el título del shell si no se sabe).
+    pub fn label(&self) -> &str {
+        if self.cwd_label.is_empty() { &self.title } else { &self.cwd_label }
     }
 
     /// Directorio actual del shell (Linux: /proc/<pid>/cwd). Las pestañas nuevas lo heredan.

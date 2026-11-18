@@ -29,7 +29,12 @@ pub fn build_glyphs(cfg: &Config, font_pt: f32, scale: f32) -> GlyphCache {
     let db = FontSet::system_db();
     let f = &cfg.font;
     let term = FontSet::from_db(&db, &f.family, &f.fallback, pt_to_px(font_pt, scale), f.line_height, true);
-    let ui = FontSet::from_db(&db, &f.ui_family, &f.ui_fallback(), pt_to_px(f.ui_size, scale), 1.0, false);
+    let ui_px = pt_to_px(f.ui_size, scale);
+    let ui = if f.ui_family.trim().is_empty() {
+        FontSet::from_db(&db, &f.family, &f.fallback, ui_px, 1.0, true)
+    } else {
+        FontSet::from_db(&db, &f.ui_family, &f.ui_fallback(), ui_px, 1.0, false)
+    };
     GlyphCache::new(term, ui)
 }
 
@@ -67,6 +72,9 @@ pub struct State {
     pub palette: Option<Palette>,
     pub settings: Option<crate::settings::Settings>,
     pub update: Option<crate::update::UpdateState>,
+    pub panel: crate::panel::PanelState,
+    pub anim_epoch: Instant,
+    pub last_anim: Instant,
     pub clipboard: Box<dyn ClipboardProvider>,
     pub selection_clip: Box<dyn ClipboardProvider>,
     pub focused: bool,
@@ -84,6 +92,8 @@ pub struct Geometry {
     pub x: f32,
     pub y: f32,
     pub ws: WindowSize,
+    /// Panel lateral (x, y, ancho, alto) si está abierto.
+    pub panel: Option<(f32, f32, f32, f32)>,
 }
 
 impl App {
@@ -119,6 +129,9 @@ impl App {
             palette: None,
             settings: None,
             update: None,
+            panel: Default::default(),
+            anim_epoch: now,
+            last_anim: now,
             clipboard,
             selection_clip,
             focused: true,
@@ -180,7 +193,9 @@ impl App {
             .then(|| TabBar::layout(n_tabs, w, st.scale, integrated, st.update.is_some()));
         let top = tab_bar.as_ref().map_or(0.0, |t| t.height);
         let pad = (self.cfg.window.padding * st.scale).round();
-        let cols = ((w - 2.0 * pad) / m.width).floor().max(2.0);
+        let panel_w = if st.panel.visible() { crate::panel::PanelState::width(st.scale, w) } else { 0.0 };
+        let panel = (panel_w > 0.0).then(|| (w - panel_w, top, panel_w, h - top));
+        let cols = ((w - panel_w - 2.0 * pad) / m.width).floor().max(2.0);
         let lines = ((h - top - 2.0 * pad) / m.height).floor().max(1.0);
         Geometry {
             tab_bar,
@@ -192,6 +207,7 @@ impl App {
                 cell_width: m.width as u16,
                 cell_height: m.height as u16,
             },
+            panel,
         }
     }
 
@@ -420,6 +436,8 @@ impl App {
                 st.settings = if st.settings.is_some() { None } else { Some(crate::settings::Settings::new()) };
                 st.window.request_redraw();
             }
+            Action::ToggleAgents => self.toggle_panel(true),
+            Action::TogglePorts => self.toggle_panel(false),
             Action::PrevBlock => self.goto_block(-1),
             Action::NextBlock => self.goto_block(1),
             Action::CopyBlockOutput => self.copy_block(BlockPart::Output),
@@ -463,6 +481,91 @@ impl App {
             }
         }
         false
+    }
+
+    /// Recalcula agentes y directorios de todas las pestañas. Barato: una llamada al sistema por
+    /// pestaña, y la identificación del proceso como mucho cada 700 ms.
+    pub fn refresh_sessions(&mut self) -> bool {
+        let now = Instant::now();
+        let Some(st) = self.st.as_mut() else { return false };
+        let (active, focused) = (st.active, st.focused);
+        let mut changed = false;
+        for (i, tab) in st.tabs.iter_mut().enumerate() {
+            changed |= tab.refresh_session(focused && i == active, now);
+        }
+        // Animación del indicador "trabajando" (~7 fps, solo mientras algún agente trabaja).
+        let working = st.tabs.iter().any(|t| t.session.is_working());
+        if working && now.duration_since(st.last_anim).as_millis() >= 140 {
+            st.last_anim = now;
+            changed = true;
+        }
+        if changed {
+            st.window.request_redraw();
+        }
+        changed
+    }
+
+    /// Próximo despertar necesario (animación, cambio de estado o "hace N s"). `None` = dormir.
+    pub fn next_tick(&self) -> Option<Instant> {
+        let st = self.st.as_ref()?;
+        let now = Instant::now();
+        let mut next: Option<Instant> = None;
+        let mut push = |t: Instant| next = Some(next.map_or(t, |n: Instant| n.min(t)));
+        for tab in &st.tabs {
+            if tab.session.is_working() {
+                push(now + std::time::Duration::from_millis(150));
+            } else if now.duration_since(tab.last_output) < crate::sessions::WORK_WINDOW {
+                push(tab.last_output + crate::sessions::WORK_WINDOW + std::time::Duration::from_millis(60));
+            }
+        }
+        if st.panel.agents && st.tabs.iter().any(|t| t.session.agent.is_some()) {
+            push(now + std::time::Duration::from_secs(1));
+        }
+        next
+    }
+
+    pub fn toggle_panel(&mut self, agents: bool) {
+        let proxy = self.proxy.clone();
+        let st = self.st();
+        if agents {
+            st.panel.agents = !st.panel.agents;
+        } else {
+            st.panel.ports = !st.panel.ports;
+            if st.panel.ports {
+                st.panel.ports_loaded = false;
+                crate::ports::start(proxy);
+            } else {
+                crate::ports::stop();
+            }
+        }
+        st.last_ws.num_cols = 0;
+        self.relayout();
+    }
+
+    /// Clic dentro del panel lateral.
+    pub fn on_panel_click(&mut self, hit: crate::panel::Hit) {
+        use crate::panel::Hit;
+        match hit {
+            Hit::CloseAgents => self.toggle_panel(true),
+            Hit::ClosePorts => self.toggle_panel(false),
+            Hit::Agent(i) => {
+                let tab = self.st().tabs.iter().enumerate().filter(|(_, t)| t.session.agent.is_some()).nth(i).map(|(j, _)| j);
+                if let Some(j) = tab {
+                    self.select_tab(j);
+                }
+            }
+            Hit::Port(port) => {
+                if self.st().panel.ports_data.iter().any(|p| p.port == port && p.web) {
+                    let _ = std::process::Command::new("xdg-open").arg(format!("http://localhost:{port}")).spawn();
+                }
+            }
+            Hit::MorePorts => {
+                let st = self.st();
+                st.panel.more_ports = !st.panel.more_ports;
+                st.window.request_redraw();
+            }
+            Hit::Panel => {}
+        }
     }
 
     /// Aplica en vivo un cambio hecho desde Ajustes y lo guarda en config.toml.
@@ -602,7 +705,19 @@ impl App {
         let cfg = &self.cfg;
         let st = self.st.as_mut().unwrap();
         let (w, h) = st.renderer.size();
-        let titles: Vec<(String, bool)> = st.tabs.iter().map(|t| (t.title.clone(), t.exited)).collect();
+        let views: Vec<ui::TabView> = st
+            .tabs
+            .iter()
+            .map(|t| ui::TabView {
+                label: t.label().to_string(),
+                exited: t.exited,
+                agent: t.session.agent,
+                status: t.session.status,
+            })
+            .collect();
+        let toggles = ui::Toggles { agents: st.panel.agents, ports: st.panel.ports };
+        let now = Instant::now();
+        let phase = (now.duration_since(st.anim_epoch).as_millis() / 300) as usize;
 
         for _attempt in 0..2 {
             st.out.clear();
@@ -616,7 +731,7 @@ impl App {
                 atlas: &st.renderer.atlas,
             };
             if let Some(tb) = &geo.tab_bar {
-                tb.draw(&mut p, theme, w, &titles, st.active, st.hover, st.scale, st.update.as_ref());
+                tb.draw(&mut p, theme, w, &views, st.active, st.hover, st.scale, st.update.as_ref(), toggles, phase);
             }
             if let Some(tab) = st.tabs.get(st.active) {
                 let term = tab.term.lock();
@@ -632,6 +747,23 @@ impl App {
                     let bs = tab.blocks.lock().unwrap();
                     view::draw_blocks(&mut p, &term, theme, &v, &bs, tab.selected_block, w, st.scale);
                 }
+            }
+            if let Some((px, py, pw, ph)) = geo.panel {
+                let rows: Vec<crate::panel::AgentRow> = st
+                    .tabs
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, t)| {
+                        Some(crate::panel::AgentRow {
+                            label: t.label(),
+                            agent: t.session.agent?,
+                            status: t.session.status,
+                            since: t.session.since,
+                            active: i == st.active,
+                        })
+                    })
+                    .collect();
+                st.panel.draw(&mut p, theme, &rows, px, py, pw, ph, st.scale, now, phase);
             }
             if let Some(pal) = &st.palette {
                 // El texto del terminal va debajo del overlay: se vuelca antes de pintarlo.

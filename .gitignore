@@ -1,2 +1,6 @@
 /target
 *.swp
+# Obsidian: estado local del espacio de trabajo
+docs/.obsidian/workspace*.json
+docs/.obsidian/cache
+.trash/

@@ -1,14 +1,14 @@
 # garbo — copia este archivo a ~/.config/garbo/config.toml
 # Todo es opcional. Recarga en caliente con Ctrl+Shift+R.
 
-# Temas incluidos: garbo-dark, garbo-light, tokyo-night, catppuccin-mocha, gruvbox-dark, nord
-theme = "garbo-dark"
+# Temas incluidos: garbo-black, garbo-dark, garbo-light, tokyo-night, catppuccin-mocha, gruvbox-dark, nord
+theme = "garbo-black"
 
 [font]
 family = "Adwaita Mono"     # si no existe se usa la monoespaciada del sistema
 size = 11.0                  # puntos (como GNOME Terminal)
 line_height = 1.0            # 1.0 = interlineado natural de la fuente
-ui_family = "Adwaita Sans"   # fuente de la interfaz: pestañas, paleta, ajustes
+ui_family = ""               # fuente de la interfaz; vacía = la misma del terminal
 ui_size = 10.5
 # Se buscan en orden cuando la fuente principal no tiene un carácter.
 # Solo se abren (mmap) cuando realmente hacen falta.

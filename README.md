@@ -9,6 +9,7 @@ ajustes con persistencia automática.
 - Renderizado por GPU (wgpu: Vulkan, Metal, DX12 u OpenGL) con redibujado únicamente bajo demanda.
 - Pestañas integradas en la barra de título, con herencia del directorio de trabajo.
 - Bloques de comandos: cada comando y su salida se agrupan con su estado de salida y duración.
+- Panel lateral con los agentes de código en ejecución en cada pestaña y los puertos en escucha.
 - Paleta de comandos con búsqueda aproximada.
 - Panel de ajustes con aplicación inmediata y guardado en `config.toml`.
 - Emoji a color (incluido el formato COLRv1), CJK, true color y estilos de subrayado.
@@ -60,6 +61,7 @@ cargo build --release
 | `Ctrl+Shift+R` | Recargar la configuración |
 | `Ctrl+Shift+↑` / `Ctrl+Shift+↓` | Bloque de comandos anterior / siguiente |
 | `Ctrl+Shift+O` | Copiar la salida del bloque seleccionado o del último comando |
+| `Ctrl+Shift+A` / `Ctrl+Shift+E` | Mostrar u ocultar los paneles de agentes / puertos |
 
 Todos los atajos se pueden modificar en la sección `[keybindings]` de la configuración.
 
@@ -92,6 +94,19 @@ Cada bloque queda anclado al propio contenido de la rejilla mediante un hiperenl
 celdas del prompt, por lo que su posición se conserva ante el desplazamiento, el recorte del
 historial y el reajuste de líneas al redimensionar.
 
+### Panel lateral
+
+Los botones de la barra de pestañas (o `Ctrl+Shift+A` y `Ctrl+Shift+E`) muestran un panel con dos
+secciones:
+
+- **Agentes**: pestañas que ejecutan un agente de código (Claude Code, Codex, Gemini CLI, Aider,
+  OpenCode, entre otros), con su estado (*Trabajando*, *Terminado*, *Esperando tu mensaje*) y el
+  tiempo transcurrido. Un clic activa la pestaña. La propia pestaña muestra también un indicador.
+  La detección se basa en el proceso en primer plano de cada terminal y en su actividad.
+- **Puertos**: servidores web locales del usuario (detectados mediante una petición HTTP), con el
+  programa que los ejecuta; un clic los abre en el navegador. El resto de puertos en escucha se
+  agrupa en una lista desplegable. Esta sección solo consulta el sistema mientras está visible.
+
 ### Ajustes
 
 El panel de ajustes se abre con `Ctrl+,` o con el botón de menú de la barra de pestañas. Permite
@@ -106,8 +121,8 @@ y `Esc` para cerrar.
 
 El archivo de configuración es `~/.config/garbo/config.toml`; todas las opciones están
 documentadas en [`config.example.toml`](config.example.toml). Los valores por defecto coinciden
-con los de GNOME Terminal (Adwaita Mono 11 e interlineado natural); la interfaz utiliza
-Adwaita Sans.
+con los de GNOME Terminal (Adwaita Mono 11 e interlineado natural). El tema por defecto es
+`garbo-black` y la interfaz usa la misma fuente que el terminal (configurable con `ui_family`).
 
 ## Actualizaciones
 
@@ -133,7 +148,7 @@ Mediciones en Fedora 45 con GPU Intel Arc integrada y Wayland (compilación rele
 
 | Métrica | Valor |
 |---|---|
-| Memoria residente al iniciar | ~28 MB (~9 MB privados) |
+| Memoria residente al iniciar | ~30 MB (~11 MB privados) |
 | CPU en reposo | 0 % |
 | `seq 1 3000000` | ~2,2 s |
 | Tamaño del binario | ~8 MB |
@@ -161,9 +176,13 @@ src/
   keybindings.rs  atajos de teclado configurables
   config.rs       configuración y temas
   update.rs       comprobación e instalación de actualizaciones
+  sessions.rs     detección de agentes en primer plano y su estado
+  ports.rs        puertos en escucha y detección de servidores web
+  panel.rs        panel lateral de agentes y puertos
 shell/            integración con bash
 packaging/        icono, entrada de escritorio y metadatos AppStream
 scripts/          publicación de versiones
+tools/            utilidades de prueba (capturas, sesiones simuladas)
 ```
 
 ## Desarrollo

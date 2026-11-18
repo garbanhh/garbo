@@ -31,6 +31,8 @@ pub enum Action {
     CopyBlockCommand,
     CopyBlock,
     Settings,
+    ToggleAgents,
+    TogglePorts,
 }
 
 impl Action {
@@ -63,6 +65,8 @@ impl Action {
             (CopyBlockCommand, "copy_block_command", "Copiar comando del bloque", ""),
             (CopyBlock, "copy_block", "Copiar bloque entero", ""),
             (Settings, "settings", "Ajustes", "ctrl+comma"),
+            (ToggleAgents, "toggle_agents", "Panel de agentes", "ctrl+shift+a"),
+            (TogglePorts, "toggle_ports", "Panel de puertos", "ctrl+shift+e"),
         ];
         const GOTO: [&str; 9] = [
             "goto_tab_1", "goto_tab_2", "goto_tab_3", "goto_tab_4", "goto_tab_5",

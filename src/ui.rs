@@ -14,12 +14,22 @@ pub fn dim(theme: &Theme) -> Rgb {
     theme.foreground.lerp(theme.background, 0.45)
 }
 
+/// Lo que la barra necesita saber de cada pestaña.
+pub struct TabView {
+    pub label: String,
+    pub exited: bool,
+    pub agent: Option<crate::sessions::Agent>,
+    pub status: crate::sessions::Status,
+}
+
 pub struct TabBar {
     pub height: f32,
     pub tabs: Vec<(f32, f32)>,
     pub tab_y: f32,
     pub tab_h: f32,
     pub plus: (f32, f32),
+    pub agents_btn: (f32, f32),
+    pub ports_btn: (f32, f32),
     pub settings: (f32, f32),
     /// Píldora de actualización (x, ancho) si hay algo que mostrar.
     pub update: Option<(f32, f32)>,
@@ -33,6 +43,8 @@ pub enum TabHit {
     Tab(usize),
     Close(usize),
     NewTab,
+    Agents,
+    Ports,
     Settings,
     Update,
     Minimize,
@@ -40,6 +52,13 @@ pub enum TabHit {
     CloseWindow,
     /// Zona vacía de la barra: sirve para arrastrar la ventana.
     Empty,
+}
+
+/// Estado de los botones conmutables de la barra.
+#[derive(Clone, Copy, Default)]
+pub struct Toggles {
+    pub agents: bool,
+    pub ports: bool,
 }
 
 impl TabBar {
@@ -60,16 +79,18 @@ impl TabBar {
         });
         let right = controls.map_or(width - margin, |c| c[0].0 - (12.0 * s).round());
         let settings = (right - btn, btn);
+        let ports_btn = (settings.0 - gap - btn, btn);
+        let agents_btn = (ports_btn.0 - gap - btn, btn);
         let update = has_update.then(|| {
             let w = (200.0 * s).round();
-            (settings.0 - gap - w, w)
+            (agents_btn.0 - 2.0 * gap - w, w)
         });
-        let tabs_end = update.map_or(settings.0, |u| u.0);
-        let avail = (tabs_end - margin - 2.0 * gap - btn - gap * n as f32).max(0.0);
-        let tab_w = (avail / n.max(1) as f32).min(220.0 * s).floor();
-        let tabs = (0..n).map(|i| (margin + i as f32 * (tab_w + gap), tab_w)).collect();
-        let plus = (margin + n as f32 * (tab_w + gap), btn);
-        Self { height, tabs, tab_y, tab_h, plus, settings, update, controls, close_w: tab_h }
+        let tabs_end = update.map_or(agents_btn.0 - gap, |u| u.0);
+        let avail = (tabs_end - margin - 2.0 * gap - btn).max(0.0);
+        let tab_w = (avail / n.max(1) as f32).min(260.0 * s).floor();
+        let tabs = (0..n).map(|i| (margin + i as f32 * tab_w, tab_w)).collect();
+        let plus = (margin + n as f32 * tab_w + gap, btn);
+        Self { height, tabs, tab_y, tab_h, plus, agents_btn, ports_btn, settings, update, controls, close_w: tab_h }
     }
 
     pub fn hit(&self, x: f32, y: f32) -> Option<TabHit> {
@@ -84,26 +105,26 @@ impl TabBar {
             }
         }
         let in_row = y >= self.tab_y && y < self.tab_y + self.tab_h;
-        if in_row && x >= self.settings.0 && x < self.settings.0 + self.settings.1 {
-            return Some(TabHit::Settings);
+        for (r, hit) in [(self.settings, TabHit::Settings), (self.ports_btn, TabHit::Ports), (self.agents_btn, TabHit::Agents)] {
+            if in_row && x >= r.0 && x < r.0 + r.1 {
+                return Some(hit);
+            }
         }
         if let Some((ux, uw)) = self.update {
             if in_row && x >= ux && x < ux + uw {
                 return Some(TabHit::Update);
             }
         }
-        if !in_row {
-            return Some(TabHit::Empty);
-        }
+        // Las pestañas ocupan toda la altura de la barra.
         for (i, &(tx, tw)) in self.tabs.iter().enumerate() {
             if x >= tx && x < tx + tw {
-                if x >= tx + tw - self.close_w {
+                if in_row && x >= tx + tw - self.close_w {
                     return Some(TabHit::Close(i));
                 }
                 return Some(TabHit::Tab(i));
             }
         }
-        if x >= self.plus.0 && x < self.plus.0 + self.plus.1 {
+        if in_row && x >= self.plus.0 && x < self.plus.0 + self.plus.1 {
             return Some(TabHit::NewTab);
         }
         Some(TabHit::Empty)
@@ -115,59 +136,84 @@ impl TabBar {
         p: &mut Painter,
         theme: &Theme,
         width: f32,
-        titles: &[(String, bool)],
+        tabs: &[TabView],
         active: usize,
         hover: Option<TabHit>,
         scale: f32,
         update: Option<&crate::update::UpdateState>,
+        toggles: Toggles,
+        phase: usize,
     ) {
+        use crate::sessions::Status;
         let s = scale;
-        let r = (8.0 * s).round();
+        let r = (7.0 * s).round();
         let hair = s.round().max(1.0);
         let dimc = dim(theme);
-        let pill = surface(theme, 0.07);
+        let pill = surface(theme, 0.08);
         p.rect(0.0, 0.0, width, self.height, theme.tab_bar, 1.0);
-        p.rect(0.0, self.height - hair, width, hair, theme.foreground, 0.06);
+        p.rect(0.0, self.height - hair, width, hair, theme.foreground, 0.08);
 
         let hovered_tab = match hover {
             Some(TabHit::Tab(j) | TabHit::Close(j)) => Some(j),
             _ => None,
         };
+        let lh = p.ui_metrics().height;
         for (i, &(tx, tw)) in self.tabs.iter().enumerate() {
             let is_active = i == active;
             let hovered = hovered_tab == Some(i);
+            // Pestañas planas a toda altura; la activa, en un tono más claro.
             if is_active {
-                p.rounded(tx, self.tab_y, tw, self.tab_h, pill, 1.0, r);
+                p.rect(tx, 0.0, tw, self.height - hair, pill, 1.0);
             } else if hovered {
-                p.rounded(tx, self.tab_y, tw, self.tab_h, pill, 0.55, r);
-            } else if i > 0 && i - 1 != active && hovered_tab != Some(i - 1) {
-                // Separador sutil entre pestañas inactivas
-                let sx = (tx - 2.0 * s).round();
-                p.rect(sx, self.tab_y + 7.0 * s, hair, self.tab_h - 14.0 * s, theme.foreground, 0.10);
+                p.rect(tx, 0.0, tw, self.height - hair, pill, 0.5);
+            }
+            if i + 1 < self.tabs.len() && !is_active && i + 1 != active {
+                p.rect(tx + tw - hair, 10.0 * s, hair, self.height - 20.0 * s, theme.foreground, 0.10);
             }
 
-            let (title, exited) = &titles[i];
+            let tab = &tabs[i];
             let color = if is_active { theme.foreground } else { dimc };
             let pad = (12.0 * s).round();
             let show_close = is_active || hovered;
-            let close_space = if show_close { self.close_w - 4.0 * s } else { 0.0 };
-            let label = if *exited { format!("{title} (terminado)") } else { title.clone() };
-            p.ui_text_in(tx + pad, self.tab_y, self.tab_h, &label, color, (tw - pad * 2.0 - close_space).max(0.0));
-
+            let mut right = tx + tw - pad / 2.0;
             if show_close {
                 let cx = (tx + tw - self.close_w / 2.0).round();
-                let cy = (self.tab_y + self.tab_h / 2.0).round();
+                let cy = (self.height / 2.0).round();
                 let over = hover == Some(TabHit::Close(i));
                 if over {
                     p.circle(cx, cy, 9.0 * s, theme.foreground, 0.12);
                 }
                 cross(p, cx, cy, 3.5 * s, 1.4 * s, if over { theme.foreground } else { dimc });
+                right = tx + tw - self.close_w;
             }
+            // Indicador del agente: insignia + estado (animación al trabajar, punto si terminó).
+            if let Some(agent) = tab.agent.filter(|_| tab.status != Status::Exited) {
+                let cy = (self.height / 2.0).round();
+                match tab.status {
+                    Status::Working => {
+                        right -= 16.0 * s;
+                        crate::panel::spinner(p, right, cy, s * 0.9, theme.accent, phase);
+                        right -= 8.0 * s;
+                    }
+                    Status::Done => {
+                        right -= 8.0 * s;
+                        p.circle(right, cy, 3.5 * s, theme.palette[2], 1.0);
+                        right -= 8.0 * s;
+                    }
+                    _ => {}
+                }
+                let bs = (lh * 0.95).round();
+                right -= bs;
+                crate::panel::badge(p, right, (cy - bs / 2.0).round(), bs, agent, s);
+                right -= 6.0 * s;
+            }
+            let label = if tab.exited { format!("{} (terminado)", tab.label) } else { tab.label.clone() };
+            p.ui_text_in(tx + pad, 0.0, self.height, &label, color, (right - tx - pad).max(0.0));
         }
 
+        let cy = (self.tab_y + self.tab_h / 2.0).round();
         // Nueva pestaña
         let (px, pw) = self.plus;
-        let cy = (self.tab_y + self.tab_h / 2.0).round();
         let over = hover == Some(TabHit::NewTab);
         if over {
             p.rounded(px, self.tab_y, pw, self.tab_h, pill, 0.8, r);
@@ -178,20 +224,37 @@ impl TabBar {
         p.line(cx - k, cy, cx + k, cy, 1.5 * s, c, 1.0);
         p.line(cx, cy - k, cx, cy + k, 1.5 * s, c, 1.0);
 
-        // Menú (abre los Ajustes)
-        let (sx, sw) = self.settings;
-        let over = hover == Some(TabHit::Settings);
-        if over {
-            p.rounded(sx, self.tab_y, sw, self.tab_h, pill, 0.8, r);
-        }
-        let c = if over { theme.foreground } else { dimc };
-        let cx = (sx + sw / 2.0).round();
+        // Botones conmutables y menú
+        let button = |p: &mut Painter, rect: (f32, f32), hit: TabHit, on: bool| -> Rgb {
+            let over = hover == Some(hit);
+            if on {
+                p.rounded(rect.0, self.tab_y, rect.1, self.tab_h, theme.accent, if over { 0.30 } else { 0.20 }, r);
+            } else if over {
+                p.rounded(rect.0, self.tab_y, rect.1, self.tab_h, pill, 0.8, r);
+            }
+            if on { theme.accent } else if over { theme.foreground } else { dimc }
+        };
+        let c = button(p, self.agents_btn, TabHit::Agents, toggles.agents);
+        let bx = (self.agents_btn.0 + self.agents_btn.1 / 2.0).round();
+        p.rounded(bx - 6.0 * s, cy - 3.0 * s, 12.0 * s, 9.0 * s, c, 1.0, 2.5 * s);
+        let bg = if toggles.agents { theme.tab_bar.lerp(theme.accent, 0.2) } else { theme.tab_bar };
+        p.circle(bx - 2.6 * s, cy + 1.5 * s, 1.4 * s, bg, 1.0);
+        p.circle(bx + 2.6 * s, cy + 1.5 * s, 1.4 * s, bg, 1.0);
+        p.line(bx, cy - 3.0 * s, bx, cy - 6.0 * s, 1.3 * s, c, 1.0);
+
+        let c = button(p, self.ports_btn, TabHit::Ports, toggles.ports);
+        let gx = (self.ports_btn.0 + self.ports_btn.1 / 2.0).round();
+        p.ring(gx, cy, 6.0 * s, 1.4 * s, c, 1.0);
+        p.line(gx - 6.0 * s, cy, gx + 6.0 * s, cy, 1.3 * s, c, 1.0);
+        p.line(gx, cy - 6.0 * s, gx, cy + 6.0 * s, 1.3 * s, c, 1.0);
+
+        let c = button(p, self.settings, TabHit::Settings, false);
+        let mx = (self.settings.0 + self.settings.1 / 2.0).round();
         for dy in [-4.0, 0.0, 4.0] {
-            let y = cy + dy * s;
-            p.line(cx - 6.0 * s, y, cx + 6.0 * s, y, 1.5 * s, c, 1.0);
+            p.line(mx - 6.0 * s, cy + dy * s, mx + 6.0 * s, cy + dy * s, 1.5 * s, c, 1.0);
         }
 
-        // Aviso de actualización (alineado a la derecha, junto al menú)
+        // Aviso de actualización
         if let (Some((ux, uw)), Some(state)) = (self.update, update) {
             use crate::update::UpdateState as U;
             let over = hover == Some(TabHit::Update);
