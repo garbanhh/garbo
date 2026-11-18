@@ -1,0 +1,52 @@
+name: Release
+
+# Al subir una etiqueta vX.Y.Z al repositorio público se compila el RPM en Fedora
+# y se publica como release. La app consulta estas releases para avisar de versiones nuevas.
+# También se puede lanzar a mano para una etiqueta existente (Actions → Release → Run workflow).
+# Este flujo tiene permiso de escritura y su RPM se instala como root: solo usa la CLI
+# oficial de GitHub (gh) y una Action de GitHub fijada a un commit concreto.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Etiqueta existente a publicar (p. ej. v0.1.0)"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  rpm:
+    if: github.repository == 'garbanhh/garbo'
+    runs-on: ubuntu-latest
+    container: fedora:45
+    env:
+      TAG: ${{ inputs.tag || github.ref_name }}
+    steps:
+      - name: Dependencias
+        run: dnf install -y gcc git gh rust cargo rpm-build
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+      - name: Comprobar versión
+        run: |
+          VERSION=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+          test "v$VERSION" = "$TAG" || { echo "La etiqueta $TAG no coincide con Cargo.toml ($VERSION)"; exit 1; }
+      - name: Herramienta de empaquetado
+        run: cargo install cargo-generate-rpm --version 0.21.1 --locked
+      - name: Compilar
+        run: cargo build --release --locked
+      - name: Generar RPM
+        run: |
+          ~/.cargo/bin/cargo-generate-rpm
+          cd target/generate-rpm
+          for f in *.rpm; do sha256sum "$f" > "$f.sha256"; done
+          ls -la
+      - name: Publicar release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$TAG" target/generate-rpm/*.rpm target/generate-rpm/*.rpm.sha256 \
+            --repo "$GITHUB_REPOSITORY" --title "Garbo ${TAG#v}" --generate-notes

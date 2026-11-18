@@ -1,0 +1,78 @@
+# garbo — copia este archivo a ~/.config/garbo/config.toml
+# Todo es opcional. Recarga en caliente con Ctrl+Shift+R.
+
+# Temas incluidos: garbo-dark, garbo-light, tokyo-night, catppuccin-mocha, gruvbox-dark, nord
+theme = "garbo-dark"
+
+[font]
+family = "Adwaita Mono"     # si no existe se usa la monoespaciada del sistema
+size = 11.0                  # puntos (como GNOME Terminal)
+line_height = 1.0            # 1.0 = interlineado natural de la fuente
+ui_family = "Adwaita Sans"   # fuente de la interfaz: pestañas, paleta, ajustes
+ui_size = 10.5
+# Se buscan en orden cuando la fuente principal no tiene un carácter.
+# Solo se abren (mmap) cuando realmente hacen falta.
+fallback = ["JetBrains Mono", "Noto Sans Mono", "Symbols Nerd Font Mono", "Noto Sans Mono CJK SC", "Noto Color Emoji", "Noto Emoji"]
+
+[window]
+padding = 10
+opacity = 1.0          # < 1.0 = fondo translúcido (se puede cambiar en vivo desde Ajustes)
+decorations = false   # false = pestañas integradas en la barra de título
+columns = 110
+lines = 32
+always_show_tabs = true
+
+[shell]
+# program = "/usr/bin/fish"
+# args = ["-l"]
+# env = { EDITOR = "nvim" }
+
+[terminal]
+scrollback = 10000
+cursor_style = "block"   # block | beam | underline
+cursor_blink = false     # sin parpadeo = cero despertares cuando está inactiva
+scroll_multiplier = 3.0
+copy_on_select = false
+shell_integration = true # bash: marcas de comando para los bloques (no toca tu ~/.bashrc)
+blocks = true            # dibujar bloques: separadores, estado, duración
+
+# Sobrescribe colores del tema elegido
+[colors]
+# background = "#101216"
+# foreground = "#d7dae0"
+# cursor     = "#7aa2f7"
+# selection  = "#2e3a55"
+# accent     = "#7aa2f7"
+# tab_bar    = "#0f1115"
+# tab_active = "#1f232b"
+# palette = ["#1d2027","#f26d78","#8fd18b","#e6c07b","#6fa8ff","#c792ea","#56c8d8","#c8ccd4",
+#            "#4b5263","#ff8a94","#a7e3a1","#f2d49b","#8fbfff","#ddb0f6","#7fe0ec","#ffffff"]
+
+# Atajos: "accion" = "combinación[, otra]"   ("none" desactiva)
+[keybindings]
+# new_tab          = "ctrl+shift+t"
+# close_tab        = "ctrl+shift+w"
+# next_tab         = "ctrl+tab, ctrl+pagedown"
+# prev_tab         = "ctrl+shift+tab, ctrl+pageup"
+# move_tab_left    = "ctrl+shift+pageup"
+# move_tab_right   = "ctrl+shift+pagedown"
+# goto_tab_1       = "alt+1"          # ... hasta goto_tab_9 (alt+9 = última)
+# copy             = "ctrl+shift+c"
+# paste            = "ctrl+shift+v, shift+insert"
+# font_bigger      = "ctrl+plus, ctrl+equal"
+# font_smaller     = "ctrl+minus"
+# font_reset       = "ctrl+0"
+# scroll_page_up   = "shift+pageup"
+# scroll_page_down = "shift+pagedown"
+# scroll_top       = "shift+home"
+# scroll_bottom    = "shift+end"
+# clear_scrollback = "ctrl+shift+k"
+# reload_config    = "ctrl+shift+r"
+# command_palette  = "ctrl+shift+p"
+# next_theme       = "ctrl+shift+y"
+# settings         = "ctrl+comma"
+# prev_block       = "ctrl+shift+up"
+# next_block       = "ctrl+shift+down"
+# copy_block_output  = "ctrl+shift+o"
+# copy_block_command = ""            # sin atajo: desde la paleta
+# copy_block         = ""

@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.garbanhh.Garbo</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+  <name>Garbo</name>
+  <summary>Terminal ligera con pestañas y bloques de comandos</summary>
+  <description>
+    <p>Terminal acelerada por GPU escrita en Rust que consume muy poco: no gasta CPU en reposo
+    y ocupa unos 30 MB de memoria.</p>
+    <p>Incluye pestañas integradas en la barra de título, bloques de comandos que separan cada
+    comando con su estado y duración, paleta de comandos, temas y un panel de ajustes.</p>
+  </description>
+  <launchable type="desktop-id">io.github.garbanhh.Garbo.desktop</launchable>
+  <url type="homepage">https://github.com/garbanhh/garbo</url>
+  <url type="bugtracker">https://github.com/garbanhh/garbo/issues</url>
+  <provides>
+    <binary>garbo</binary>
+  </provides>
+  <categories>
+    <category>System</category>
+    <category>TerminalEmulator</category>
+  </categories>
+  <content_rating type="oars-1.1"/>
+  <releases>
+    <release version="0.1.0" date="2026-11-18"/>
+  </releases>
+</component>

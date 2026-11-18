@@ -1,0 +1,68 @@
+[package]
+name = "garbo"
+version = "0.1.0"
+edition = "2021"
+description = "Terminal GPU ligera, rápida y personalizable con pestañas y bloques de comandos"
+license = "MIT"
+repository = "https://github.com/garbanhh/garbo"
+readme = "README.md"
+keywords = ["terminal", "gpu", "wgpu", "tabs"]
+categories = ["command-line-utilities"]
+
+[dependencies]
+# Núcleo de emulación VT (parser + grid + PTY), el mismo que usa Alacritty
+alacritty_terminal = "0.26"
+polling = "3"
+libc = "0.2"
+# Ventana y eventos
+winit = "0.30"
+# Render GPU (Vulkan/Metal/DX12/GL)
+wgpu = { version = "25", default-features = false, features = ["wgsl", "vulkan", "metal", "dx12", "gles"] }
+bytemuck = { version = "1", features = ["derive"] }
+pollster = "0.4"
+# Fuentes: descubrimiento + rasterizado (Rust puro, sin freetype)
+fontdb = { version = "0.24", features = ["memmap"] }
+swash = "0.2"
+memmap2 = "0.9"
+# Emoji a color COLRv1 (ya están en el árbol de dependencias vía swash y winit)
+skrifa = "0.44"
+tiny-skia = { version = "0.11", default-features = false, features = ["std", "simd"] }
+# Portapapeles (Wayland nativo vía smithay-clipboard + X11)
+copypasta = "0.10"
+# Configuración
+serde = { version = "1", features = ["derive"] }
+toml = "0.9"
+dirs = "6"
+log = "0.4"
+env_logger = { version = "0.11", default-features = false, features = ["auto-color"] }
+toml_edit = "0.25.19"
+serde_json = "1.0.154"
+
+# Empaquetado RPM con `cargo generate-rpm` (ver .github/workflows/release.yml)
+[package.metadata.generate-rpm]
+summary = "Terminal ligera con pestañas y bloques de comandos"
+assets = [
+    { source = "target/release/garbo", dest = "/usr/bin/garbo", mode = "755" },
+    { source = "packaging/io.github.garbanhh.Garbo.desktop", dest = "/usr/share/applications/io.github.garbanhh.Garbo.desktop", mode = "644" },
+    { source = "packaging/io.github.garbanhh.Garbo.svg", dest = "/usr/share/icons/hicolor/scalable/apps/io.github.garbanhh.Garbo.svg", mode = "644" },
+    { source = "packaging/io.github.garbanhh.Garbo.metainfo.xml", dest = "/usr/share/metainfo/io.github.garbanhh.Garbo.metainfo.xml", mode = "644" },
+    { source = "LICENSE", dest = "/usr/share/licenses/garbo/LICENSE", mode = "644", doc = true },
+    { source = "NOTICE", dest = "/usr/share/licenses/garbo/NOTICE", mode = "644", doc = true },
+    { source = "README.md", dest = "/usr/share/doc/garbo/README.md", mode = "644", doc = true },
+]
+
+[package.metadata.generate-rpm.requires]
+curl = "*"
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true
+
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3

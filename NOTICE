@@ -1,0 +1,8 @@
+Garbo
+Copyright (c) 2026 garbanhh — licencia MIT (ver LICENSE).
+
+src/pty_loop.rs está adaptado del bucle de E/S de alacritty_terminal
+(https://github.com/alacritty/alacritty), Copyright (c) The Alacritty Project,
+distribuido bajo la licencia Apache 2.0: https://www.apache.org/licenses/LICENSE-2.0
+Cambios: detección de marcas OSC 133 y división de la entrada en ellas para los
+bloques de comandos, y un canal de mensajes propio.

@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Garbo
+GenericName=Terminal
+Comment=Terminal ligera con pestañas y bloques de comandos
+Exec=garbo
+Icon=io.github.garbanhh.Garbo
+Terminal=false
+Categories=System;TerminalEmulator;
+Keywords=terminal;shell;consola;prompt;comando;
+StartupNotify=true
+StartupWMClass=io.github.garbanhh.Garbo

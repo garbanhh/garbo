@@ -1,0 +1,386 @@
+//! Configuración de usuario: `~/.config/garbo/config.toml`.
+//! Todo tiene valores por defecto razonables; el archivo es opcional.
+
+use serde::Deserialize;
+use std::collections::HashMap;
+use std::path::PathBuf;
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct Config {
+    pub font: FontConfig,
+    pub window: WindowConfig,
+    pub shell: ShellConfig,
+    pub terminal: TerminalConfig,
+    /// Nombre de tema incorporado (ver `Theme::builtin`).
+    pub theme: String,
+    /// Sobrescrituras de colores sobre el tema elegido.
+    pub colors: ColorOverrides,
+    /// acción -> combinación, p.ej. `new_tab = "ctrl+shift+t"`.
+    pub keybindings: HashMap<String, String>,
+    /// Consultar en GitHub si hay versión nueva (al arrancar y cada 24 h).
+    pub check_updates: bool,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            font: FontConfig::default(),
+            window: WindowConfig::default(),
+            shell: ShellConfig::default(),
+            terminal: TerminalConfig::default(),
+            theme: "garbo-dark".into(),
+            colors: ColorOverrides::default(),
+            keybindings: HashMap::new(),
+            check_updates: true,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct FontConfig {
+    pub family: String,
+    pub size: f32,
+    pub line_height: f32,
+    pub fallback: Vec<String>,
+    /// Fuente proporcional de la interfaz (pestañas, paleta, ajustes).
+    pub ui_family: String,
+    pub ui_size: f32,
+}
+
+impl Default for FontConfig {
+    fn default() -> Self {
+        Self {
+            // Mismos valores por defecto que GNOME Terminal.
+            family: "Adwaita Mono".into(),
+            size: 11.0,
+            line_height: 1.0,
+            fallback: vec![
+                "JetBrains Mono".into(),
+                "Noto Sans Mono".into(),
+                "DejaVu Sans Mono".into(),
+                "Liberation Mono".into(),
+                "Symbols Nerd Font Mono".into(),
+                "Noto Sans Symbols 2".into(),
+                "Noto Sans Mono CJK SC".into(),
+                "Noto Color Emoji".into(),
+                "Noto Emoji".into(),
+                "Symbola".into(),
+            ],
+            ui_family: "Adwaita Sans".into(),
+            ui_size: 10.5,
+        }
+    }
+}
+
+impl FontConfig {
+    pub fn ui_fallback(&self) -> Vec<String> {
+        let mut v: Vec<String> = ["Cantarell", "Inter", "Noto Sans", "DejaVu Sans", "Liberation Sans"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        v.extend(self.fallback.iter().cloned());
+        v
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct WindowConfig {
+    pub padding: f32,
+    pub opacity: f32,
+    /// `false` = barra de título integrada en la barra de pestañas.
+    pub decorations: bool,
+    pub columns: u16,
+    pub lines: u16,
+    /// Mostrar la barra de pestañas aunque solo haya una.
+    pub always_show_tabs: bool,
+}
+
+impl Default for WindowConfig {
+    fn default() -> Self {
+        Self {
+            padding: 10.0,
+            opacity: 1.0,
+            decorations: false,
+            columns: 110,
+            lines: 32,
+            always_show_tabs: true,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct ShellConfig {
+    /// Vacío = `$SHELL` del usuario.
+    pub program: Option<String>,
+    pub args: Vec<String>,
+    pub env: HashMap<String, String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CursorStyle {
+    Block,
+    Beam,
+    Underline,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct TerminalConfig {
+    pub scrollback: usize,
+    pub cursor_style: CursorStyle,
+    pub cursor_blink: bool,
+    /// Líneas por paso de rueda del ratón.
+    pub scroll_multiplier: f32,
+    /// Copiar automáticamente al soltar la selección.
+    pub copy_on_select: bool,
+    /// Inyectar la integración de shell (bash) que delimita los bloques de comandos.
+    pub shell_integration: bool,
+    /// Dibujar los bloques (separadores, estado, duración).
+    pub blocks: bool,
+}
+
+impl Default for TerminalConfig {
+    fn default() -> Self {
+        Self {
+            scrollback: 10_000,
+            cursor_style: CursorStyle::Block,
+            cursor_blink: false,
+            scroll_multiplier: 3.0,
+            copy_on_select: false,
+            shell_integration: true,
+            blocks: true,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct ColorOverrides {
+    pub foreground: Option<String>,
+    pub background: Option<String>,
+    pub cursor: Option<String>,
+    pub selection: Option<String>,
+    pub tab_bar: Option<String>,
+    pub tab_active: Option<String>,
+    pub accent: Option<String>,
+    /// 16 colores ANSI (0-7 normales, 8-15 brillantes).
+    pub palette: Option<Vec<String>>,
+}
+
+impl Config {
+    pub fn path() -> Option<PathBuf> {
+        dirs::config_dir().map(|d| d.join("garbo").join("config.toml"))
+    }
+
+    /// Carga la config. Si hay un error de sintaxis se informa y se usan los valores por defecto.
+    pub fn load() -> Self {
+        let Some(path) = Self::path() else { return Self::default() };
+        match std::fs::read_to_string(&path) {
+            Ok(text) => match toml::from_str::<Config>(&text) {
+                Ok(cfg) => cfg,
+                Err(e) => {
+                    log::error!("Error en {}: {e}", path.display());
+                    Self::default()
+                }
+            },
+            Err(_) => Self::default(),
+        }
+    }
+
+    /// Guarda los valores que se pueden cambiar desde Ajustes. Edita el archivo existente
+    /// en su sitio (toml_edit), así se conservan comentarios y el resto de claves.
+    pub fn save(&self) -> std::io::Result<()> {
+        use toml_edit::{value, DocumentMut};
+        let Some(path) = Self::path() else { return Ok(()) };
+        let text = std::fs::read_to_string(&path).unwrap_or_default();
+        let mut doc: DocumentMut = text.parse().unwrap_or_default();
+        let r2 = |v: f32| ((v as f64) * 100.0).round() / 100.0;
+        doc["theme"] = value(self.theme.clone());
+        doc["check_updates"] = value(self.check_updates);
+        doc["font"]["family"] = value(self.font.family.clone());
+        doc["font"]["size"] = value(r2(self.font.size));
+        doc["font"]["line_height"] = value(r2(self.font.line_height));
+        doc["window"]["padding"] = value(r2(self.window.padding));
+        doc["window"]["opacity"] = value(r2(self.window.opacity));
+        doc["window"]["decorations"] = value(self.window.decorations);
+        let cursor = match self.terminal.cursor_style {
+            CursorStyle::Block => "block",
+            CursorStyle::Beam => "beam",
+            CursorStyle::Underline => "underline",
+        };
+        doc["terminal"]["cursor_style"] = value(cursor);
+        doc["terminal"]["cursor_blink"] = value(self.terminal.cursor_blink);
+        doc["terminal"]["copy_on_select"] = value(self.terminal.copy_on_select);
+        doc["terminal"]["scrollback"] = value(self.terminal.scrollback as i64);
+        doc["terminal"]["blocks"] = value(self.terminal.blocks);
+        doc["terminal"]["shell_integration"] = value(self.terminal.shell_integration);
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir)?;
+        }
+        std::fs::write(&path, doc.to_string())
+    }
+
+    pub fn theme(&self) -> Theme {
+        let mut t = Theme::builtin(&self.theme).unwrap_or_else(|| {
+            log::warn!("Tema '{}' no existe, usando garbo-dark", self.theme);
+            Theme::builtin("garbo-dark").unwrap()
+        });
+        let c = &self.colors;
+        let set = |slot: &mut Rgb, v: &Option<String>| {
+            if let Some(rgb) = v.as_deref().and_then(Rgb::parse) {
+                *slot = rgb;
+            }
+        };
+        set(&mut t.foreground, &c.foreground);
+        set(&mut t.background, &c.background);
+        set(&mut t.cursor, &c.cursor);
+        set(&mut t.selection, &c.selection);
+        set(&mut t.tab_bar, &c.tab_bar);
+        set(&mut t.tab_active, &c.tab_active);
+        set(&mut t.accent, &c.accent);
+        if let Some(p) = &c.palette {
+            for (i, s) in p.iter().take(16).enumerate() {
+                if let Some(rgb) = Rgb::parse(s) {
+                    t.palette[i] = rgb;
+                }
+            }
+        }
+        t
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Rgb(pub u8, pub u8, pub u8);
+
+impl Rgb {
+    pub fn parse(s: &str) -> Option<Rgb> {
+        let s = s.trim().trim_start_matches('#').trim_start_matches("0x");
+        if s.len() != 6 {
+            return None;
+        }
+        let v = u32::from_str_radix(s, 16).ok()?;
+        Some(Rgb((v >> 16) as u8, (v >> 8) as u8, v as u8))
+    }
+
+    const fn hex(v: u32) -> Rgb {
+        Rgb((v >> 16) as u8, (v >> 8) as u8, v as u8)
+    }
+
+    /// Color lineal premultiplicado listo para la GPU.
+    pub fn to_f32(self, alpha: f32) -> [f32; 4] {
+        [
+            self.0 as f32 / 255.0,
+            self.1 as f32 / 255.0,
+            self.2 as f32 / 255.0,
+            alpha,
+        ]
+    }
+
+    pub fn lerp(self, other: Rgb, t: f32) -> Rgb {
+        let m = |a: u8, b: u8| (a as f32 + (b as f32 - a as f32) * t).round() as u8;
+        Rgb(m(self.0, other.0), m(self.1, other.1), m(self.2, other.2))
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Theme {
+    pub foreground: Rgb,
+    pub background: Rgb,
+    pub cursor: Rgb,
+    pub selection: Rgb,
+    pub tab_bar: Rgb,
+    pub tab_active: Rgb,
+    pub accent: Rgb,
+    pub palette: [Rgb; 16],
+}
+
+impl Theme {
+    pub const NAMES: &'static [&'static str] = &[
+        "garbo-dark",
+        "garbo-light",
+        "tokyo-night",
+        "catppuccin-mocha",
+        "gruvbox-dark",
+        "nord",
+    ];
+
+    pub fn builtin(name: &str) -> Option<Theme> {
+        let (fg, bg, cursor, sel, bar, active, accent, pal): (u32, u32, u32, u32, u32, u32, u32, [u32; 16]) =
+            match name {
+                "garbo-dark" => (
+                    0xD7DAE0, 0x16181D, 0x7AA2F7, 0x2E3A55, 0x0F1115, 0x1F232B, 0x7AA2F7,
+                    [
+                        0x1D2027, 0xF26D78, 0x8FD18B, 0xE6C07B, 0x6FA8FF, 0xC792EA, 0x56C8D8, 0xC8CCD4,
+                        0x4B5263, 0xFF8A94, 0xA7E3A1, 0xF2D49B, 0x8FBFFF, 0xDDB0F6, 0x7FE0EC, 0xFFFFFF,
+                    ],
+                ),
+                "garbo-light" => (
+                    0x2A2E36, 0xFAFAFA, 0x3B6FE0, 0xCFDDF7, 0xE9EAEE, 0xFAFAFA, 0x3B6FE0,
+                    [
+                        0x2A2E36, 0xD1393E, 0x3E9A3A, 0xB27A00, 0x3B6FE0, 0x9B4FC8, 0x1C8C9C, 0xD5D7DC,
+                        0x6B717D, 0xE5484D, 0x4CB648, 0xC99400, 0x5A88F0, 0xB06ADB, 0x2BA6B8, 0xFFFFFF,
+                    ],
+                ),
+                "tokyo-night" => (
+                    0xC0CAF5, 0x1A1B26, 0xC0CAF5, 0x33467C, 0x16161E, 0x24283B, 0x7AA2F7,
+                    [
+                        0x15161E, 0xF7768E, 0x9ECE6A, 0xE0AF68, 0x7AA2F7, 0xBB9AF7, 0x7DCFFF, 0xA9B1D6,
+                        0x414868, 0xF7768E, 0x9ECE6A, 0xE0AF68, 0x7AA2F7, 0xBB9AF7, 0x7DCFFF, 0xC0CAF5,
+                    ],
+                ),
+                "catppuccin-mocha" => (
+                    0xCDD6F4, 0x1E1E2E, 0xF5E0DC, 0x45475A, 0x181825, 0x313244, 0xCBA6F7,
+                    [
+                        0x45475A, 0xF38BA8, 0xA6E3A1, 0xF9E2AF, 0x89B4FA, 0xF5C2E7, 0x94E2D5, 0xBAC2DE,
+                        0x585B70, 0xF38BA8, 0xA6E3A1, 0xF9E2AF, 0x89B4FA, 0xF5C2E7, 0x94E2D5, 0xA6ADC8,
+                    ],
+                ),
+                "gruvbox-dark" => (
+                    0xEBDBB2, 0x282828, 0xEBDBB2, 0x504945, 0x1D2021, 0x3C3836, 0xFABD2F,
+                    [
+                        0x282828, 0xCC241D, 0x98971A, 0xD79921, 0x458588, 0xB16286, 0x689D6A, 0xA89984,
+                        0x928374, 0xFB4934, 0xB8BB26, 0xFABD2F, 0x83A598, 0xD3869B, 0x8EC07C, 0xEBDBB2,
+                    ],
+                ),
+                "nord" => (
+                    0xD8DEE9, 0x2E3440, 0xD8DEE9, 0x434C5E, 0x272C36, 0x3B4252, 0x88C0D0,
+                    [
+                        0x3B4252, 0xBF616A, 0xA3BE8C, 0xEBCB8B, 0x81A1C1, 0xB48EAD, 0x88C0D0, 0xE5E9F0,
+                        0x4C566A, 0xBF616A, 0xA3BE8C, 0xEBCB8B, 0x81A1C1, 0xB48EAD, 0x8FBCBB, 0xECEFF4,
+                    ],
+                ),
+                _ => return None,
+            };
+        Some(Theme {
+            foreground: Rgb::hex(fg),
+            background: Rgb::hex(bg),
+            cursor: Rgb::hex(cursor),
+            selection: Rgb::hex(sel),
+            tab_bar: Rgb::hex(bar),
+            tab_active: Rgb::hex(active),
+            accent: Rgb::hex(accent),
+            palette: pal.map(Rgb::hex),
+        })
+    }
+
+    /// Paleta xterm de 256 colores: 16 del tema + cubo 6x6x6 + 24 grises.
+    pub fn color256(&self, idx: u8) -> Rgb {
+        match idx {
+            0..=15 => self.palette[idx as usize],
+            16..=231 => {
+                let i = idx - 16;
+                let c = |v: u8| if v == 0 { 0 } else { v * 40 + 55 };
+                Rgb(c(i / 36), c((i / 6) % 6), c(i % 6))
+            }
+            _ => {
+                let v = 8 + (idx - 232) * 10;
+                Rgb(v, v, v)
+            }
+        }
+    }
+}
