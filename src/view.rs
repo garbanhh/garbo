@@ -225,37 +225,46 @@ pub fn resolve(color: AnsiColor, theme: &Theme, colors: &Colors) -> Rgb {
 }
 
 /// Últimas líneas con contenido de la pantalla de un terminal, en tramos de color, para la
-/// vista previa del panel lateral. Se quitan los marcos (dibujo de cajas) y los espacios de los
-/// extremos, y se saltan las líneas que solo tienen eso.
+/// vista previa del panel lateral.
+///
+/// Los agentes dibujan abajo su zona de entrada entre dos líneas horizontales (o en una caja) y,
+/// debajo, su barra de estado. Eso no dice nada de lo que está haciendo, así que se corta por
+/// encima de esa zona. Además se quitan los marcos y los espacios de los extremos, y se saltan
+/// las líneas que solo tienen eso.
 pub fn preview_lines<T: EventListener>(term: &Term<T>, theme: &Theme, max: usize) -> Vec<Vec<(String, Rgb)>> {
     let grid = term.grid();
     let colors = term.colors();
     let cols = term.columns();
-    let is_frame = |c: char| c == ' ' || c == '\0' || ('\u{2500}'..='\u{259F}').contains(&c);
+    let n = term.screen_lines();
+    let rows: Vec<Vec<(char, Rgb)>> = (0..n as i32)
+        .map(|row| {
+            let line = &grid[Line(row)];
+            (0..cols)
+                .filter_map(|c| {
+                    let cell = &line[Column(c)];
+                    if cell.flags.intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER) {
+                        return None;
+                    }
+                    let mut fg =
+                        resolve(if cell.flags.contains(Flags::INVERSE) { cell.bg } else { cell.fg }, theme, colors);
+                    if cell.flags.contains(Flags::DIM) {
+                        fg = fg.lerp(theme.background, 0.35);
+                    }
+                    if fg == theme.background {
+                        fg = theme.foreground;
+                    }
+                    Some((if cell.c == '\0' { ' ' } else { cell.c }, fg))
+                })
+                .collect()
+        })
+        .collect();
+    let cut = input_area_top(&rows).unwrap_or(n);
     let mut out = Vec::new();
-    for row in (0..term.screen_lines() as i32).rev() {
-        let line = &grid[Line(row)];
-        let cells: Vec<(char, Rgb)> = (0..cols)
-            .filter_map(|c| {
-                let cell = &line[Column(c)];
-                if cell.flags.intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER) {
-                    return None;
-                }
-                let mut fg = resolve(if cell.flags.contains(Flags::INVERSE) { cell.bg } else { cell.fg }, theme, colors);
-                if cell.flags.contains(Flags::DIM) {
-                    fg = fg.lerp(theme.background, 0.35);
-                }
-                if fg == theme.background {
-                    fg = theme.foreground;
-                }
-                Some((cell.c, fg))
-            })
-            .collect();
+    for cells in rows[..cut].iter().rev() {
         let Some(start) = cells.iter().position(|(c, _)| !is_frame(*c)) else { continue };
         let end = cells.iter().rposition(|(c, _)| !is_frame(*c)).unwrap_or(start);
         let mut runs: Vec<(String, Rgb)> = Vec::new();
         for &(c, fg) in &cells[start..=end] {
-            let c = if c == '\0' { ' ' } else { c };
             match runs.last_mut() {
                 Some((text, color)) if *color == fg || c == ' ' => text.push(c),
                 _ => runs.push((c.to_string(), fg)),
@@ -268,6 +277,64 @@ pub fn preview_lines<T: EventListener>(term: &Term<T>, theme: &Theme, max: usize
     }
     out.reverse();
     out
+}
+
+fn is_frame(c: char) -> bool {
+    c == ' ' || ('\u{2500}'..='\u{259F}').contains(&c)
+}
+
+/// Línea horizontal de lado a lado (o borde de caja): solo marcos y al menos 8 trazos.
+fn is_rule(cells: &[(char, Rgb)]) -> bool {
+    let strokes = cells.iter().filter(|(c, _)| ('\u{2500}'..='\u{257F}').contains(c)).count();
+    strokes >= 8 && cells.iter().all(|(c, _)| is_frame(*c))
+}
+
+/// Primera línea de la zona de entrada (la línea superior de su marco), si la hay. Los agentes la
+/// dibujan justo debajo de su contenido (no siempre al fondo de la pantalla) y por debajo solo
+/// queda la barra de estado: se busca la línea más baja con, como mucho, 12 líneas con texto
+/// debajo y, hasta 15 líneas por encima, su pareja.
+pub fn input_area_top(rows: &[Vec<(char, Rgb)>]) -> Option<usize> {
+    let has_text = |r: &Vec<(char, Rgb)>| r.iter().any(|(c, _)| !is_frame(*c));
+    let last = rows.iter().rposition(has_text)?;
+    let mut below = 0;
+    let mut lower = None;
+    for r in (0..rows.len()).rev() {
+        if is_rule(&rows[r]) {
+            lower = Some(r);
+            break;
+        }
+        if r <= last && has_text(&rows[r]) {
+            below += 1;
+            if below > 12 {
+                return None;
+            }
+        }
+    }
+    let lower = lower?;
+    let upper = (lower.saturating_sub(15)..lower).rev().find(|&r| is_rule(&rows[r]));
+    Some(upper.unwrap_or(lower))
+}
+
+/// Texto sugerido (en gris) a continuación del cursor, sin pasar del borde derecho.
+pub fn draw_ghost<T: EventListener>(p: &mut Painter, term: &Term<T>, theme: &Theme, v: &TermView, text: &str) {
+    let m = p.metrics();
+    let cur = term.grid().cursor.point;
+    let row = cur.line.0;
+    if row < 0 || row as usize >= v.lines {
+        return;
+    }
+    let cols = term.columns();
+    let color = theme.foreground.lerp(theme.background, 0.55);
+    let y = v.y + row as f32 * m.height;
+    for (k, ch) in text.chars().enumerate() {
+        let col = cur.column.0 + k;
+        if col >= cols {
+            break;
+        }
+        if ch != ' ' {
+            p.glyph(ch, Style::Regular, false, false, v.x + col as f32 * m.width, y, color, 1.0);
+        }
+    }
 }
 
 pub struct TermView {
@@ -736,4 +803,34 @@ fn draw_special(p: &mut Painter, c: char, x: f32, y: f32, w: f32, h: f32, fg: Rg
         }
     }
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rows(lines: &[&str]) -> Vec<Vec<(char, Rgb)>> {
+        lines.iter().map(|l| l.chars().map(|c| (c, Rgb(0, 0, 0))).collect()).collect()
+    }
+
+    #[test]
+    fn corta_la_zona_de_entrada_del_agente() {
+        let rule = "────────────────────────────────";
+        // Contenido, línea, entrada en dos líneas, línea, barra de estado en tres líneas.
+        let r = rows(&["⏺ Hecho", "", "✻ Pensando…", rule, "❯ escribo algo", "  que sigue", rule, "Opus 5.5", "ctx 29%", "auto mode"]);
+        assert_eq!(input_area_top(&r), Some(3));
+        // Con caja (╭ ╮ ╰ ╯) también.
+        let r = rows(&["salida", "otra", "╭──────────────╮", "│ > hola       │", "╰──────────────╯", "? atajos"]);
+        assert_eq!(input_area_top(&r), Some(2));
+        // Sin zona de entrada: no se corta nada.
+        let r = rows(&["uno", "dos", "tres", "cuatro"]);
+        assert_eq!(input_area_top(&r), None);
+        // Zona de entrada arriba (pantalla casi vacía) y líneas en blanco debajo: se encuentra.
+        let r = rows(&["⏺ Hola", rule, "> ", rule, "estado", "", "", "", ""]);
+        assert_eq!(input_area_top(&r), Some(1));
+        // Una línea con mucho texto debajo es parte de la salida, no la zona de entrada.
+        let mut v = vec!["a", rule];
+        v.extend(["texto"; 13]);
+        assert_eq!(input_area_top(&rows(&v)), None);
+    }
 }

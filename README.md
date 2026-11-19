@@ -7,7 +7,11 @@ ajustes con persistencia automática.
 ## Características
 
 - Renderizado por GPU (wgpu: Vulkan, Metal, DX12 u OpenGL) con redibujado únicamente bajo demanda.
-- Pestañas integradas en la barra de título, con herencia del directorio de trabajo.
+- Pestañas integradas en la barra de título, con herencia del directorio de trabajo. Cada pestaña
+  se titula con lo que se está haciendo: el título del programa, la orden en ejecución o la carpeta.
+- Sugerencias de comandos a partir del historial, que se aceptan con `Tab`.
+- Pegado de imágenes: una captura en el portapapeles se pega como ruta de archivo, que los agentes
+  de código adjuntan como imagen.
 - Bloques de comandos: cada comando y su salida se agrupan con su estado de salida y duración.
 - Panel lateral con los agentes de código en ejecución en cada pestaña y los puertos en escucha.
 - Paleta de comandos con búsqueda aproximada.
@@ -53,7 +57,8 @@ cargo build --release
 | `Alt+1` … `Alt+9` | Ir a una pestaña (`Alt+9`: la última) |
 | `Ctrl+Shift+P` | Paleta de comandos |
 | `Ctrl+,` | Ajustes |
-| `Ctrl+Shift+C` / `Ctrl+Shift+V` | Copiar / pegar |
+| `Ctrl+Shift+C` / `Ctrl+Shift+V` | Copiar / pegar (también imágenes: ver más abajo) |
+| `Tab` o `→` | Aceptar la sugerencia del historial (sin sugerencia, `Tab` llega al shell) |
 | `Ctrl++` / `Ctrl+-` / `Ctrl+0` | Aumentar / reducir / restablecer el tamaño de fuente |
 | `Shift+RePág` / `Shift+AvPág` / `Shift+Inicio` / `Shift+Fin` | Desplazamiento por el historial |
 | `Ctrl+Shift+K` | Limpiar el historial |
@@ -73,6 +78,22 @@ Todos los atajos se pueden modificar en la sección `[keybindings]` de la config
 - Arrastrar un archivo a la ventana inserta su ruta.
 - La barra de pestañas permite mover la ventana; el doble clic la maximiza. La ventana se
   redimensiona desde sus bordes.
+
+### Sugerencias del historial
+
+Mientras se escribe en el prompt, Garbo muestra en gris el resto del comando más reciente del
+historial que empieza igual. `Tab` (o `→` al final de la línea) lo acepta; si no hay sugerencia,
+`Tab` llega al shell y funciona su autocompletado habitual. El historial combina `$HISTFILE`
+(`~/.bash_history`) con los comandos ejecutados en cualquier pestaña durante la sesión; los que
+empiezan por un espacio no se guardan. Requiere la integración con bash (véase *Bloques de
+comandos*) y puede desactivarse en *Ajustes → Terminal*.
+
+### Pegar capturas de pantalla
+
+Si al pegar con `Ctrl+Shift+V` el portapapeles no contiene texto pero sí una imagen (por ejemplo,
+tras `ImprPant` en GNOME), Garbo la guarda en `~/.cache/garbo/capturas` y pega la ruta del archivo.
+Claude Code y otros agentes reconocen la ruta y adjuntan la imagen. La imagen se lee con
+`wl-paste` (Wayland) o `xclip` (X11); las capturas guardadas se eliminan al cabo de un día.
 
 ### Bloques de comandos
 
@@ -102,9 +123,10 @@ secciones:
 - **Agentes**: pestañas que ejecutan un agente de código (Claude Code, Codex, Gemini CLI, Aider,
   OpenCode, entre otros), con su estado (*Trabajando*, *Terminado*, *Esperando tu mensaje*) y el
   tiempo transcurrido. Un clic activa la pestaña; al pasar el ratón, la fila se despliega y muestra
-  las últimas líneas de esa pestaña sin necesidad de cambiar a ella. La propia pestaña muestra
-  también un indicador. La detección se basa en el proceso en primer plano de cada terminal y en
-  su actividad.
+  las últimas líneas de la conversación de esa pestaña (sin el cuadro de entrada ni la barra de
+  estado del agente) sin necesidad de cambiar a ella. La propia pestaña muestra también un
+  indicador. La detección se basa en el proceso en primer plano de cada terminal y en su actividad;
+  la salida que se produce justo al teclear no cuenta como trabajo del agente.
 - **Subagentes**: bajo cada sesión de Claude Code se listan los subagentes que lanza, con su
   descripción, el tiempo en marcha y la última herramienta que están usando. Se obtienen, en modo
   de solo lectura, de los archivos de sesión que Claude Code guarda en `~/.claude/projects`.
@@ -114,15 +136,17 @@ secciones:
 
 ### Ajustes
 
-El panel de ajustes se abre con `Ctrl+,` o con el botón de menú de la barra de pestañas. Permite
-modificar el tema, la fuente, el tamaño, el interlineado, el margen, la opacidad, el cursor, el
-historial, los bloques y la búsqueda de actualizaciones. Los cambios se aplican de inmediato y se
-guardan en `~/.config/garbo/config.toml`, conservando el resto del archivo y sus comentarios.
+La ventana de ajustes se abre con `Ctrl+,` o con el botón de menú de la barra de pestañas. Muestra
+las categorías a la izquierda (Tema, Texto, Terminal, Bloques, Ventana y Actualizaciones) y sus
+opciones a la derecha. Los cambios se aplican de inmediato y se guardan en
+`~/.config/garbo/config.toml`, conservando el resto del archivo y sus comentarios.
 
-Los temas se presentan como una cuadrícula de muestras, cada una con los colores del tema; un clic
-lo aplica. La rueda del ratón desplaza la lista sin cambiar el elemento seleccionado.
+- **Tema**: cuadrícula de muestras con los colores de cada tema; un clic lo aplica.
+- **Actualizaciones**: botón *Buscar* para comprobar en el momento si hay una versión nueva (y, si
+  la hay, *Actualizar*), además de la búsqueda automática y la versión instalada.
 
-Navegación con teclado: `↑` `↓` para elegir, `←` `→` para cambiar el valor (también el tema),
+La rueda del ratón desplaza la lista sin cambiar el elemento seleccionado. Navegación con teclado:
+`Tab` / `Shift+Tab` para cambiar de categoría, `↑` `↓` para elegir, `←` `→` para cambiar el valor,
 `Intro` para activar y `Esc` para cerrar.
 
 ## Configuración
@@ -184,6 +208,8 @@ src/
   keybindings.rs  atajos de teclado configurables
   config.rs       configuración y temas
   update.rs       comprobación e instalación de actualizaciones
+  suggest.rs      sugerencias de comandos desde el historial
+  clipboard.rs    pegado de imágenes del portapapeles
   sessions.rs     detección de agentes en primer plano y su estado
   ports.rs        puertos en escucha y detección de servidores web
   subagents.rs    subagentes de Claude Code a partir de sus archivos de sesión

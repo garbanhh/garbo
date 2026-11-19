@@ -142,6 +142,8 @@ pub struct TerminalConfig {
     pub shell_integration: bool,
     /// Dibujar los bloques (separadores, estado, duración).
     pub blocks: bool,
+    /// Sugerir el resto del comando a partir del historial (se acepta con Tab o →).
+    pub autosuggest: bool,
 }
 
 impl Default for TerminalConfig {
@@ -154,6 +156,7 @@ impl Default for TerminalConfig {
             copy_on_select: false,
             shell_integration: true,
             blocks: true,
+            autosuggest: true,
         }
     }
 }
@@ -219,6 +222,7 @@ impl Config {
         doc["terminal"]["scrollback"] = value(self.terminal.scrollback as i64);
         doc["terminal"]["blocks"] = value(self.terminal.blocks);
         doc["terminal"]["shell_integration"] = value(self.terminal.shell_integration);
+        doc["terminal"]["autosuggest"] = value(self.terminal.autosuggest);
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir)?;
         }

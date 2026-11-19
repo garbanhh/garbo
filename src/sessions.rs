@@ -169,6 +169,31 @@ pub fn identify_agent(pid: i32) -> Option<Agent> {
     })
 }
 
+/// Orden que ejecuta un proceso, para mostrarla ("cargo build --release", "vite").
+/// Con intérpretes (python, node…) se muestra el script en lugar del intérprete.
+pub fn command_label(pid: i32) -> Option<String> {
+    let raw = std::fs::read(format!("/proc/{pid}/cmdline")).ok()?;
+    let mut args: Vec<String> = raw
+        .split(|&b| b == 0)
+        .filter(|a| !a.is_empty())
+        .map(|a| String::from_utf8_lossy(a).into_owned())
+        .collect();
+    if args.is_empty() {
+        return None;
+    }
+    let base = |s: &str| s.rsplit('/').next().unwrap_or(s).to_string();
+    let interp = ["python", "python3", "node", "bun", "deno", "perl", "ruby", "sh", "bash"];
+    if args.len() > 1 && interp.contains(&base(&args[0]).as_str()) && !args[1].starts_with('-') {
+        args.remove(0);
+    }
+    args[0] = base(&args[0]);
+    let mut out = args.join(" ");
+    if out.chars().count() > 60 {
+        out = out.chars().take(59).collect::<String>() + "…";
+    }
+    Some(out)
+}
+
 /// Directorio de trabajo de un proceso, abreviado con `~`.
 pub fn cwd_label(pid: u32) -> Option<String> {
     let path: PathBuf = std::fs::read_link(format!("/proc/{pid}/cwd")).ok()?;

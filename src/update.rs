@@ -30,6 +30,16 @@ pub enum UpdateState {
     Failed(String),
 }
 
+/// Estado de la búsqueda manual ("Buscar actualizaciones" en Ajustes).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum CheckState {
+    #[default]
+    Idle,
+    Checking,
+    UpToDate,
+    Failed(String),
+}
+
 static CHECKER_STARTED: AtomicBool = AtomicBool::new(false);
 /// Se puede desactivar desde Ajustes sin parar el hilo (simplemente deja de consultar).
 pub static ENABLED: AtomicBool = AtomicBool::new(true);
@@ -49,6 +59,21 @@ pub fn start_checker(proxy: EventLoopProxy<UserEvent>) {
     });
 }
 
+/// Búsqueda inmediata pedida por el usuario (aunque la automática esté desactivada).
+pub fn check_now(proxy: EventLoopProxy<UserEvent>) {
+    let _ = std::thread::Builder::new().name("buscar-actualización".into()).spawn(move || {
+        let state = match check_result() {
+            Ok(Some(rel)) => {
+                let _ = proxy.send_event(UserEvent::Update(UpdateState::Available(rel)));
+                CheckState::Idle
+            }
+            Ok(None) => CheckState::UpToDate,
+            Err(e) => CheckState::Failed(e),
+        };
+        let _ = proxy.send_event(UserEvent::UpdateCheck(state));
+    });
+}
+
 fn curl(args: &[&str]) -> Option<Vec<u8>> {
     let out = Command::new("curl").args(["-fsSL", "-A", USER_AGENT]).args(args).output().ok()?;
     out.status.success().then_some(out.stdout)
@@ -56,10 +81,16 @@ fn curl(args: &[&str]) -> Option<Vec<u8>> {
 
 /// Última release si es más nueva que la versión en ejecución.
 pub fn check() -> Option<Release> {
+    check_result().ok().flatten()
+}
+
+/// Como `check`, distinguiendo "al día" (`Ok(None)`) de "no se pudo consultar" (`Err`).
+pub fn check_result() -> Result<Option<Release>, String> {
     let url = format!("https://api.github.com/repos/{REPO}/releases/latest");
-    let body = curl(&["--max-time", "15", "-H", "Accept: application/vnd.github+json", &url])?;
-    let rel = parse_release(&body)?;
-    is_newer(&rel.version, env!("CARGO_PKG_VERSION")).then_some(rel)
+    let body = curl(&["--max-time", "15", "-H", "Accept: application/vnd.github+json", &url])
+        .ok_or("sin conexión con GitHub")?;
+    let rel = parse_release(&body).ok_or("respuesta no válida")?;
+    Ok(is_newer(&rel.version, env!("CARGO_PKG_VERSION")).then_some(rel))
 }
 
 pub fn parse_release(body: &[u8]) -> Option<Release> {

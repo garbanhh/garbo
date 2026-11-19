@@ -119,6 +119,23 @@ impl ApplicationHandler<UserEvent> for App {
                 }
                 return;
             }
+            UserEvent::UpdateCheck(state) => {
+                if let Some(st) = self.st.as_mut() {
+                    st.update_check = state;
+                    st.window.request_redraw();
+                }
+                return;
+            }
+            UserEvent::PasteImage(id, result) => {
+                match result {
+                    Ok(path) => {
+                        let text = crate::clipboard::shell_path(&path) + " ";
+                        self.paste_text_to(id, &text);
+                    }
+                    Err(e) => log::info!("Pegar: {e}"),
+                }
+                return;
+            }
             UserEvent::Update(state) => {
                 if let Some(st) = self.st.as_mut() {
                     let first = st.update.is_none();
@@ -137,14 +154,14 @@ impl ApplicationHandler<UserEvent> for App {
         let is_active = idx == st.active;
         match ev {
             TermEvent::Wakeup => {
-                st.tabs[idx].last_output = Instant::now();
+                st.tabs[idx].note_output(Instant::now());
                 // Las pestañas en segundo plano no gastan GPU.
                 if is_active {
                     st.window.request_redraw();
                 }
             }
             TermEvent::Title(t) => {
-                st.tabs[idx].title = t;
+                st.tabs[idx].set_title(t);
                 st.window.request_redraw();
                 self.update_title();
             }
@@ -221,7 +238,7 @@ impl ApplicationHandler<UserEvent> for App {
                 st.next_blink = Instant::now() + BLINK;
                 if let Some(tab) = st.tabs.get(st.active) {
                     if tab.term.lock().mode().contains(TermMode::FOCUS_IN_OUT) {
-                        tab.write(if f { &b"\x1b[I"[..] } else { &b"\x1b[O"[..] });
+                        tab.input(if f { &b"\x1b[I"[..] } else { &b"\x1b[O"[..] });
                     }
                 }
                 st.window.request_redraw();
@@ -271,30 +288,30 @@ impl App {
             if self.keys.lookup(&ev.logical_key, mods) == Some(crate::keybindings::Action::Settings) {
                 return self.run_action(crate::keybindings::Action::Settings);
             }
+            use crate::settings::Nav;
+            let shift = mods.shift_key();
             let st = self.st.as_mut().unwrap();
-            let set = st.settings.as_mut().unwrap();
-            let sel = set.selected;
-            let change = match &ev.logical_key {
+            let nav = match &ev.logical_key {
                 Key::Named(NamedKey::Escape) => {
                     st.settings = None;
-                    crate::settings::Change::None
+                    None
                 }
-                Key::Named(NamedKey::ArrowUp) => {
-                    set.move_sel(-1);
-                    crate::settings::Change::None
-                }
-                Key::Named(NamedKey::ArrowDown) | Key::Named(NamedKey::Tab) => {
-                    set.move_sel(1);
-                    crate::settings::Change::None
-                }
-                Key::Named(NamedKey::ArrowLeft) => set.adjust(sel, -1, &mut self.cfg),
-                Key::Named(NamedKey::ArrowRight) => set.adjust(sel, 1, &mut self.cfg),
-                Key::Named(NamedKey::Enter) | Key::Named(NamedKey::Space) => set.adjust(sel, 0, &mut self.cfg),
+                Key::Named(NamedKey::ArrowUp) => Some(Nav::Up),
+                Key::Named(NamedKey::ArrowDown) => Some(Nav::Down),
+                Key::Named(NamedKey::ArrowLeft) => Some(Nav::Left),
+                Key::Named(NamedKey::ArrowRight) => Some(Nav::Right),
+                Key::Named(NamedKey::Tab) if shift => Some(Nav::PrevCategory),
+                Key::Named(NamedKey::Tab) | Key::Named(NamedKey::PageDown) => Some(Nav::NextCategory),
+                Key::Named(NamedKey::PageUp) => Some(Nav::PrevCategory),
+                Key::Named(NamedKey::Enter) | Key::Named(NamedKey::Space) => Some(Nav::Activate),
+                _ => None,
+            };
+            let change = match (nav, st.settings.as_mut()) {
+                (Some(n), Some(set)) => set.nav(n, &mut self.cfg),
                 _ => crate::settings::Change::None,
             };
             st.window.request_redraw();
-            self.apply_setting(change);
-            return false;
+            return self.apply_setting(change);
         }
 
         // Paleta de comandos abierta: captura todo el teclado.
@@ -334,15 +351,26 @@ impl App {
             return self.run_action(action);
         }
 
+        let autosuggest = self.cfg.terminal.autosuggest;
         let st = self.st();
         let Some(tab) = st.tabs.get(st.active) else { return false };
+        // Sugerencia del historial: Tab (o → al final de la línea) la acepta. Sin sugerencia,
+        // Tab llega al shell (su autocompletado de siempre).
+        let accept = matches!(ev.logical_key, Key::Named(NamedKey::Tab | NamedKey::ArrowRight));
+        if autosuggest && accept && (mods.is_empty()) {
+            if let Some(rest) = tab.suggestion() {
+                tab.input(rest.into_bytes());
+                self.scroll_to_bottom();
+                return false;
+            }
+        }
         let mode = *tab.term.lock().mode();
         if let Some(bytes) = input::key_to_bytes(&ev, mods, mode) {
             {
                 let mut term = tab.term.lock();
                 term.selection = None;
             }
-            tab.write(bytes);
+            tab.input(bytes);
             let st = self.st();
             let active = st.active;
             if st.tabs.get_mut(active).is_some_and(|t| t.selected_block.take().is_some()) {
@@ -444,7 +472,7 @@ impl App {
                 };
                 if let Some(b) = input::mouse_report(btn, true, true, col, row, st.mods, mode) {
                     drop(term);
-                    tab.write(b);
+                    tab.input(b);
                 }
             }
             return;
@@ -494,11 +522,14 @@ impl App {
                     set.adjust(i, 0, &mut self.cfg)
                 }
                 Hit::Theme(i) => set.pick_theme(i, &mut self.cfg),
+                Hit::Category(c) => {
+                    set.set_cat(c);
+                    crate::settings::Change::None
+                }
                 Hit::Panel => crate::settings::Change::None,
             };
             st.window.request_redraw();
-            self.apply_setting(change);
-            return false;
+            return self.apply_setting(change);
         }
 
         // Paleta abierta: un clic fuera la cierra.
@@ -605,7 +636,7 @@ impl App {
                 _ => return false,
             };
             if let Some(b) = input::mouse_report(code, pressed, false, col, row, st.mods, mode) {
-                tab.write(b);
+                tab.input(b);
             }
             return false;
         }
@@ -739,7 +770,7 @@ impl App {
             let code = if n > 0 { MouseButtonCode::WheelUp } else { MouseButtonCode::WheelDown };
             for _ in 0..n.abs() {
                 if let Some(b) = input::mouse_report(code, true, false, col, row, st.mods, mode) {
-                    tab.write(b);
+                    tab.input(b);
                 }
             }
         } else if mode.contains(TermMode::ALT_SCREEN) && mode.contains(TermMode::ALTERNATE_SCROLL) {
@@ -750,7 +781,7 @@ impl App {
                 (false, true) => b"\x1bOB",
                 (false, false) => b"\x1b[B",
             };
-            tab.write(seq.repeat(n.unsigned_abs() as usize));
+            tab.input(seq.repeat(n.unsigned_abs() as usize));
         } else {
             tab.term.lock().scroll_display(Scroll::Delta(n));
             st.window.request_redraw();

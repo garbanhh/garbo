@@ -35,6 +35,7 @@ scroll_multiplier = 3.0
 copy_on_select = false
 shell_integration = true # bash: marcas de comando para los bloques (no toca tu ~/.bashrc)
 blocks = true            # dibujar bloques: separadores, estado, duración
+autosuggest = true       # sugerir el resto del comando desde el historial (Tab o → para aceptar)
 
 # Sobrescribe colores del tema elegido
 [colors]

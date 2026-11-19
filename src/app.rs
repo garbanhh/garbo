@@ -72,6 +72,8 @@ pub struct State {
     pub palette: Option<Palette>,
     pub settings: Option<crate::settings::Settings>,
     pub update: Option<crate::update::UpdateState>,
+    /// Búsqueda manual de actualizaciones (Ajustes).
+    pub update_check: crate::update::CheckState,
     pub panel: crate::panel::PanelState,
     pub anim_epoch: Instant,
     pub last_anim: Instant,
@@ -129,6 +131,7 @@ impl App {
             palette: None,
             settings: None,
             update: None,
+            update_check: Default::default(),
             panel: Default::default(),
             anim_epoch: now,
             last_anim: now,
@@ -286,7 +289,7 @@ impl App {
     pub fn update_title(&mut self) {
         let st = self.st();
         if let Some(tab) = st.tabs.get(st.active) {
-            st.window.set_title(&format!("{} — Garbo", tab.title));
+            st.window.set_title(&format!("{} — Garbo", tab.label()));
         }
     }
 
@@ -320,15 +323,32 @@ impl App {
     }
 
     pub fn paste(&mut self, from_primary: bool) {
+        let proxy = self.proxy.clone();
         let st = self.st();
         let cb = if from_primary { &mut st.selection_clip } else { &mut st.clipboard };
-        let Ok(text) = cb.get_contents() else { return };
-        self.paste_text(&text);
+        match cb.get_contents() {
+            Ok(text) if !text.is_empty() => self.paste_text(&text),
+            // Sin texto: quizá una imagen (captura de pantalla). Se guarda y se pega su ruta.
+            _ if !from_primary => {
+                let Some(id) = st.tabs.get(st.active).map(|t| t.id) else { return };
+                let _ = std::thread::Builder::new().name("pegar-imagen".into()).spawn(move || {
+                    let r = crate::clipboard::save_image();
+                    let _ = proxy.send_event(UserEvent::PasteImage(id, r));
+                });
+            }
+            _ => {}
+        }
     }
 
     pub fn paste_text(&mut self, text: &str) {
+        let Some(id) = self.active_tab().map(|t| t.id) else { return };
+        self.paste_text_to(id, text);
+    }
+
+    /// Pega en la pestaña `id` (respetando el modo "bracketed paste" del programa).
+    pub fn paste_text_to(&mut self, id: u64, text: &str) {
         let st = self.st();
-        let Some(tab) = st.tabs.get(st.active) else { return };
+        let Some(tab) = st.tabs.iter().find(|t| t.id == id) else { return };
         let mode = *tab.term.lock().mode();
         let bytes = if mode.contains(TermMode::BRACKETED_PASTE) {
             // Evita que el texto pegado cierre el modo bracketed por su cuenta.
@@ -337,7 +357,7 @@ impl App {
         } else {
             text.replace("\r\n", "\r").replace('\n', "\r")
         };
-        tab.write(bytes.into_bytes());
+        tab.input(bytes.into_bytes());
         self.scroll_to_bottom();
     }
 
@@ -595,10 +615,31 @@ impl App {
     }
 
     /// Aplica en vivo un cambio hecho desde Ajustes y lo guarda en config.toml.
-    pub fn apply_setting(&mut self, change: crate::settings::Change) {
+    /// Devuelve `true` si la app debe cerrarse (reinicio tras actualizar).
+    pub fn apply_setting(&mut self, change: crate::settings::Change) -> bool {
         use crate::settings::Change;
         match change {
-            Change::None => return,
+            Change::None => return false,
+            Change::CheckNow => {
+                use crate::update::{CheckState, UpdateState as U};
+                let proxy = self.proxy.clone();
+                let st = self.st();
+                match &st.update {
+                    Some(U::Available(_) | U::Installed(_)) => return self.on_update_click(),
+                    Some(U::Downloading(_) | U::Installing(_)) => {}
+                    _ if st.update_check == CheckState::Checking => {}
+                    _ => {
+                        if matches!(st.update, Some(U::Failed(_))) {
+                            st.update = None;
+                            st.last_ws.num_cols = 0;
+                        }
+                        st.update_check = CheckState::Checking;
+                        crate::update::check_now(proxy);
+                        self.relayout();
+                    }
+                }
+                return false;
+            }
             Change::Theme => self.theme = self.cfg.theme(),
             Change::Fonts => {
                 let (cfg, pt) = (self.cfg.clone(), self.st().font_pt);
@@ -640,13 +681,14 @@ impl App {
                     }
                     let _ = std::process::Command::new("xdg-open").arg(&path).spawn();
                 }
-                return;
+                return false;
             }
         }
         if let Err(e) = self.cfg.save() {
             log::warn!("No se pudo guardar la configuración: {e}");
         }
         self.st().window.request_redraw();
+        false
     }
 
     /// Selecciona el bloque anterior/siguiente y hace scroll hasta él si no está a la vista.
@@ -769,6 +811,13 @@ impl App {
                     cursor_on: st.cursor_on || !st.focused,
                 };
                 view::draw_terminal(&mut p, &term, theme, &v);
+                // Sugerencia del historial, en gris tras el cursor.
+                if cfg.terminal.autosuggest && v.focused {
+                    let start = tab.blocks.lock().unwrap().input_start;
+                    if let Some(rest) = crate::terminal::suggestion_for(&term, start) {
+                        view::draw_ghost(&mut p, &term, theme, &v, &rest);
+                    }
+                }
                 if show_blocks {
                     let bs = tab.blocks.lock().unwrap();
                     view::draw_blocks(&mut p, &term, theme, &v, &bs, tab.selected_block, w, st.scale);
@@ -784,7 +833,7 @@ impl App {
                     .enumerate()
                     .filter_map(|(k, (i, t))| {
                         Some(crate::panel::AgentRow {
-                            label: t.label(),
+                            label: t.dir_label(),
                             agent: t.session.agent?,
                             status: t.session.status,
                             since: t.session.since,
@@ -807,7 +856,8 @@ impl App {
             if let Some(set) = st.settings.as_mut() {
                 p.out.append(p.fg);
                 let top = geo.tab_bar.as_ref().map_or(0.0, |t| t.height);
-                set.draw(&mut p, theme, cfg, w, h, top, st.scale);
+                let upd = crate::settings::UpdateView { check: &st.update_check, state: st.update.as_ref() };
+                set.draw(&mut p, theme, cfg, &upd, w, h, top, st.scale);
             }
             p.finish();
             if !st.glyphs.overflowed {

@@ -139,6 +139,9 @@ pub struct BlockState {
     infos: VecDeque<BlockInfo>,
     /// El shell tiene integración (se ha visto al menos una marca).
     pub active: bool,
+    /// Dónde empieza lo que se está escribiendo en el prompt (entre las marcas B y C), en
+    /// coordenadas absolutas (ver `suggest::cursor_mark`).
+    pub input_start: Option<(i64, usize)>,
 }
 
 impl BlockState {
@@ -177,21 +180,28 @@ impl BlockState {
                     self.infos.pop_front();
                 }
                 self.current = Some(id);
+                self.input_start = None;
                 term.set_hyperlink(Some(link('p', id)));
             }
             Mark::CommandStart => {
                 if let Some(id) = self.current {
                     term.set_hyperlink(Some(link('c', id)));
                 }
+                self.input_start = Some(crate::suggest::cursor_mark(term));
             }
             Mark::OutputStart => {
                 term.set_hyperlink(None);
+                // El comando aceptado pasa al historial de sugerencias.
+                if let Some(cmd) = self.input_start.take().and_then(|s| crate::suggest::executed_command(term, s)) {
+                    crate::suggest::record(&cmd);
+                }
                 if let Some(info) = self.current_mut() {
                     info.started = Some(Instant::now());
                 }
             }
             Mark::CommandEnd(code) => {
                 term.set_hyperlink(None);
+                self.input_start = None;
                 if let Some(info) = self.current_mut() {
                     if let (Some(start), None) = (info.started, info.duration) {
                         info.duration = Some(start.elapsed());
