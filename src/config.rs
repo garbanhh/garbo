@@ -128,6 +128,17 @@ pub enum CursorStyle {
     Underline,
 }
 
+/// Qué hace Tab en el prompt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TabKey {
+    /// Abre el menú de completado (como Warp); → acepta la sugerencia en gris.
+    #[default]
+    Menu,
+    /// Acepta la sugerencia en gris si la hay; si no, abre el menú.
+    Accept,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
 pub struct TerminalConfig {
@@ -142,8 +153,15 @@ pub struct TerminalConfig {
     pub shell_integration: bool,
     /// Dibujar los bloques (separadores, estado, duración).
     pub blocks: bool,
-    /// Sugerir el resto del comando a partir del historial (se acepta con Tab o →).
+    /// Sugerir en gris el resto del comando a partir del historial (se acepta con →).
     pub autosuggest: bool,
+    /// Qué hace Tab: abrir el menú de completado o aceptar la sugerencia.
+    pub tab_key: TabKey,
+    /// Abrir el menú de completado solo, mientras se escribe.
+    pub complete_as_you_type: bool,
+    /// Prompt de Garbo: la carpeta como etiqueta encima de lo que se escribe y, en los comandos ya
+    /// ejecutados, en gris con su duración (con la integración de bash; en pestañas nuevas).
+    pub garbo_prompt: bool,
 }
 
 impl Default for TerminalConfig {
@@ -157,6 +175,9 @@ impl Default for TerminalConfig {
             shell_integration: true,
             blocks: true,
             autosuggest: true,
+            tab_key: TabKey::Menu,
+            complete_as_you_type: false,
+            garbo_prompt: true,
         }
     }
 }
@@ -223,6 +244,12 @@ impl Config {
         doc["terminal"]["blocks"] = value(self.terminal.blocks);
         doc["terminal"]["shell_integration"] = value(self.terminal.shell_integration);
         doc["terminal"]["autosuggest"] = value(self.terminal.autosuggest);
+        doc["terminal"]["tab_key"] = value(match self.terminal.tab_key {
+            TabKey::Menu => "menu",
+            TabKey::Accept => "accept",
+        });
+        doc["terminal"]["complete_as_you_type"] = value(self.terminal.complete_as_you_type);
+        doc["terminal"]["garbo_prompt"] = value(self.terminal.garbo_prompt);
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir)?;
         }

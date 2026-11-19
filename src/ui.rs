@@ -299,6 +299,34 @@ pub fn cross(p: &mut Painter, cx: f32, cy: f32, k: f32, t: f32, c: Rgb) {
     p.line(cx - k, cy + k, cx + k, cy - k, t, c, 1.0);
 }
 
+/// Carpeta (contorno con pestaña) en la caja (x, y, w, h), trazo `t`.
+pub fn folder(p: &mut Painter, x: f32, y: f32, w: f32, h: f32, t: f32, c: Rgb) {
+    let (x1, y1) = (x + w, y + h);
+    let tab_w = (w * 0.42).round();
+    let tab_h = (h * 0.24).round().max(t);
+    let ly = y + tab_h;
+    p.line(x, y, x + tab_w, y, t, c, 1.0);
+    p.line(x + tab_w, y, x + tab_w + tab_h, ly, t, c, 1.0);
+    p.line(x + tab_w + tab_h, ly, x1, ly, t, c, 1.0);
+    p.line(x1, ly, x1, y1, t, c, 1.0);
+    p.line(x1, y1, x, y1, t, c, 1.0);
+    p.line(x, y1, x, y, t, c, 1.0);
+}
+
+/// Rama de git: tronco con dos nudos y una rama que sale hacia un tercero.
+pub fn branch(p: &mut Painter, x: f32, y: f32, w: f32, h: f32, t: f32, c: Rgb) {
+    let r = (w * 0.17).max(t);
+    let (lx, rx) = (x + r, x + w - r);
+    let (ty, by) = (y + r, y + h - r);
+    p.ring(lx, ty, r, t * 0.8, c, 1.0);
+    p.ring(lx, by, r, t * 0.8, c, 1.0);
+    p.ring(rx, ty, r, t * 0.8, c, 1.0);
+    p.line(lx, ty + r, lx, by - r, t, c, 1.0);
+    let my = y + h * 0.62;
+    p.line(rx, ty + r, rx, my - r, t, c, 1.0);
+    p.line(rx, my - r, lx + r * 0.6, by - r * 1.2, t, c, 1.0);
+}
+
 pub fn magnifier(p: &mut Painter, cx: f32, cy: f32, s: f32, c: Rgb) {
     p.ring(cx - 1.0 * s, cy - 1.0 * s, 5.0 * s, 1.5 * s, c, 1.0);
     p.line(cx + 2.8 * s, cy + 2.8 * s, cx + 6.0 * s, cy + 6.0 * s, 1.6 * s, c, 1.0);

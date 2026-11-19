@@ -58,7 +58,8 @@ cargo build --release
 | `Ctrl+Shift+P` | Paleta de comandos |
 | `Ctrl+,` | Ajustes |
 | `Ctrl+Shift+C` / `Ctrl+Shift+V` | Copiar / pegar (también imágenes: ver más abajo) |
-| `Tab` o `→` | Aceptar la sugerencia del historial (sin sugerencia, `Tab` llega al shell) |
+| `Tab` / `Ctrl+Espacio` | Menú de completado (sin candidatos, `Tab` llega al shell) |
+| `→` o `Ctrl+F` / `Ctrl+→` | Aceptar la sugerencia en gris / solo su siguiente palabra |
 | `Ctrl++` / `Ctrl+-` / `Ctrl+0` | Aumentar / reducir / restablecer el tamaño de fuente |
 | `Shift+RePág` / `Shift+AvPág` / `Shift+Inicio` / `Shift+Fin` | Desplazamiento por el historial |
 | `Ctrl+Shift+K` | Limpiar el historial |
@@ -79,19 +80,33 @@ Todos los atajos se pueden modificar en la sección `[keybindings]` de la config
 - La barra de pestañas permite mover la ventana; el doble clic la maximiza. La ventana se
   redimensiona desde sus bordes.
 
-### Sugerencias del historial
+### Completado y sugerencias
 
-Mientras se escribe en el prompt (a partir de dos caracteres), Garbo muestra en gris el resto del
-comando más reciente del historial que empieza igual. `Tab` (o `→` al final de la línea) lo acepta;
-si no hay sugerencia, `Tab` llega al shell y funciona su autocompletado habitual. El historial
-combina `$HISTFILE` (`~/.bash_history`) con los comandos ejecutados en cualquier pestaña durante la
-sesión; los que empiezan por un espacio no se guardan.
+**Menú de completado.** `Tab` muestra lo que puede ir en la palabra que se está escribiendo: órdenes
+en la primera palabra, solo carpetas tras `cd`, ramas tras `git checkout`/`switch`/`merge`,
+subórdenes de `git`, `cargo`, `npm`, `dnf` o `systemctl` con su descripción, scripts de
+`package.json`, objetivos de `make`, equipos de `~/.ssh/config` y archivos en el resto. La búsqueda
+no distingue mayúsculas ni tildes (`doc` encuentra `Documentos`, `videos` encuentra `Vídeos`) y, si
+nada empieza igual ni lo contiene, busca las letras en orden. `↑` `↓` (o `Tab`/`Shift+Tab`) eligen,
+`Intro`, `→` o un clic aceptan y `Esc` cierra; seguir escribiendo refina la lista. Con un único
+candidato se escribe directamente; si no hay ninguno (por ejemplo, opciones `-x`), `Tab` llega al
+shell y funciona su autocompletado habitual.
 
-Solo se sugieren comandos que se pueden ejecutar: su primera palabra debe ser un programa del
-`PATH`, una orden interna de bash o un alias o función de los archivos de arranque (`~/.bashrc`,
-`~/.bashrc.d/`, `~/.bash_aliases`). Así se descartan erratas y comandos fallidos. Un `cd` solo se
-sugiere si el directorio de destino existe, y no hay sugerencias durante la búsqueda con `Ctrl+R`. Requiere la integración con bash (véase *Bloques de
-comandos*) y puede desactivarse en *Ajustes → Terminal*.
+**Sugerencia en gris.** Mientras se escribe (a partir de dos caracteres), Garbo muestra en gris el
+resto de un comando ya usado que empieza igual: primero lo ejecutado en la carpeta actual y, si no,
+lo más reciente. `→` o `Ctrl+F` lo aceptan y `Ctrl+→` acepta solo la siguiente palabra. Si el
+historial no tiene nada, se sugiere el único candidato del completado (`cd Doc` → `umentos/`).
+
+Garbo guarda su propio historial en `~/.local/share/garbo/history.tsv`, con la carpeta en la que se
+ejecutó cada comando; lo combina con `$HISTFILE` (`~/.bash_history`). Un `cd` a una ruta relativa
+(`cd Proyectos`) solo se sugiere en la carpeta donde se hizo. Solo se sugieren comandos que se pueden
+ejecutar: su primera palabra debe ser un programa del `PATH`, una orden interna de bash o un alias o
+función de los archivos de arranque (`~/.bashrc`, `~/.bashrc.d/`, `~/.bash_aliases`). Los comandos
+que empiezan por un espacio no se guardan, y no hay sugerencias durante la búsqueda con `Ctrl+R`.
+
+Requiere la integración con bash (véase *Bloques de comandos*). En *Ajustes → Completado* se puede
+desactivar la sugerencia en gris, hacer que `Tab` la acepte (el menú queda en `Ctrl+Espacio`) y
+abrir el menú automáticamente mientras se escribe.
 
 ### Pegar capturas de pantalla
 
@@ -103,8 +118,14 @@ Claude Code y otros agentes reconocen la ruta y adjuntan la imagen. La imagen se
 ### Bloques de comandos
 
 Cada comando y su salida forman un bloque, delimitado por un separador. Una barra en el margen
-izquierdo indica su estado (verde: correcto; rojo: error; azul: en ejecución) y, a la derecha, se
-muestra el código de error o la duración cuando esta supera un segundo.
+izquierdo indica su estado (verde: correcto; rojo: error; azul: en ejecución).
+
+Con el **prompt de Garbo** (activado por defecto), cada bloque muestra encima del comando la carpeta
+en la que se ejecutó y su duración (o el código de error, en rojo), y el comando en negrita. El
+prompt actual es una etiqueta con la carpeta y, si se está en un repositorio, la rama de git; lo
+que se escribe va debajo, desde la primera columna. Se desactiva en *Ajustes → Bloques → Prompt de
+Garbo* (`garbo_prompt = false`) para usar el prompt propio del shell; en ese caso el código de error
+o la duración (si supera un segundo) se muestran a la derecha.
 
 Un bloque se selecciona con `Ctrl+Shift+↑` / `Ctrl+Shift+↓` o con un clic en el margen izquierdo.
 Con un bloque seleccionado, `Ctrl+Shift+C` copia el bloque completo y `Ctrl+Shift+O` su salida; la
@@ -213,7 +234,8 @@ src/
   keybindings.rs  atajos de teclado configurables
   config.rs       configuración y temas
   update.rs       comprobación e instalación de actualizaciones
-  suggest.rs      sugerencias de comandos desde el historial
+  suggest.rs      sugerencias en gris desde el historial (con la carpeta de cada comando)
+  complete.rs     menú de completado: candidatos según el contexto y búsqueda
   clipboard.rs    pegado de imágenes del portapapeles
   sessions.rs     detección de agentes en primer plano y su estado
   ports.rs        puertos en escucha y detección de servidores web

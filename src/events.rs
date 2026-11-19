@@ -17,7 +17,7 @@ use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
 use winit::event::{ElementState, KeyEvent, MouseButton, MouseScrollDelta, StartCause, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow};
-use winit::keyboard::{Key, NamedKey};
+use winit::keyboard::{Key, ModifiersState, NamedKey};
 use winit::window::{CursorIcon, ResizeDirection, Window, WindowId};
 
 fn resize_cursor(dir: ResizeDirection) -> CursorIcon {
@@ -290,6 +290,14 @@ impl ApplicationHandler<UserEvent> for App {
     }
 }
 
+/// Teclas del menú de completado.
+pub enum MenuNav {
+    Close,
+    Move(i32),
+    Page(i32),
+    Accept,
+}
+
 impl App {
     /// Devuelve `true` si la app debe cerrarse.
     fn on_key(&mut self, ev: KeyEvent) -> bool {
@@ -363,32 +371,61 @@ impl App {
             return false;
         }
 
+        // Menú de completado abierto: ↑ ↓ (o Tab / Shift+Tab) eligen, Intro o → aceptan y Esc
+        // cierra. El resto de teclas llega al shell y el menú se refina con lo escrito (`App::draw`).
+        if self.on_menu_key(&ev) {
+            return false;
+        }
+
         let mods = self.st().mods;
         if let Some(action) = self.keys.lookup(&ev.logical_key, mods) {
             return self.run_action(action);
         }
 
-        let autosuggest = self.cfg.terminal.autosuggest;
+        let tcfg = &self.cfg.terminal;
+        let (autosuggest, tab_accepts, as_you_type) =
+            (tcfg.autosuggest, tcfg.tab_key == crate::config::TabKey::Accept, tcfg.complete_as_you_type);
         let st = self.st();
         let Some(tab) = st.tabs.get(st.active) else { return false };
-        // Sugerencia del historial: Tab (o → al final de la línea) la acepta. Sin sugerencia,
-        // Tab llega al shell (su autocompletado de siempre).
-        let accept = matches!(ev.logical_key, Key::Named(NamedKey::Tab | NamedKey::ArrowRight));
-        if autosuggest && accept && (mods.is_empty()) {
+        let key = &ev.logical_key;
+        let plain = mods.is_empty();
+        let ctrl = mods == ModifiersState::CONTROL;
+        let tab_key = plain && matches!(key, Key::Named(NamedKey::Tab));
+        // Sugerencia en gris: → (o Ctrl+F) la acepta entera y Ctrl+→ hasta la siguiente palabra;
+        // con "Tecla Tab: Sugerencia", también Tab.
+        let accept_all = (plain && matches!(key, Key::Named(NamedKey::ArrowRight)))
+            || (ctrl && matches!(key, Key::Character(c) if c.eq_ignore_ascii_case("f")))
+            || (tab_key && tab_accepts);
+        let accept_word = ctrl && matches!(key, Key::Named(NamedKey::ArrowRight));
+        if autosuggest && (accept_all || accept_word) {
             if let Some(rest) = tab.suggestion() {
-                tab.input(rest.into_bytes());
+                let text = if accept_word { crate::suggest::next_word(&rest).to_string() } else { rest };
+                tab.input(text.into_bytes());
                 self.scroll_to_bottom();
                 return false;
             }
         }
+        // Menú de completado: Tab o Ctrl+Espacio. Sin candidatos, la tecla llega al shell (su
+        // completado de siempre).
+        if (tab_key || (ctrl && matches!(key, Key::Named(NamedKey::Space)))) && self.open_menu() {
+            return false;
+        }
+        let st = self.st();
+        let Some(tab) = st.tabs.get(st.active) else { return false };
         let mode = *tab.term.lock().mode();
         if let Some(bytes) = input::key_to_bytes(&ev, mods, mode) {
             {
                 let mut term = tab.term.lock();
                 term.selection = None;
             }
+            // "Menú al escribir": se recuerda lo que había para abrir el menú cuando llegue el eco.
+            let typed = !mods.control_key() && !mods.alt_key() && ev.text.as_ref().is_some_and(|t| t.chars().all(|c| !c.is_control()));
+            let before = (as_you_type && typed && st.menu.is_none()).then(|| tab.prompt_input()).flatten();
             tab.input(bytes);
             let st = self.st();
+            if let Some(b) = before {
+                st.menu_auto = Some((b, Instant::now()));
+            }
             let active = st.active;
             if st.tabs.get_mut(active).is_some_and(|t| t.selected_block.take().is_some()) {
                 st.window.request_redraw();
@@ -396,6 +433,81 @@ impl App {
             self.scroll_to_bottom();
         }
         false
+    }
+
+    /// Completa la palabra del prompt: con un único candidato lo escribe; con varios abre el menú
+    /// (escribiendo antes lo que todos comparten). `false` = no hay nada que ofrecer.
+    pub fn open_menu(&mut self) -> bool {
+        let st = self.st();
+        let Some(tab) = st.tabs.get(st.active) else { return false };
+        let Some((input, comp)) = tab.completions() else { return false };
+        match comp.items.len() {
+            0 => return false,
+            1 => {
+                if let Some(b) = comp.accept_bytes(0) {
+                    tab.input(b);
+                }
+            }
+            _ => {
+                if let Some(ext) = comp.common_extension() {
+                    tab.input(ext);
+                }
+                st.menu = Some(crate::complete::Menu::new(tab.id, input, comp));
+                st.menu_auto = None;
+                st.window.request_redraw();
+            }
+        }
+        self.scroll_to_bottom();
+        true
+    }
+
+    /// Teclas de navegación con el menú de completado abierto. `true` = tecla consumida.
+    fn on_menu_key(&mut self, ev: &KeyEvent) -> bool {
+        let st = self.st();
+        if st.menu.is_none() {
+            return false;
+        }
+        let plain = st.mods.is_empty();
+        let shift = st.mods == ModifiersState::SHIFT;
+        let auto = st.menu.as_ref().is_some_and(|m| m.auto);
+        let nav = match &ev.logical_key {
+            Key::Named(NamedKey::Escape) => MenuNav::Close,
+            // Abierto solo al escribir: Intro ejecuta lo escrito (el menú se cierra) y Tab acepta.
+            Key::Named(NamedKey::Enter) if plain && auto => {
+                st.menu = None;
+                return false;
+            }
+            Key::Named(NamedKey::Tab) if plain && auto => MenuNav::Accept,
+            Key::Named(NamedKey::ArrowUp) if plain => MenuNav::Move(-1),
+            Key::Named(NamedKey::ArrowDown) if plain => MenuNav::Move(1),
+            Key::Named(NamedKey::Tab) if shift => MenuNav::Move(-1),
+            Key::Named(NamedKey::Tab) if plain => MenuNav::Move(1),
+            Key::Named(NamedKey::PageUp) if plain => MenuNav::Page(-1),
+            Key::Named(NamedKey::PageDown) if plain => MenuNav::Page(1),
+            Key::Named(NamedKey::Enter | NamedKey::ArrowRight) if plain => MenuNav::Accept,
+            _ => return false,
+        };
+        self.menu_nav(nav);
+        true
+    }
+
+    pub fn menu_nav(&mut self, nav: MenuNav) {
+        let st = self.st();
+        let Some(menu) = st.menu.as_mut() else { return };
+        match nav {
+            MenuNav::Close => st.menu = None,
+            MenuNav::Move(d) => menu.move_sel(d),
+            MenuNav::Page(d) => menu.page(d),
+            MenuNav::Accept => {
+                let (bytes, id) = (menu.accept(), menu.tab);
+                st.menu = None;
+                if let (Some(b), Some(tab)) = (bytes, st.tabs.iter().find(|t| t.id == id)) {
+                    tab.input(b);
+                }
+                self.scroll_to_bottom();
+            }
+        }
+        self.st().window.request_redraw();
     }
 
     /// Pixel -> celda del viewport (columna, fila, lado).
@@ -556,6 +668,26 @@ impl App {
                 self.st().window.request_redraw();
             }
             return false;
+        }
+
+        // Menú de completado: un clic en una opción la elige; fuera, lo cierra (y el clic sigue).
+        if pressed && self.st().menu.is_some() {
+            let st = self.st();
+            let menu = st.menu.as_mut().unwrap();
+            if menu.contains(x, y) {
+                if let Some(i) = menu.row_at(x, y).filter(|_| button == MouseButton::Left) {
+                    menu.selected = i;
+                    let (bytes, id) = (menu.accept(), menu.tab);
+                    st.menu = None;
+                    if let (Some(b), Some(tab)) = (bytes, st.tabs.iter().find(|t| t.id == id)) {
+                        tab.input(b);
+                    }
+                }
+                st.window.request_redraw();
+                return false;
+            }
+            st.menu = None;
+            st.window.request_redraw();
         }
 
         // Bordes: redimensionar (solo con barra de título integrada)
@@ -746,6 +878,19 @@ impl App {
             MouseScrollDelta::LineDelta(_, y) => y * mult,
             MouseScrollDelta::PixelDelta(p) => p.y as f32 / ch,
         };
+        if let Some(menu) = st.menu.as_mut().filter(|m| m.contains(st.mouse.0, st.mouse.1)) {
+            // Sobre el menú de completado, la rueda recorre sus opciones.
+            let steps = match delta {
+                MouseScrollDelta::LineDelta(_, y) => y,
+                MouseScrollDelta::PixelDelta(p) => p.y as f32 / (28.0 * st.scale),
+            };
+            let n = menu.wheel(steps);
+            if n != 0 {
+                menu.move_sel(-n);
+                st.window.request_redraw();
+            }
+            return;
+        }
         if let Some(pal) = st.palette.as_mut() {
             // Un elemento por "muesca" de la rueda (o por cada ~36 px de touchpad), no por evento.
             let steps = match delta {

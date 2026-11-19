@@ -70,6 +70,11 @@ pub struct State {
     pub hover: Option<TabHit>,
     pub cursor_icon: winit::window::CursorIcon,
     pub palette: Option<Palette>,
+    /// Menú de completado abierto (Tab).
+    pub menu: Option<crate::complete::Menu>,
+    /// "Menú al escribir": lo que había escrito antes de la última tecla; el menú se abre cuando
+    /// llega su eco (lo escrito cambia).
+    pub menu_auto: Option<(String, Instant)>,
     pub settings: Option<crate::settings::Settings>,
     pub update: Option<crate::update::UpdateState>,
     /// Búsqueda manual de actualizaciones (Ajustes).
@@ -129,6 +134,8 @@ impl App {
             hover: None,
             cursor_icon: winit::window::CursorIcon::Default,
             palette: None,
+            menu: None,
+            menu_auto: None,
             settings: None,
             update: None,
             update_check: Default::default(),
@@ -810,18 +817,51 @@ impl App {
                     focused: st.focused && st.palette.is_none() && st.settings.is_none(),
                     cursor_on: st.cursor_on || !st.focused,
                 };
-                view::draw_terminal(&mut p, &term, theme, &v);
-                // Sugerencia del historial, en gris tras el cursor.
-                if cfg.terminal.autosuggest && v.focused {
-                    let start = tab.blocks.lock().unwrap().input_start;
+                let bs = tab.blocks.lock().unwrap();
+                // Rama de git para la etiqueta del prompt de Garbo (solo mientras se escribe).
+                let branch = bs
+                    .idle_current()
+                    .filter(|id| bs.styled(*id))
+                    .and_then(|_| tab.cwd())
+                    .and_then(|d| crate::complete::git_branch(&d));
+                view::draw_prompts(&mut p, &term, theme, &v, &bs, branch.as_deref(), st.scale);
+                view::draw_terminal(&mut p, &term, theme, &v, Some(&bs));
+                let start = bs.input_start;
+                // Menú de completado: se refina con lo que se escribe y se cierra si deja de aplicar.
+                if st.menu.is_some() || st.menu_auto.is_some() {
+                    let input = crate::terminal::input_for(&term, start);
+                    let cwd = input.as_ref().and_then(|_| tab.cwd());
+                    if let Some(menu) = st.menu.as_mut() {
+                        let keep = menu.tab == tab.id && input.as_deref().is_some_and(|i| menu.refresh(i, cwd.as_deref()));
+                        if !keep {
+                            st.menu = None;
+                        }
+                    } else if let Some((before, since)) = &st.menu_auto {
+                        match &input {
+                            Some(now) if now != before => {
+                                let comp = crate::complete::complete(now, cwd.as_deref()).filter(|c| c.opens_as_you_type());
+                                st.menu = comp.map(|c| crate::complete::Menu::new(tab.id, now.clone(), c).opened_while_typing());
+                                st.menu_auto = None;
+                            }
+                            _ if since.elapsed() > std::time::Duration::from_secs(1) => st.menu_auto = None,
+                            _ => {}
+                        }
+                    }
+                }
+                // Sugerencia en gris tras el cursor (no con el menú abierto).
+                if cfg.terminal.autosuggest && v.focused && st.menu.is_none() {
                     let cwd = start.and_then(|_| tab.cwd());
                     if let Some(rest) = crate::terminal::suggestion_for(&term, start, cwd.as_deref()) {
                         view::draw_ghost(&mut p, &term, theme, &v, &rest);
                     }
                 }
                 if show_blocks {
-                    let bs = tab.blocks.lock().unwrap();
                     view::draw_blocks(&mut p, &term, theme, &v, &bs, tab.selected_block, w, st.scale);
+                }
+                if let Some(menu) = st.menu.as_mut().filter(|_| v.focused) {
+                    // Por encima del texto del terminal.
+                    p.out.append(p.fg);
+                    view::draw_menu(&mut p, &term, theme, &v, menu, st.scale);
                 }
             }
             if let Some((px, py, pw, ph)) = geo.panel {

@@ -35,7 +35,10 @@ scroll_multiplier = 3.0
 copy_on_select = false
 shell_integration = true # bash: marcas de comando para los bloques (no toca tu ~/.bashrc)
 blocks = true            # dibujar bloques: separadores, estado, duración
-autosuggest = true       # sugerir el resto del comando desde el historial (Tab o → para aceptar)
+garbo_prompt = true      # prompt de Garbo: carpeta como etiqueta y comandos en negrita (pestañas nuevas)
+autosuggest = true       # sugerir en gris el resto del comando (→ lo acepta, Ctrl+→ palabra a palabra)
+tab_key = "menu"         # menu: Tab abre el menú de completado | accept: Tab acepta la sugerencia
+complete_as_you_type = false # abrir el menú de completado solo, mientras se escribe
 
 # Sobrescribe colores del tema elegido
 [colors]

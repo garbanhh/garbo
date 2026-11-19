@@ -3,7 +3,7 @@
 //! el resto del archivo).
 
 use crate::atlas::UiVariant;
-use crate::config::{Config, CursorStyle, Rgb, Theme};
+use crate::config::{Config, CursorStyle, Rgb, TabKey, Theme};
 use crate::ui::{cross, dim, surface};
 use crate::update::{CheckState, UpdateState};
 use crate::view::Painter;
@@ -19,7 +19,10 @@ pub enum Field {
     CopyOnSelect,
     Scrollback,
     Autosuggest,
+    TabKey,
+    CompleteAsYouType,
     Blocks,
+    GarboPrompt,
     ShellIntegration,
     Padding,
     Opacity,
@@ -62,12 +65,23 @@ const CATEGORIES: &[(&str, &[(Field, &str)])] = &[
             (Field::CursorBlink, "Cursor parpadeante"),
             (Field::CopyOnSelect, "Copiar al seleccionar"),
             (Field::Scrollback, "Historial"),
-            (Field::Autosuggest, "Sugerencias con Tab"),
+        ],
+    ),
+    (
+        "Completado",
+        &[
+            (Field::Autosuggest, "Sugerencias en gris"),
+            (Field::TabKey, "Tecla Tab"),
+            (Field::CompleteAsYouType, "Menú al escribir"),
         ],
     ),
     (
         "Bloques",
-        &[(Field::Blocks, "Bloques de comandos"), (Field::ShellIntegration, "Integración con bash")],
+        &[
+            (Field::Blocks, "Bloques de comandos"),
+            (Field::GarboPrompt, "Prompt de Garbo"),
+            (Field::ShellIntegration, "Integración con bash"),
+        ],
     ),
     (
         "Ventana",
@@ -161,6 +175,8 @@ pub struct Settings {
     theme_idx: usize,
     fonts: Vec<String>,
     pub restart_note: bool,
+    /// Nota "Se aplica a las pestañas nuevas" (prompt de Garbo).
+    tabs_note: bool,
     pub hover: Option<Hit>,
 }
 
@@ -206,6 +222,7 @@ impl Settings {
             theme_idx: 0,
             fonts,
             restart_note: false,
+            tabs_note: false,
             hover: None,
         }
     }
@@ -292,6 +309,10 @@ impl Settings {
                 CursorStyle::Underline => "Subrayado".into(),
             },
             Field::Scrollback => format!("{} líneas", cfg.terminal.scrollback),
+            Field::TabKey => match cfg.terminal.tab_key {
+                TabKey::Menu => "Menú".into(),
+                TabKey::Accept => "Sugerencia".into(),
+            },
             Field::EditFile => "Abrir".into(),
             Field::Version => env!("CARGO_PKG_VERSION").into(),
             _ => String::new(),
@@ -303,7 +324,9 @@ impl Settings {
             Field::CursorBlink => cfg.terminal.cursor_blink,
             Field::CopyOnSelect => cfg.terminal.copy_on_select,
             Field::Autosuggest => cfg.terminal.autosuggest,
+            Field::CompleteAsYouType => cfg.terminal.complete_as_you_type,
             Field::Blocks => cfg.terminal.blocks,
+            Field::GarboPrompt => cfg.terminal.garbo_prompt,
             Field::ShellIntegration => cfg.terminal.shell_integration,
             Field::Decorations => cfg.window.decorations,
             Field::CheckUpdates => cfg.check_updates,
@@ -375,8 +398,24 @@ impl Settings {
                 cfg.terminal.autosuggest = !cfg.terminal.autosuggest;
                 Change::Redraw
             }
+            Field::TabKey => {
+                cfg.terminal.tab_key = match cfg.terminal.tab_key {
+                    TabKey::Menu => TabKey::Accept,
+                    TabKey::Accept => TabKey::Menu,
+                };
+                Change::Redraw
+            }
+            Field::CompleteAsYouType => {
+                cfg.terminal.complete_as_you_type = !cfg.terminal.complete_as_you_type;
+                Change::Redraw
+            }
             Field::Blocks => {
                 cfg.terminal.blocks = !cfg.terminal.blocks;
+                Change::Redraw
+            }
+            Field::GarboPrompt => {
+                cfg.terminal.garbo_prompt = !cfg.terminal.garbo_prompt;
+                self.tabs_note = true;
                 Change::Redraw
             }
             Field::ShellIntegration => {
@@ -646,6 +685,7 @@ impl Settings {
             let note = match f {
                 Field::CheckNow => update_button(upd).3,
                 Field::Decorations if self.restart_note => "Se aplica al reiniciar".into(),
+                Field::GarboPrompt if self.tabs_note => "Se aplica a las pestañas nuevas".into(),
                 _ => String::new(),
             };
             if note.is_empty() {
@@ -863,6 +903,7 @@ mod tests {
         set.adjust(idx(Field::FontSize), 1, &mut cfg);
         set.adjust(idx(Field::Blocks), 0, &mut cfg);
         set.adjust(idx(Field::Autosuggest), 0, &mut cfg);
+        set.adjust(idx(Field::TabKey), 1, &mut cfg);
         cfg.save().unwrap();
 
         let text = std::fs::read_to_string(&path).unwrap();
@@ -873,6 +914,8 @@ mod tests {
         assert_eq!(back.font.size, 11.5);
         assert!(!back.terminal.blocks);
         assert!(!back.terminal.autosuggest);
+        assert_eq!(back.terminal.tab_key, TabKey::Accept);
+        assert!(!back.terminal.complete_as_you_type);
         assert_eq!(back.shell.program.as_deref(), Some("/bin/zsh"));
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -911,7 +954,7 @@ mod tests {
     #[test]
     fn rueda_desplaza_sin_cambiar_la_seleccion() {
         let mut set = Settings::with_fonts(vec![]);
-        set.set_cat(2); // Terminal: 5 filas
+        set.set_cat(2); // Terminal: 4 filas
         let (w, h, top, s) = (900.0, 330.0, 40.0, 1.0);
         set.layout(w, h, top, s);
         assert_eq!(set.first, 0);
@@ -924,7 +967,7 @@ mod tests {
         assert_eq!(set.selected, sel, "la rueda no mueve la selección");
         set.wheel(-100_000.0);
         let l = set.layout(w, h, top, s);
-        assert!(l.rows.iter().any(|r| set.field(r.0) == Field::Autosuggest), "se llega a la última fila");
+        assert!(l.rows.iter().any(|r| set.field(r.0) == Field::Scrollback), "se llega a la última fila");
         set.wheel(100_000.0);
         set.layout(w, h, top, s);
         assert_eq!(set.first, 0);

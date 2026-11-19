@@ -2,6 +2,7 @@
 
 use crate::atlas::{GlyphCache, UiVariant};
 use crate::blocks::{self, BlockState, Status};
+use crate::complete::{Kind, Menu, MENU_ROWS};
 use crate::config::{Rgb, Theme};
 use crate::font::{CellMetrics, Style};
 use crate::renderer::Instance;
@@ -337,6 +338,170 @@ pub fn draw_ghost<T: EventListener>(p: &mut Painter, term: &Term<T>, theme: &The
     }
 }
 
+/// Prompt de Garbo (la línea de la carpeta, que pone la integración de bash). En el prompt actual
+/// se dibuja como una etiqueta con borde, icono de carpeta y, al lado, la rama de git; en los
+/// comandos ya ejecutados, el icono en gris y tras la ruta la duración (o el código si falló).
+/// Va antes que `draw_terminal`: los fondos de la selección quedan por encima de la etiqueta.
+#[allow(clippy::too_many_arguments)]
+pub fn draw_prompts<T: EventListener>(
+    p: &mut Painter,
+    term: &Term<T>,
+    theme: &Theme,
+    v: &TermView,
+    bs: &BlockState,
+    branch: Option<&str>,
+    scale: f32,
+) {
+    if !bs.active {
+        return;
+    }
+    let m = p.metrics();
+    let (cw, ch) = (m.width, m.height);
+    let s = scale;
+    let offset = term.grid().display_offset() as i32;
+    let cols = term.columns();
+    let top = Line(-offset);
+    let bottom = Line(-offset + v.lines as i32 - 1);
+    let current = bs.idle_current();
+    let dim = theme.foreground.lerp(theme.background, 0.5);
+    let t = (1.3 * s).max(1.0);
+    let pad = (2.0 * s).round();
+    let r = (6.0 * s).round();
+    let hair = s.round().max(1.0);
+    for a in blocks::anchors(term, top, bottom) {
+        let Some(info) = bs.info(a.id).filter(|i| i.styled) else { continue };
+        let row = &term.grid()[a.line];
+        let mine = |c: usize| matches!(blocks::cell_link(&row[Column(c)]), Some((b'p', id)) if id == a.id);
+        // Última celda con texto de la línea de la carpeta.
+        let Some(end) = (0..cols).rev().find(|&c| mine(c) && !matches!(row[Column(c)].c, ' ' | '\0')) else { continue };
+        let y = v.y + (a.line.0 + offset) as f32 * ch;
+        let (iw, ih) = ((cw * 1.05).round(), (ch * 0.40).round());
+        let (ix, iy) = ((v.x + 0.5 * cw).round(), (y + (ch - ih) / 2.0).round());
+        if Some(a.id) == current {
+            let x0 = v.x - 0.1 * cw;
+            let x1 = v.x + (end + 1) as f32 * cw + 0.6 * cw;
+            let (cy, chh) = (y + pad, ch - 2.0 * pad);
+            p.rounded(x0, cy, x1 - x0, chh, theme.foreground, 0.26, r);
+            p.rounded(x0 + hair, cy + hair, x1 - x0 - 2.0 * hair, chh - 2.0 * hair, crate::ui::surface(theme, 0.08), 1.0, r - hair);
+            crate::ui::folder(p, ix, iy, iw, ih, t, theme.accent);
+            // Rama de git, si cabe.
+            if let Some(b) = branch {
+                let n = b.chars().count();
+                if end + 6 + n < cols {
+                    let bx0 = x1 + 0.6 * cw;
+                    let bx1 = bx0 + (n as f32 + 2.6) * cw;
+                    p.rounded(bx0, cy, bx1 - bx0, chh, theme.foreground, 0.06, r);
+                    let (bw, bh) = ((cw * 0.85).round(), (ch * 0.42).round());
+                    crate::ui::branch(p, (bx0 + 0.5 * cw).round(), (y + (ch - bh) / 2.0).round(), bw, bh, t, theme.palette[5]);
+                    p.text(bx0 + 1.8 * cw, y, b, theme.foreground.lerp(theme.background, 0.2), n as f32 * cw + 1.0);
+                }
+            }
+        } else {
+            crate::ui::folder(p, ix, iy, iw, ih, t, dim);
+            let dur = info.duration.map(|d| if d.as_millis() == 0 { "< 1 ms".into() } else { blocks::format_duration(d) });
+            let (text, color) = match (info.status(), dur) {
+                (Status::Ok, Some(d)) => (d, dim),
+                (Status::Failed(code), Some(d)) => (format!("✗ {code} · {d}"), theme.palette[1]),
+                (Status::Failed(code), None) => (format!("✗ {code}"), theme.palette[1]),
+                _ => continue,
+            };
+            let n = text.chars().count();
+            if end + 3 + n < cols {
+                p.text(v.x + (end + 3) as f32 * cw, y, &text, color, n as f32 * cw + 1.0);
+            }
+        }
+    }
+}
+
+/// Menú de completado bajo la palabra que se completa (encima si no cabe debajo). Guarda en
+/// `menu.rect` dónde quedó, para el ratón.
+pub fn draw_menu<T: EventListener>(p: &mut Painter, term: &Term<T>, theme: &Theme, v: &TermView, menu: &mut Menu, scale: f32) {
+    let items = &menu.comp.items;
+    menu.rect = None;
+    if items.is_empty() {
+        return;
+    }
+    let m = p.metrics();
+    let s = scale;
+    let cur = term.grid().cursor.point;
+    let row = cur.line.0.max(0) as f32;
+    let area_w = term.columns() as f32 * m.width;
+    let n = items.len();
+    let vis = n.min(MENU_ROWS);
+    let pad = (6.0 * s).round();
+    let row_h = (m.height + 8.0 * s).round();
+    let mark_w = (16.0 * s).round();
+    let bar_w = if n > vis { (8.0 * s).round() } else { 0.0 };
+    let gap = (18.0 * s).round();
+
+    let longest = items.iter().map(|i| i.label.chars().count()).max().unwrap_or(0).clamp(6, 48);
+    // La descripción solo si aporta algo (si todas dicen "carpeta", sobra).
+    let same = items.iter().all(|i| i.detail == items[0].detail);
+    let detail_w = if same {
+        0.0
+    } else {
+        items.iter().take(64).map(|i| p.ui_measure_v(&i.detail, UiVariant::Small)).fold(0.0, f32::max).min(260.0 * s)
+    };
+    let want = 2.0 * pad + mark_w + longest as f32 * m.width + gap + detail_w + 2.0 * pad + bar_w;
+    let w = want.min(area_w).max((160.0 * s).min(area_w)).round();
+    let h = (vis as f32 * row_h + 2.0 * pad).round();
+    // La lista empieza bajo el principio de la palabra.
+    let col = cur.column.0.saturating_sub(menu.comp.word.chars().count()) as f32;
+    let x = (v.x + col * m.width - pad - mark_w).clamp(v.x, (v.x + area_w - w).max(v.x)).round();
+    let bottom = v.y + v.lines as f32 * m.height;
+    let below = v.y + (row + 1.0) * m.height + 2.0 * s;
+    let above = v.y + row * m.height - h - 2.0 * s;
+    let y = if below + h <= bottom || above < v.y { below } else { above }.round();
+
+    p.card(x, y, w, h, crate::ui::surface(theme, 0.06), theme.foreground, (9.0 * s).round(), s);
+    let dimc = crate::ui::dim(theme);
+    let label_x = x + pad + mark_w;
+    let detail_room = if detail_w > 0.0 { detail_w + gap } else { 0.0 };
+    let fit = (((w - 2.0 * pad - mark_w - pad - bar_w - detail_room) / m.width).floor().max(4.0)) as usize;
+    let small_h = p.ui_line_h(UiVariant::Small);
+    for r in 0..vis {
+        let idx = menu.top + r;
+        let Some(it) = items.get(idx) else { break };
+        let ry = y + pad + r as f32 * row_h;
+        if idx == menu.selected {
+            p.rounded(x + pad / 2.0, ry, w - pad - bar_w, row_h, theme.accent, 0.20, (6.0 * s).round());
+        }
+        let kc = theme.palette[it.kind.ansi()];
+        p.circle(x + pad + mark_w / 2.0 - 1.0 * s, ry + row_h / 2.0, (3.0 * s).max(2.0), kc, 0.9);
+        let ty = (ry + (row_h - m.height) / 2.0).round();
+        let len = it.label.chars().count();
+        for (k, ch) in it.label.chars().enumerate().take(fit) {
+            let ch = if len > fit && k + 1 == fit { '…' } else { ch };
+            let hit = it.hits.contains(&k);
+            let color = if hit {
+                theme.accent
+            } else if it.kind == Kind::Dir {
+                kc
+            } else {
+                theme.foreground
+            };
+            if ch != ' ' {
+                let style = if hit { Style::Bold } else { Style::Regular };
+                p.glyph(ch, style, false, false, label_x + k as f32 * m.width, ty, color, 1.0);
+            }
+        }
+        if detail_w > 0.0 && !it.detail.is_empty() {
+            let dw = p.ui_measure_v(&it.detail, UiVariant::Small).min(detail_w);
+            let dx = x + w - 2.0 * pad - bar_w - dw;
+            p.ui_text_v(dx.round(), (ry + (row_h - small_h) / 2.0).round(), &it.detail, dimc, detail_w + 1.0, UiVariant::Small);
+        }
+    }
+    // Barra de desplazamiento cuando hay más de los que caben.
+    if n > vis {
+        let track = h - 2.0 * pad;
+        let th = (track * vis as f32 / n as f32).max(14.0 * s);
+        let ty = y + pad + (track - th) * menu.top as f32 / (n - vis) as f32;
+        let bw = (3.0 * s).max(2.0);
+        p.rounded(x + w - pad - bw, ty.round(), bw, th.round(), theme.foreground, 0.28, bw / 2.0);
+    }
+    menu.rect = Some([x, y, w, h, row_h, pad]);
+}
+
 pub struct TermView {
     pub x: f32,
     pub y: f32,
@@ -345,9 +510,11 @@ pub struct TermView {
     pub cursor_on: bool,
 }
 
-pub fn draw_terminal<T: EventListener>(p: &mut Painter, term: &Term<T>, theme: &Theme, v: &TermView) {
+/// `bs`: bloques de la pestaña, para dar estilo al prompt de Garbo (ver `draw_prompts`).
+pub fn draw_terminal<T: EventListener>(p: &mut Painter, term: &Term<T>, theme: &Theme, v: &TermView, bs: Option<&BlockState>) {
     let m = p.metrics();
     let (cw, chh) = (m.width, m.height);
+    let current_prompt = bs.and_then(BlockState::idle_current);
     let content = term.renderable_content();
     let offset = content.display_offset as i32;
     let colors = content.colors;
@@ -416,8 +583,22 @@ pub fn draw_terminal<T: EventListener>(p: &mut Painter, term: &Term<T>, theme: &
         }
 
         let c = cell.c;
+        // Prompt de Garbo: la ruta en negrita en el prompt actual y en gris en los ya ejecutados;
+        // lo escrito, en negrita.
+        let mut bold = flags.contains(Flags::BOLD);
+        if let Some((kind, id)) = bs.and_then(|bs| blocks::cell_link(cell).filter(|(_, id)| bs.styled(*id))) {
+            match kind {
+                b'p' if current_prompt == Some(id) => {
+                    fg = theme.foreground;
+                    bold = true;
+                }
+                b'p' => fg = theme.foreground.lerp(theme.background, 0.5),
+                b'c' => bold = true,
+                _ => {}
+            }
+        }
         if c != ' ' && c != '\t' && !draw_special(p, c, x, y, cw, chh, fg) {
-            let style = match (flags.contains(Flags::BOLD), flags.contains(Flags::ITALIC)) {
+            let style = match (bold, flags.contains(Flags::ITALIC)) {
                 (true, true) => Style::BoldItalic,
                 (true, false) => Style::Bold,
                 (false, true) => Style::Italic,
@@ -563,8 +744,9 @@ pub fn draw_blocks<T: EventListener>(
             p.rounded(bar_x, y0 + pad, bar_w, (y1 - y0 - 2.0 * pad).max(bar_w), c, a, bar_w / 2.0);
         }
 
-        // Estado y duración a la derecha de la línea del prompt, si ese hueco está libre.
-        let (Some(info), true) = (info, starts_here) else { continue };
+        // Estado y duración a la derecha de la línea del prompt, si ese hueco está libre (con el
+        // prompt de Garbo van tras la ruta: ver `draw_prompts`).
+        let (Some(info), true) = (info.filter(|i| !i.styled), starts_here) else { continue };
         // Sin ruido: en los correctos solo la duración si fue apreciable; los fallos siempre.
         let slow = info.duration.filter(|d| d.as_secs_f32() >= 1.0).map(blocks::format_duration);
         let (icon, icon_color, text) = match (status, slow) {

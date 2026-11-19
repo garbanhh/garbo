@@ -1,6 +1,6 @@
 [package]
 name = "garbo"
-version = "0.4.2"
+version = "0.5.0"
 edition = "2021"
 description = "Terminal GPU ligera, rápida y personalizable con pestañas y bloques de comandos"
 license = "MIT"

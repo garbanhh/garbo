@@ -140,6 +140,12 @@ impl Tab {
         env.insert("COLORTERM".into(), "truecolor".into());
         env.insert("TERM_PROGRAM".into(), "garbo".into());
         env.insert("TERM_PROGRAM_VERSION".into(), env!("CARGO_PKG_VERSION").into());
+        // Prompt de Garbo (lo pone la integración de bash; ver shell/garbo.bash).
+        if cfg.terminal.garbo_prompt {
+            env.insert("GARBO_PROMPT".into(), "1".into());
+        } else {
+            env.remove("GARBO_PROMPT");
+        }
         // No propagar al shell el filtro de drivers Vulkan que pone el renderer.
         for var in crate::renderer::env_overrides() {
             env.entry(var.to_string()).or_default();
@@ -156,7 +162,7 @@ impl Tab {
         let pty = tty::new(&opts, ws, id)?;
         let child_pid = pty.child().id();
         let master = pty.file().try_clone().ok();
-        let blocks = Arc::new(Mutex::new(BlockState::default()));
+        let blocks = Arc::new(Mutex::new(BlockState::new(child_pid)));
         let pty_loop = PtyLoop::new(term.clone(), listener, pty, blocks.clone())?;
         let sender = pty_loop.sender();
         pty_loop.spawn();
@@ -218,12 +224,27 @@ impl Tab {
         self.task = self.compute_task();
     }
 
-    /// Resto del comando sugerido desde el historial, si se está escribiendo en el prompt.
+    /// Resto del comando sugerido (en gris), si se está escribiendo en el prompt.
     pub fn suggestion(&self) -> Option<String> {
         let cwd = self.cwd();
         let term = self.term.lock();
         let start = self.blocks.lock().unwrap().input_start;
         suggestion_for(&term, start, cwd.as_deref())
+    }
+
+    /// Lo escrito en el prompt hasta el cursor, si se puede leer.
+    pub fn prompt_input(&self) -> Option<String> {
+        let term = self.term.lock();
+        let start = self.blocks.lock().unwrap().input_start;
+        input_for(&term, start)
+    }
+
+    /// Candidatos del menú de completado para lo escrito en el prompt (y lo escrito).
+    pub fn completions(&self) -> Option<(String, crate::complete::Completions)> {
+        let input = self.prompt_input()?;
+        let cwd = self.cwd();
+        let comp = crate::complete::complete(&input, cwd.as_deref())?;
+        Some((input, comp))
     }
 
     pub fn resize(&mut self, ws: WindowSize) {
@@ -323,14 +344,19 @@ fn is_echo(last_input: std::time::Instant, now: std::time::Instant) -> bool {
     now.saturating_duration_since(last_input) <= ECHO_WINDOW
 }
 
-/// Sugerencia para un terminal ya bloqueado (`start` = inicio de lo escrito en el prompt).
-pub fn suggestion_for<T>(term: &Term<T>, start: Option<(i64, usize)>, cwd: Option<&std::path::Path>) -> Option<String> {
+/// Lo escrito en el prompt para un terminal ya bloqueado (`start` = inicio de la entrada). Nada
+/// con la pantalla alternativa (vim, less…) ni con el historial desplazado.
+pub fn input_for<T>(term: &Term<T>, start: Option<(i64, usize)>) -> Option<String> {
     use alacritty_terminal::term::TermMode;
     if term.mode().contains(TermMode::ALT_SCREEN) || term.grid().display_offset() != 0 {
         return None;
     }
-    let input = crate::suggest::current_input(term, start?)?;
-    crate::suggest::suggest(&input, cwd)
+    crate::suggest::current_input(term, start?)
+}
+
+/// Sugerencia para un terminal ya bloqueado (`start` = inicio de lo escrito en el prompt).
+pub fn suggestion_for<T>(term: &Term<T>, start: Option<(i64, usize)>, cwd: Option<&std::path::Path>) -> Option<String> {
+    crate::suggest::suggest(&input_for(term, start)?, cwd)
 }
 
 /// Quita del título los símbolos de estado que algunos programas anteponen ("✳ Tarea" -> "Tarea").

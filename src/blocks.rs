@@ -2,6 +2,7 @@
 //!
 //! El shell (con el script de integración) emite marcas OSC 133 invisibles:
 //!   A = empieza el prompt, B = empieza el comando, C = empieza la salida, D;código = terminó.
+//!   `A;garbo` = el prompt es el de Garbo (se dibuja como etiqueta, ver `view::draw_prompts`).
 //! Al ver una marca, el bucle del PTY "ancla" el bloque al propio texto: activa un hyperlink
 //! invisible (uri `garbo:block`) que se graba en las celdas del prompt y del comando.
 //! Así la posición de cada bloque viaja con el contenido: sobrevive al scroll, al recorte
@@ -14,6 +15,7 @@ use alacritty_terminal::term::cell::{Cell, Flags};
 use alacritty_terminal::term::Term;
 use alacritty_terminal::vte::ansi::{Handler, Hyperlink};
 use std::collections::VecDeque;
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 pub const LINK_URI: &str = "garbo:block";
@@ -21,7 +23,8 @@ const MAX_BLOCKS: usize = 4096;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mark {
-    PromptStart,
+    /// `true` = prompt de Garbo.
+    PromptStart(bool),
     CommandStart,
     OutputStart,
     CommandEnd(Option<i32>),
@@ -87,7 +90,7 @@ impl MarkScanner {
     fn finish(&mut self, end: usize, out: &mut Vec<(usize, Mark)>) {
         let Some(rest) = self.buf.strip_prefix(b"133;") else { return };
         let mark = match rest.first() {
-            Some(b'A') => Mark::PromptStart,
+            Some(b'A') => Mark::PromptStart(rest[1..].split(|&b| b == b';').any(|p| p == b"garbo")),
             Some(b'B') => Mark::CommandStart,
             Some(b'C') => Mark::OutputStart,
             Some(b'D') => {
@@ -105,6 +108,8 @@ impl MarkScanner {
 #[derive(Clone, Debug)]
 pub struct BlockInfo {
     pub id: u32,
+    /// Prompt de Garbo (marca `A;garbo`).
+    pub styled: bool,
     pub started: Option<Instant>,
     pub duration: Option<Duration>,
     pub exit: Option<i32>,
@@ -142,14 +147,33 @@ pub struct BlockState {
     /// Dónde empieza lo que se está escribiendo en el prompt (entre las marcas B y C), en
     /// coordenadas absolutas (ver `suggest::cursor_mark`).
     pub input_start: Option<(i64, usize)>,
-    /// Comando aceptado que aún no ha terminado: pasa al historial al conocer su código de salida.
-    pending_cmd: Option<String>,
+    /// Comando aceptado que aún no ha terminado (y su carpeta): pasa al historial al conocer su
+    /// código de salida.
+    pending_cmd: Option<(String, Option<PathBuf>)>,
+    /// Proceso del shell (para leer su carpeta actual).
+    shell_pid: u32,
+    /// Carpeta del shell cuando empezó a escribirse el comando (marca B).
+    input_cwd: Option<PathBuf>,
 }
 
 impl BlockState {
+    pub fn new(shell_pid: u32) -> Self {
+        Self { shell_pid, ..Default::default() }
+    }
+
+    /// Carpeta actual del shell (Linux: /proc/<pid>/cwd).
+    fn shell_cwd(&self) -> Option<PathBuf> {
+        (self.shell_pid != 0).then(|| std::fs::read_link(format!("/proc/{}/cwd", self.shell_pid)).ok()).flatten()
+    }
+
     pub fn info(&self, id: u32) -> Option<&BlockInfo> {
         let i = self.infos.binary_search_by_key(&id, |b| b.id).ok()?;
         self.infos.get(i)
+    }
+
+    /// ¿Usa el bloque el prompt de Garbo?
+    pub fn styled(&self, id: u32) -> bool {
+        self.info(id).is_some_and(|b| b.styled)
     }
 
     /// El bloque del prompt actual, si todavía no ha ejecutado nada (se está escribiendo).
@@ -174,10 +198,10 @@ impl BlockState {
         self.active = true;
         let link = |kind: char, id: u32| Hyperlink { id: Some(format!("garbo:{kind}:{id}")), uri: LINK_URI.into() };
         match mark {
-            Mark::PromptStart => {
+            Mark::PromptStart(styled) => {
                 self.next_id += 1;
                 let id = self.next_id;
-                self.infos.push_back(BlockInfo { id, started: None, duration: None, exit: None });
+                self.infos.push_back(BlockInfo { id, styled, started: None, duration: None, exit: None });
                 if self.infos.len() > MAX_BLOCKS {
                     self.infos.pop_front();
                 }
@@ -190,11 +214,15 @@ impl BlockState {
                     term.set_hyperlink(Some(link('c', id)));
                 }
                 self.input_start = Some(crate::suggest::cursor_mark(term));
+                // El shell está esperando lo que se escriba: su carpeta es donde se ejecutará.
+                self.input_cwd = self.shell_cwd();
             }
             Mark::OutputStart => {
                 term.set_hyperlink(None);
                 // El comando aceptado pasará al historial de sugerencias cuando termine.
-                self.pending_cmd = self.input_start.take().and_then(|s| crate::suggest::executed_command(term, s));
+                let dir = self.input_cwd.take();
+                self.pending_cmd =
+                    self.input_start.take().and_then(|s| crate::suggest::executed_command(term, s)).map(|c| (c, dir));
                 if let Some(info) = self.current_mut() {
                     info.started = Some(Instant::now());
                 }
@@ -202,8 +230,8 @@ impl BlockState {
             Mark::CommandEnd(code) => {
                 term.set_hyperlink(None);
                 self.input_start = None;
-                if let Some(cmd) = self.pending_cmd.take() {
-                    crate::suggest::record(&cmd, code);
+                if let Some((cmd, dir)) = self.pending_cmd.take() {
+                    crate::suggest::record(&cmd, code, dir.as_deref());
                 }
                 if let Some(info) = self.current_mut() {
                     if let (Some(start), None) = (info.started, info.duration) {
@@ -380,4 +408,18 @@ pub fn bash_integration_path() -> Option<String> {
         std::fs::write(&path, SCRIPT).ok()?;
     }
     Some(path.to_string_lossy().into_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn marcas_del_prompt() {
+        let mut sc = MarkScanner::default();
+        let mut out = Vec::new();
+        sc.scan(b"\x1b]133;A;garbo\x07  ~/x\n\x1b]133;B\x07ls\x1b]133;A\x07$ \x1b]133;D;1\x1b\\", &mut out);
+        let marks: Vec<Mark> = out.into_iter().map(|(_, m)| m).collect();
+        assert_eq!(marks, [Mark::PromptStart(true), Mark::CommandStart, Mark::PromptStart(false), Mark::CommandEnd(Some(1))]);
+    }
 }
