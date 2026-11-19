@@ -93,8 +93,9 @@ impl<U: EventListener + Send + 'static> PtyLoop<U> {
         true
     }
 
-    /// Pasa los bytes al parser deteniéndose en cada marca de shell para aplicarla.
-    fn feed(state: &mut State, term: &mut Term<U>, bytes: &[u8], blocks: &Mutex<BlockState>) {
+    /// Pasa los bytes al parser deteniéndose en cada marca de shell para aplicarla. Los informes
+    /// de estado (OSC 7501) van a `BlockState::program` y su consulta se contesta.
+    fn feed(state: &mut State, term: &mut Term<U>, bytes: &[u8], blocks: &Mutex<BlockState>, proxy: &U) {
         let mut marks = std::mem::take(&mut state.marks);
         marks.clear();
         state.scanner.scan(bytes, &mut marks);
@@ -111,6 +112,18 @@ impl<U: EventListener + Send + 'static> PtyLoop<U> {
             state.parser.advance(term, &bytes[pos..]);
         }
         state.marks = marks;
+        if !state.scanner.status.is_empty() {
+            let mut bs = blocks.lock().unwrap();
+            for (report, st) in state.scanner.status.drain(..) {
+                match report {
+                    crate::status::Report::Query => {
+                        let end = if st { "\x1b\\" } else { "\x07" };
+                        proxy.send_event(Event::PtyWrite(format!("\x1b]7501;{}{end}", crate::status::REPLY)));
+                    }
+                    other => bs.program.apply(other),
+                }
+            }
+        }
     }
 
     fn pty_read(&mut self, state: &mut State, buf: &mut [u8]) -> io::Result<()> {
@@ -143,7 +156,7 @@ impl<U: EventListener + Send + 'static> PtyLoop<U> {
                 }),
             };
 
-            Self::feed(state, terminal, &buf[..unprocessed], &self.blocks);
+            Self::feed(state, terminal, &buf[..unprocessed], &self.blocks, &self.event_proxy);
             processed += unprocessed;
             unprocessed = 0;
 

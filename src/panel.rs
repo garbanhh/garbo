@@ -50,6 +50,8 @@ pub struct AgentRow<'a> {
     pub label: &'a str,
     pub agent: Agent,
     pub status: Status,
+    /// Lo que el agente dice que hace o espera (OSC 7501).
+    pub detail: Option<&'a str>,
     pub since: Instant,
     pub active: bool,
     pub subagents: &'a [SubAgent],
@@ -424,6 +426,8 @@ impl PanelState {
         let l2 = l1 + lh;
         let (color, txt_color) = match a.status {
             Status::Working => (theme.accent, theme.foreground),
+            // Te espera: en amarillo, lo más visible del panel.
+            Status::Blocked(_) => (theme.palette[3], theme.palette[3]),
             Status::Done => (theme.palette[2], theme.palette[2]),
             Status::Waiting | Status::Exited => (dimc, dimc),
         };
@@ -436,7 +440,11 @@ impl PanelState {
             p.circle(sx, cy, 3.5 * s, color, 1.0);
             sx += 12.0 * s;
         }
-        p.ui_text(sx, l2, a.status.label(), txt_color, right - sx);
+        let label = match a.detail {
+            Some(d) => format!("{} · {d}", a.status.label()),
+            None => a.status.label().to_string(),
+        };
+        p.ui_text(sx, l2, &label, txt_color, right - sx);
 
         // Subagentes, colgando del agente.
         let mut sy = l2 + lh + 4.0 * s;

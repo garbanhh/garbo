@@ -43,11 +43,13 @@ pub struct NotifyConfig {
     pub min_work_secs: u64,
     /// Con sonido (el de "completado" del tema de sonidos).
     pub sound: bool,
+    /// Avisar cuando un agente espera tu permiso o tu respuesta (si lo informa por OSC 7501).
+    pub blocked: bool,
 }
 
 impl Default for NotifyConfig {
     fn default() -> Self {
-        Self { agents: NotifyWhen::Unfocused, min_work_secs: 5, sound: true }
+        Self { agents: NotifyWhen::Unfocused, min_work_secs: 5, sound: true, blocked: true }
     }
 }
 
@@ -263,6 +265,7 @@ impl Config {
         });
         doc["notifications"]["min_work_secs"] = value(self.notifications.min_work_secs as i64);
         doc["notifications"]["sound"] = value(self.notifications.sound);
+        doc["notifications"]["blocked"] = value(self.notifications.blocked);
         doc["font"]["family"] = value(self.font.family.clone());
         doc["font"]["size"] = value(r2(self.font.size));
         doc["font"]["line_height"] = value(r2(self.font.line_height));

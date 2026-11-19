@@ -27,6 +27,7 @@ pub enum Field {
     NotifyAgents,
     NotifyMinWork,
     NotifySound,
+    NotifyBlocked,
     NotifyTest,
     Padding,
     Opacity,
@@ -95,6 +96,7 @@ const CATEGORIES: &[(&str, &[(Field, &str)])] = &[
             (Field::NotifyAgents, "Cuando un agente termine"),
             (Field::NotifyMinWork, "Si trabajó al menos"),
             (Field::NotifySound, "Con sonido"),
+            (Field::NotifyBlocked, "Si te necesita"),
             (Field::NotifyTest, "Probar aviso"),
         ],
     ),
@@ -351,6 +353,7 @@ impl Settings {
             Field::Autosuggest => cfg.terminal.autosuggest,
             Field::CompleteAsYouType => cfg.terminal.complete_as_you_type,
             Field::NotifySound => cfg.notifications.sound,
+            Field::NotifyBlocked => cfg.notifications.blocked,
             Field::Blocks => cfg.terminal.blocks,
             Field::GarboPrompt => cfg.terminal.garbo_prompt,
             Field::ShellIntegration => cfg.terminal.shell_integration,
@@ -469,6 +472,10 @@ impl Settings {
             }
             Field::NotifySound => {
                 cfg.notifications.sound = !cfg.notifications.sound;
+                Change::Redraw
+            }
+            Field::NotifyBlocked => {
+                cfg.notifications.blocked = !cfg.notifications.blocked;
                 Change::Redraw
             }
             // Como el de actualizaciones: solo con Intro o clic.

@@ -30,12 +30,16 @@ pub enum Mark {
     CommandEnd(Option<i32>),
 }
 
-/// Escáner incremental de secuencias OSC 133. Mantiene estado entre lecturas, así que
-/// tolera secuencias partidas entre dos `read()` del PTY.
+/// Escáner incremental de secuencias OSC 133 (y de los informes OSC 7501, ver `status.rs`).
+/// Mantiene estado entre lecturas, así que tolera secuencias partidas entre dos `read()` del PTY.
 #[derive(Default)]
 pub struct MarkScanner {
     state: Scan,
     buf: Vec<u8>,
+    /// El OSC en curso es más largo de lo que se admite: se descarta.
+    overflow: bool,
+    /// Informes y consultas OSC 7501 (`true` = acabó en ST, `false` = en BEL).
+    pub status: Vec<(crate::status::Report, bool)>,
 }
 
 #[derive(Default, Clone, Copy, PartialEq, Eq)]
@@ -56,30 +60,36 @@ impl MarkScanner {
                 Scan::Ground => Scan::Ground,
                 Scan::Esc if b == b']' => {
                     self.buf.clear();
+                    self.overflow = false;
                     Scan::Osc
                 }
                 Scan::Esc if b == 0x1b => Scan::Esc,
                 Scan::Esc => Scan::Ground,
                 Scan::Osc => match b {
                     0x07 => {
-                        self.finish(i + 1, out);
+                        self.finish(i + 1, out, false);
                         Scan::Ground
                     }
                     0x1b => Scan::OscEsc,
                     0x18 | 0x1a => Scan::Ground, // CAN / SUB abortan la secuencia
                     _ => {
-                        if self.buf.len() < 32 {
+                        // Las marcas caben en 32 bytes; un informe OSC 7501, en `status::MAX_REPORT`.
+                        let cap = if self.buf.starts_with(b"7501;") { crate::status::MAX_REPORT + 5 } else { 32 };
+                        if self.buf.len() < cap {
                             self.buf.push(b);
+                        } else {
+                            self.overflow = true;
                         }
                         Scan::Osc
                     }
                 },
                 Scan::OscEsc if b == b'\\' => {
-                    self.finish(i + 1, out);
+                    self.finish(i + 1, out, true);
                     Scan::Ground
                 }
                 Scan::OscEsc if b == b']' => {
                     self.buf.clear();
+                    self.overflow = false;
                     Scan::Osc
                 }
                 Scan::OscEsc => Scan::Ground,
@@ -87,7 +97,13 @@ impl MarkScanner {
         }
     }
 
-    fn finish(&mut self, end: usize, out: &mut Vec<(usize, Mark)>) {
+    fn finish(&mut self, end: usize, out: &mut Vec<(usize, Mark)>, st: bool) {
+        if let Some(payload) = self.buf.strip_prefix(b"7501;") {
+            if let Some(report) = (!self.overflow).then(|| crate::status::parse(payload)).flatten() {
+                self.status.push((report, st));
+            }
+            return;
+        }
         let Some(rest) = self.buf.strip_prefix(b"133;") else { return };
         let mark = match rest.first() {
             Some(b'A') => Mark::PromptStart(rest[1..].split(|&b| b == b';').any(|p| p == b"garbo")),
@@ -154,6 +170,8 @@ pub struct BlockState {
     shell_pid: u32,
     /// Carpeta del shell cuando empezó a escribirse el comando (marca B).
     input_cwd: Option<PathBuf>,
+    /// Estado que informa el programa en marcha (OSC 7501, ver `status.rs`).
+    pub program: crate::status::Records,
 }
 
 impl BlockState {
@@ -199,6 +217,8 @@ impl BlockState {
         let link = |kind: char, id: u32| Hyperlink { id: Some(format!("garbo:{kind}:{id}")), uri: LINK_URI.into() };
         match mark {
             Mark::PromptStart(styled) => {
+                // Vuelve el prompt: el programa que informaba ya no está en marcha.
+                self.program.drop_live();
                 self.next_id += 1;
                 let id = self.next_id;
                 self.infos.push_back(BlockInfo { id, styled, started: None, duration: None, exit: None });

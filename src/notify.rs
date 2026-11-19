@@ -25,25 +25,71 @@ use winit::event_loop::EventLoopProxy;
 pub const CONFIRM: Duration = Duration::from_millis(2500);
 const APP_ID: &str = "io.github.garbanhh.Garbo";
 
+/// Qué hace el agente, para decidir el aviso.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Activity {
+    Working,
+    /// Espera al usuario (permiso, pregunta): la tarea sigue, no ha terminado.
+    Blocked,
+    /// El agente dice que terminó (OSC 7501): sin esperar a confirmarlo.
+    Finished,
+    /// El agente dice que está parado sin más (p. ej. lo interrumpió el usuario): sin aviso.
+    Idle,
+    /// Sin salida reciente (heurística): terminó si sigue así `CONFIRM`.
+    Quiet,
+}
+
 #[derive(Default, Debug)]
 pub struct Tracker {
     /// Desde cuándo trabaja el agente.
     working_since: Option<Instant>,
     /// Aviso pendiente: cuándo enviarlo, cuándo empezó a trabajar y cuándo paró.
     pending: Option<(Instant, Instant, Instant)>,
+    /// Desde cuándo espera al usuario (ese rato no cuenta como trabajo).
+    blocked_since: Option<Instant>,
     /// Proceso `notify-send` del aviso mostrado (para retirarlo al mirar la pestaña).
     pub shown: Option<u32>,
+    was_blocked: bool,
+    /// Último aviso de "te necesita" (como mucho uno cada `BLOCKED_EVERY`).
+    blocked_notice: Option<Instant>,
 }
 
+/// Separación mínima entre avisos de "te necesita" de una pestaña (la especificación pide limitarlos).
+const BLOCKED_EVERY: Duration = Duration::from_secs(3);
+
 impl Tracker {
-    /// Sigue el estado de trabajo. Devuelve cuánto trabajó si el aviso toca ahora.
-    pub fn update(&mut self, working: bool, min_work: Duration, now: Instant) -> Option<Duration> {
-        if working {
-            if self.working_since.is_none() {
-                // Si vuelve a trabajar antes de confirmar, es la misma tarea.
-                self.working_since = Some(self.pending.take().map_or(now, |(_, start, _)| start));
+    /// Sigue el estado de trabajo. Devuelve cuánto trabajó si el aviso de "terminado" toca ahora.
+    pub fn update(&mut self, activity: Activity, min_work: Duration, now: Instant) -> Option<Duration> {
+        // Al dejar de esperar al usuario, el rato de espera se descuenta del trabajo.
+        if activity != Activity::Blocked {
+            if let (Some(b), Some(start)) = (self.blocked_since.take(), self.working_since.as_mut()) {
+                *start += now.duration_since(b);
             }
-            return None;
+        }
+        match activity {
+            Activity::Working => {
+                if self.working_since.is_none() {
+                    // Si vuelve a trabajar antes de confirmar, es la misma tarea.
+                    self.working_since = Some(self.pending.take().map_or(now, |(_, start, _)| start));
+                }
+                return None;
+            }
+            Activity::Blocked => {
+                self.pending = None;
+                self.blocked_since.get_or_insert(now);
+                return None;
+            }
+            Activity::Finished => {
+                self.pending = None;
+                let worked = now.duration_since(self.working_since.take()?);
+                return (worked >= min_work).then_some(worked);
+            }
+            Activity::Idle => {
+                self.working_since = None;
+                self.pending = None;
+                return None;
+            }
+            Activity::Quiet => {}
         }
         if let Some(start) = self.working_since.take() {
             self.pending = Some((now + CONFIRM, start, now));
@@ -57,6 +103,17 @@ impl Tracker {
             }
             _ => None,
         }
+    }
+
+    /// ¿Hay que avisar de que el agente acaba de quedarse esperando al usuario?
+    pub fn blocked_now(&mut self, blocked: bool, now: Instant) -> bool {
+        let edge = blocked && !self.was_blocked;
+        self.was_blocked = blocked;
+        if edge && self.blocked_notice.is_none_or(|t| now.duration_since(t) >= BLOCKED_EVERY) {
+            self.blocked_notice = Some(now);
+            return true;
+        }
+        false
     }
 
     /// Cuándo hay que despertar para confirmar un aviso pendiente.
@@ -84,6 +141,29 @@ pub struct Notice {
 /// Procesos `notify-send` sin recoger. Se recogen con este cerrojo tomado y solo se terminan los que
 /// siguen aquí: su pid no puede haberse reutilizado para otro proceso.
 static LIVE: Mutex<Option<HashSet<u32>>> = Mutex::new(None);
+
+/// Texto del aviso cuando el agente espera al usuario: "Claude Code necesita tu permiso" y, debajo,
+/// lo que dice el agente ("Bash: rm -r build") y la pestaña.
+pub fn blocked_text(agent: &str, kind: Option<crate::status::Kind>, msg: Option<&str>, task: &str, dir: &str) -> (String, String) {
+    use crate::status::Kind;
+    let title = match kind {
+        Some(Kind::Permission) => format!("{agent} necesita tu permiso"),
+        Some(Kind::Question) => format!("{agent} te ha hecho una pregunta"),
+        Some(Kind::Auth) => format!("{agent} necesita que inicies sesión"),
+        None => format!("{agent} te necesita"),
+    };
+    let mut lines = Vec::new();
+    if let Some(m) = msg.filter(|m| !m.is_empty()) {
+        lines.push(m.to_string());
+    }
+    if !task.is_empty() && task != agent && task != dir {
+        lines.push(task.to_string());
+    }
+    if !dir.is_empty() {
+        lines.push(dir.to_string());
+    }
+    (title, lines.join("\n"))
+}
 
 /// Texto del aviso: "Claude Code ha terminado" / "Rediseñar los ajustes\nGRBTER · trabajó 2 min".
 pub fn notice_text(agent: &str, task: &str, dir: &str, worked: Duration) -> (String, String) {
@@ -176,29 +256,52 @@ mod tests {
         let s = |ms: u64| t0 + Duration::from_millis(ms);
         let min = Duration::from_secs(5);
         let mut t = Tracker::default();
-        assert_eq!(t.update(true, min, s(0)), None);
-        assert_eq!(t.update(true, min, s(9_000)), None);
+        use Activity::*;
+        assert_eq!(t.update(Working, min, s(0)), None);
+        assert_eq!(t.update(Working, min, s(9_000)), None);
         // Para a los 10 s (los 1,5 s de silencio ya pasaron): queda pendiente de confirmar.
-        assert_eq!(t.update(false, min, s(10_000)), None);
+        assert_eq!(t.update(Quiet, min, s(10_000)), None);
         assert_eq!(t.next_wake(), Some(s(10_000) + CONFIRM));
-        assert_eq!(t.update(false, min, s(11_000)), None, "aún sin confirmar");
-        assert_eq!(t.update(false, min, s(12_600)), Some(Duration::from_millis(8_500)));
+        assert_eq!(t.update(Quiet, min, s(11_000)), None, "aún sin confirmar");
+        assert_eq!(t.update(Quiet, min, s(12_600)), Some(Duration::from_millis(8_500)));
         assert_eq!(t.next_wake(), None, "solo una vez");
-        assert_eq!(t.update(false, min, s(20_000)), None);
+        assert_eq!(t.update(Quiet, min, s(20_000)), None);
 
         // Una pausa corta no avisa y cuenta como la misma tarea.
         let mut t = Tracker::default();
-        t.update(true, min, s(0));
-        t.update(false, min, s(4_000));
-        t.update(true, min, s(5_000));
-        t.update(false, min, s(8_000));
-        assert_eq!(t.update(false, min, s(10_600)), Some(Duration::from_millis(6_500)));
+        t.update(Working, min, s(0));
+        t.update(Quiet, min, s(4_000));
+        t.update(Working, min, s(5_000));
+        t.update(Quiet, min, s(8_000));
+        assert_eq!(t.update(Quiet, min, s(10_600)), Some(Duration::from_millis(6_500)));
 
         // Poco trabajo: sin aviso.
         let mut t = Tracker::default();
-        t.update(true, min, s(0));
-        t.update(false, min, s(3_000));
-        assert_eq!(t.update(false, min, s(6_000)), None);
+        t.update(Working, min, s(0));
+        t.update(Quiet, min, s(3_000));
+        assert_eq!(t.update(Quiet, min, s(6_000)), None);
+    }
+
+    #[test]
+    fn con_lo_que_dice_el_agente() {
+        use Activity::*;
+        let t0 = Instant::now();
+        let s = |ms: u64| t0 + Duration::from_millis(ms);
+        let min = Duration::from_secs(5);
+        // Trabaja 4 s, espera permiso 60 s (no es "terminado" ni cuenta), trabaja 3 s y termina:
+        // aviso al momento, con 7 s de trabajo.
+        let mut t = Tracker::default();
+        t.update(Working, min, s(0));
+        assert_eq!(t.update(Blocked, min, s(4_000)), None);
+        assert_eq!(t.update(Blocked, min, s(30_000)), None);
+        assert_eq!(t.next_wake(), None, "esperando al usuario no hay nada pendiente");
+        t.update(Working, min, s(64_000));
+        assert_eq!(t.update(Finished, min, s(67_000)), Some(Duration::from_secs(7)));
+        assert_eq!(t.update(Finished, min, s(68_000)), None, "solo una vez");
+        // Interrumpido (idle): sin aviso.
+        t.update(Working, min, s(70_000));
+        assert_eq!(t.update(Idle, min, s(90_000)), None);
+        assert_eq!(t.update(Finished, min, s(91_000)), None);
     }
 
     #[test]
@@ -208,6 +311,8 @@ mod tests {
         assert_eq!(body, "Rediseñar los ajustes\nGRBTER · trabajó 2 min 05 s");
         let (_, body) = notice_text("Aider", "Aider", "src", Duration::from_secs(7));
         assert_eq!(body, "src · trabajó 7,0 s", "sin repetir el nombre del agente");
+        let (title, body) = blocked_text("Claude Code", Some(crate::status::Kind::Permission), Some("trust this folder"), "Claude Code", "GRBTER");
+        assert_eq!((title.as_str(), body.as_str()), ("Claude Code necesita tu permiso", "trust this folder\nGRBTER"));
         assert_eq!(escape_markup("a <b> & c"), "a &lt;b&gt; &amp; c");
         assert_eq!(clean("x\u{1b}[31my"), "x [31my");
         let mut cfg = NotifyConfig::default();

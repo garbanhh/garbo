@@ -43,10 +43,15 @@
   Gemini CLI, Aider…) y sus subagentes. Cuando un agente termina y no lo estás mirando, recibes un
   aviso del escritorio. Al pulsarlo vuelves a su pestaña. Las capturas de pantalla se pegan como
   imagen.
-- **Pestañas en la barra de título.** Heredan la carpeta y se titulan solas con lo que se está
-  haciendo.
+- **Pestañas y paneles divididos.** Las pestañas van en la barra de título y se titulan solas con
+  lo que se está haciendo; cada una se puede dividir en paneles (un agente a la izquierda y las
+  pruebas a la derecha, sin tmux).
 - **A tu gusto.** Temas, fuentes, atajos y un panel de ajustes que aplica cada cambio al momento y
   lo guarda en `config.toml`.
+- **Enlaces y rutas con Ctrl+clic.** Abre URL y lleva los errores de compilación
+  (`src/main.rs:42:5`) a tu editor, en esa línea.
+- **Búsqueda en el historial.** `Ctrl+Shift+F` resalta todas las coincidencias y, con un bloque
+  seleccionado, busca solo en él.
 - **Texto impecable.** Emoji a color (también COLRv1), CJK, *true color*, estilos de subrayado y
   caracteres de cajas dibujados al píxel.
 - **Se actualiza sola.** Avisa de las versiones nuevas y las instala con un clic.
@@ -74,12 +79,14 @@ con Vulkan u OpenGL. Los bloques de comandos, las sugerencias y el completado us
 
 | Atajo | Acción |
 |---|---|
-| `Ctrl+Shift+T` / `Ctrl+Shift+W` | Abrir / cerrar pestaña |
+| `Ctrl+Shift+T` / `Ctrl+Shift+W` | Abrir pestaña / cerrar el panel (o la pestaña) |
 | `Ctrl+Tab`, `Ctrl+AvPág` / `Ctrl+Shift+Tab`, `Ctrl+RePág` | Pestaña siguiente / anterior |
 | `Ctrl+Shift+RePág` / `Ctrl+Shift+AvPág` | Mover la pestaña |
 | `Alt+1` … `Alt+9` | Ir a una pestaña (`Alt+9`: la última) |
 | `Ctrl+Shift+P` | Paleta de comandos |
 | `Ctrl+,` | Ajustes |
+| `Ctrl+Shift+D` / `Ctrl+Shift+Alt+D` | Dividir: panel a la derecha / debajo |
+| `Alt+←` `→` `↑` `↓` | Cambiar de panel (si la pestaña está dividida) |
 | `Ctrl+Shift+A` / `Ctrl+Shift+E` | Panel de agentes / de puertos |
 
 **Línea de órdenes**
@@ -98,6 +105,7 @@ con Vulkan u OpenGL. Los bloques de comandos, las sugerencias y el completado us
 
 | Atajo | Acción |
 |---|---|
+| `Ctrl+Shift+F` | Buscar en el historial (con un bloque seleccionado, solo en él) |
 | `Ctrl+Shift+C` / `Ctrl+Shift+V` | Copiar / pegar (también imágenes) |
 | `Ctrl+Shift+↑` / `Ctrl+Shift+↓` | Bloque de comandos anterior / siguiente |
 | `Ctrl+Shift+O` | Copiar la salida del bloque seleccionado o del último comando |
@@ -112,6 +120,9 @@ Todos los atajos de Garbo se cambian en la sección `[keybindings]` de la config
 ### Ratón
 
 - Doble clic selecciona una palabra; triple clic, una línea; `Ctrl+Alt` y arrastrar, un rectángulo.
+- `Ctrl`+clic abre lo que hay bajo el ratón: una URL en el navegador, o una ruta como
+  `src/main.rs:42:5` en tu editor (`$EDITOR`) en esa línea; los editores de terminal, como nano o
+  vim, se abren en una pestaña nueva. Con `Ctrl` pulsado, lo que se puede abrir se subraya.
 - El clic central pega la selección primaria; sobre una pestaña, la cierra.
 - `Shift` fuerza la selección local en programas que capturan el ratón.
 - Arrastrar un archivo a la ventana escribe su ruta.
@@ -154,6 +165,23 @@ Con un agente en primer plano, `Shift+Intro` también inserta un salto de línea
 Codex o Gemini CLI se envía `Ctrl+J`) y `Ctrl+Retroceso` borra la palabra anterior. En el resto de
 programas (vim, python…) las teclas funcionan como siempre.
 
+### Paneles divididos
+
+`Ctrl+Shift+D` divide el panel actual y abre otro a la derecha; `Ctrl+Shift+Alt+D`, debajo. El
+nuevo empieza en la misma carpeta. Un clic o `Alt`+flecha cambian de panel, las líneas que los
+separan se arrastran para repartir el espacio y `Ctrl+Shift+W` (o `exit`) cierra el panel. La
+pestaña muestra cuántos paneles tiene ("(+2)") y avisa del más urgente: si un agente te necesita
+en cualquiera de ellos, lo verás en la barra.
+
+### Buscar
+
+`Ctrl+Shift+F` abre una barra de búsqueda arriba a la derecha. Busca el texto tal cual, sin
+distinguir mayúsculas salvo que escribas alguna, y resalta todas las coincidencias; la actual
+destaca en amarillo y el contador dice cuál es ("3/17"). `Intro` o `↑` van a la anterior,
+`Shift+Intro` o `↓` a la siguiente y `Esc` cierra. Si hay un bloque seleccionado, busca solo
+dentro de él (la etiqueta *Bloque* quita o pone el límite): útil para revisar un registro largo o
+los errores de una compilación.
+
 ### Bloques de comandos
 
 Cada comando y su salida forman un bloque. Una barra en el margen izquierdo indica su estado
@@ -180,9 +208,9 @@ conserva su sitio al desplazarse, al recortarse el historial y al redimensionar.
 Los botones de la barra de pestañas (o `Ctrl+Shift+A` y `Ctrl+Shift+E`) abren un panel lateral:
 
 - **Agentes**: pestañas con un agente de código (Claude Code, Codex, Gemini CLI, Aider, OpenCode,
-  entre otros), con su estado (*Trabajando*, *Terminado*, *Esperando tu mensaje*) y el tiempo
-  transcurrido. Un clic va a la pestaña; al pasar el ratón se ven las últimas líneas de la
-  conversación sin cambiar de pestaña.
+  entre otros), con su estado (*Trabajando*, *Necesita tu permiso*, *Terminado*, *Esperando tu
+  mensaje*) y el tiempo transcurrido. Un clic va a la pestaña; al pasar el ratón se ven las
+  últimas líneas de la conversación sin cambiar de pestaña.
 - **Subagentes**: bajo cada sesión de Claude Code, los subagentes que lanza, con su descripción, el
   tiempo en marcha y la herramienta que usan. Se leen, sin modificarlos, de los archivos de sesión
   de `~/.claude/projects`.
@@ -191,8 +219,14 @@ Los botones de la barra de pestañas (o `Ctrl+Shift+A` y `Ctrl+Shift+E`) abren u
 
 **Avisos.** Cuando un agente termina y no estás viendo su pestaña, Garbo muestra un aviso del
 escritorio ("Claude Code ha terminado", con el tema de la conversación, la carpeta y el tiempo que
-trabajó). Al pulsarlo, Garbo se pone delante en esa pestaña. En *Ajustes → Avisos* se elige cuándo
-avisar, el tiempo mínimo de trabajo y el sonido, y se puede enviar uno de prueba.
+trabajó). Si el agente se queda esperando tu permiso o tu respuesta, también te avisa ("Claude Code
+necesita tu permiso", con lo que pide), y en el panel y en la pestaña se ve en amarillo. Al pulsar
+un aviso, Garbo se pone delante en esa pestaña. En *Ajustes → Avisos* se elige cuándo avisar, el
+tiempo mínimo de trabajo, el sonido y si avisar cuando te necesita, y se puede enviar uno de prueba.
+
+Para saber con exactitud si un agente trabaja, te espera o ha terminado, Garbo implementa el
+protocolo de estado de programas (OSC 7501), que usa Claude Code desde la 2.1.295. Con los agentes
+que no lo usan, el estado se deduce de su actividad.
 
 **Pegar capturas.** Si al pegar el portapapeles tiene una imagen (por ejemplo, tras `ImprPant`),
 Garbo la guarda en `~/.cache/garbo/capturas` y pega su ruta, que Claude Code y otros agentes

@@ -57,19 +57,29 @@ pub struct State {
     pub window: Arc<Window>,
     pub renderer: Renderer,
     pub glyphs: GlyphCache,
+    /// Terminales (uno por panel). `active`: el del panel con el foco de la pestaña activa.
     pub tabs: Vec<Tab>,
     pub active: usize,
+    /// Pestañas de la barra: cada una reparte su espacio entre uno o varios terminales.
+    pub groups: Vec<crate::panes::Group>,
+    pub group: usize,
+    /// Línea divisoria que se está arrastrando: (camino en el árbol, lado a lado, área que reparte).
+    pub drag: Option<(Vec<bool>, bool, crate::panes::Rect)>,
     pub next_id: u64,
     pub scale: f32,
     pub font_pt: f32,
     pub mods: ModifiersState,
     pub mouse: (f32, f32),
+    /// Enlace o ruta bajo el ratón con Ctrl pulsado (pestaña, celda del ratón, lo encontrado).
+    pub link: Option<(u64, (usize, usize), Option<crate::links::Found>)>,
     pub selecting: bool,
     pub mouse_buttons: u8,
     pub last_click: (Instant, u8),
     pub hover: Option<TabHit>,
     pub cursor_icon: winit::window::CursorIcon,
     pub palette: Option<Palette>,
+    /// Búsqueda en el historial (Ctrl+Shift+F), de la pestaña `Search::tab`.
+    pub search: Option<crate::search::Search>,
     /// Menú de completado abierto (Tab).
     pub menu: Option<crate::complete::Menu>,
     /// "Menú al escribir": lo que había escrito antes de la última tecla; el menú se abre cuando
@@ -96,11 +106,29 @@ pub struct State {
 /// Geometría del área de terminal en píxeles físicos.
 pub struct Geometry {
     pub tab_bar: Option<TabBar>,
+    /// Celdas del panel con el foco: origen y tamaño.
     pub x: f32,
     pub y: f32,
     pub ws: WindowSize,
     /// Panel lateral (x, y, ancho, alto) si está abierto.
     pub panel: Option<(f32, f32, f32, f32)>,
+    /// Rectángulo del panel con el foco (con su margen).
+    pub pane: crate::panes::Rect,
+    /// Paneles de la pestaña activa.
+    pub panes: Vec<PaneGeo>,
+    pub dividers: Vec<crate::panes::Divider>,
+    /// Zona de los terminales (sin barra de pestañas ni panel lateral).
+    pub area: crate::panes::Rect,
+}
+
+/// Un panel: índice de su terminal en `State::tabs`, su rectángulo y dónde empiezan sus celdas.
+#[derive(Clone, Copy, Debug)]
+pub struct PaneGeo {
+    pub idx: usize,
+    pub rect: crate::panes::Rect,
+    pub x: f32,
+    pub y: f32,
+    pub ws: WindowSize,
 }
 
 impl App {
@@ -123,17 +151,22 @@ impl App {
             glyphs,
             tabs: Vec::new(),
             active: 0,
+            groups: Vec::new(),
+            group: 0,
+            drag: None,
             next_id: 1,
             scale,
             font_pt,
             mods: ModifiersState::empty(),
             mouse: (0.0, 0.0),
+            link: None,
             selecting: false,
             mouse_buttons: 0,
             last_click: (now, 0),
             hover: None,
             cursor_icon: winit::window::CursorIcon::Default,
             palette: None,
+            search: None,
             menu: None,
             menu_auto: None,
             settings: None,
@@ -195,45 +228,87 @@ impl App {
 
     pub fn geometry(&self) -> Geometry {
         let st = self.st.as_ref().unwrap();
-        let m = st.glyphs.fonts.metrics;
         let (w, h) = st.renderer.size();
-        let n_tabs = st.tabs.len().max(1);
+        let n_tabs = st.groups.len().max(1);
         let integrated = !self.cfg.window.decorations;
         let tab_bar = (integrated || self.cfg.window.always_show_tabs || n_tabs > 1)
             .then(|| TabBar::layout(n_tabs, w, st.scale, integrated, st.update.is_some()));
         let top = tab_bar.as_ref().map_or(0.0, |t| t.height);
-        let pad = (self.cfg.window.padding * st.scale).round();
         let panel_w = if st.panel.visible() { crate::panel::PanelState::width(st.scale, w) } else { 0.0 };
         let panel = (panel_w > 0.0).then(|| (w - panel_w, top, panel_w, h - top));
-        let cols = ((w - panel_w - 2.0 * pad) / m.width).floor().max(2.0);
-        let lines = ((h - top - 2.0 * pad) / m.height).floor().max(1.0);
-        Geometry {
-            tab_bar,
-            x: pad,
-            y: top + pad,
-            ws: WindowSize {
-                num_lines: lines as u16,
-                num_cols: cols as u16,
-                cell_width: m.width as u16,
-                cell_height: m.height as u16,
-            },
-            panel,
+        let area = [0.0, top, w - panel_w, h - top];
+        let gap = crate::panes::gap(st.scale);
+        let (panes, dividers) = match st.groups.get(st.group) {
+            Some(g) => (self.pane_geos(&g.layout, area), g.layout.dividers(area, gap)),
+            None => (Vec::new(), Vec::new()),
+        };
+        let focus = panes.iter().find(|p| p.idx == st.active).or(panes.first()).copied();
+        let fallback = self.pane_geo(usize::MAX, area);
+        let f = focus.unwrap_or(fallback);
+        Geometry { tab_bar, x: f.x, y: f.y, ws: f.ws, panel, pane: f.rect, panes, dividers, area }
+    }
+
+    /// Dónde empiezan las celdas de un panel y cuántas caben (con el margen de la ventana).
+    fn pane_geo(&self, idx: usize, rect: crate::panes::Rect) -> PaneGeo {
+        let st = self.st.as_ref().unwrap();
+        let m = st.glyphs.fonts.metrics;
+        let pad = (self.cfg.window.padding * st.scale).round();
+        let cols = ((rect[2] - 2.0 * pad) / m.width).floor().max(2.0);
+        let lines = ((rect[3] - 2.0 * pad) / m.height).floor().max(1.0);
+        PaneGeo {
+            idx,
+            rect,
+            x: rect[0] + pad,
+            y: rect[1] + pad,
+            ws: WindowSize { num_lines: lines as u16, num_cols: cols as u16, cell_width: m.width as u16, cell_height: m.height as u16 },
         }
     }
 
-    /// Recalcula filas/columnas y avisa a todos los PTY si cambiaron.
-    pub fn relayout(&mut self) {
-        let ws = self.geometry().ws;
+    fn pane_geos(&self, layout: &crate::panes::Layout, area: crate::panes::Rect) -> Vec<PaneGeo> {
+        let st = self.st.as_ref().unwrap();
+        layout
+            .rects(area, crate::panes::gap(st.scale))
+            .into_iter()
+            .filter_map(|(id, r)| st.tabs.iter().position(|t| t.id == id).map(|i| self.pane_geo(i, r)))
+            .collect()
+    }
+
+    /// Pone `active` en el terminal con el foco de la pestaña activa.
+    fn sync_active(&mut self) {
         let st = self.st();
+        if let Some(i) = st.groups.get(st.group).and_then(|g| st.tabs.iter().position(|t| t.id == g.focus)) {
+            st.active = i;
+        }
+    }
+
+    /// ¿Tiene la pestaña activa más de un panel?
+    pub fn has_splits(&self) -> bool {
+        let Some(st) = self.st.as_ref() else { return false };
+        st.groups.get(st.group).is_some_and(|g| matches!(g.layout, crate::panes::Layout::Split { .. }))
+    }
+
+    /// Recalcula filas/columnas de cada panel y avisa a los PTY que cambiaron (a todos si
+    /// `last_ws.num_cols` es 0: cambió la fuente, la escala…).
+    pub fn relayout(&mut self) {
+        let geo = self.geometry();
+        let area = geo.area;
+        let sizes: Vec<(usize, WindowSize)> = {
+            let st = self.st.as_ref().unwrap();
+            st.groups.iter().flat_map(|g| self.pane_geos(&g.layout, area)).map(|p| (p.idx, p.ws)).collect()
+        };
         let same = |a: &WindowSize, b: &WindowSize| {
             (a.num_lines, a.num_cols, a.cell_width, a.cell_height) == (b.num_lines, b.num_cols, b.cell_width, b.cell_height)
         };
-        if !same(&ws, &st.last_ws) {
-            st.last_ws = ws;
-            for tab in &mut st.tabs {
-                tab.resize(ws);
+        let st = self.st();
+        let force = st.last_ws.num_cols == 0;
+        for (i, ws) in sizes {
+            if let Some(tab) = st.tabs.get_mut(i) {
+                if force || !same(&ws, &tab.ws) {
+                    tab.resize(ws);
+                }
             }
         }
+        st.last_ws = geo.ws;
         st.window.request_redraw();
     }
 
@@ -256,8 +331,11 @@ impl App {
             Ok(tab) => {
                 let st = self.st();
                 st.tabs.push(tab);
-                st.active = st.tabs.len() - 1;
-                st.last_ws.num_cols = 0; // fuerza resize con la geometría real
+                st.groups.push(crate::panes::Group::new(id));
+                st.group = st.groups.len() - 1;
+                st.search = None;
+                self.sync_active();
+                self.st().last_ws.num_cols = 0; // fuerza resize con la geometría real
                 self.relayout();
                 self.update_title();
             }
@@ -265,31 +343,112 @@ impl App {
         }
     }
 
-    /// Cierra una pestaña. Devuelve `true` si ya no queda ninguna.
-    pub fn close_tab(&mut self, idx: usize) -> bool {
+    /// Parte el panel con el foco: el nuevo terminal (en la misma carpeta) va a la derecha
+    /// (`side`) o debajo, y se queda con el foco.
+    pub fn split(&mut self, side: bool) {
+        let cwd = self.active_tab().and_then(Tab::cwd);
+        let proxy = self.proxy.clone();
+        let cfg = self.cfg.clone();
         let st = self.st();
-        if idx >= st.tabs.len() {
-            return st.tabs.is_empty();
+        let Some(focus) = st.groups.get(st.group).map(|g| g.focus) else { return };
+        let id = st.next_id;
+        st.next_id += 1;
+        let ws = st.last_ws;
+        match Tab::spawn(id, &cfg, ws, cwd, proxy) {
+            Ok(tab) => {
+                let st = self.st();
+                st.tabs.push(tab);
+                let g = &mut st.groups[st.group];
+                g.layout.split(focus, id, side);
+                g.focus = id;
+                st.search = None;
+                self.sync_active();
+                self.relayout();
+                self.update_title();
+            }
+            Err(e) => log::error!("No se pudo abrir el shell: {e}"),
         }
+    }
+
+    /// Pasa el foco al panel vecino en esa dirección.
+    pub fn focus_pane(&mut self, dir: crate::panes::Dir) {
+        let geo = self.geometry();
+        let st = self.st();
+        let rects: Vec<(u64, crate::panes::Rect)> = geo.panes.iter().map(|p| (st.tabs[p.idx].id, p.rect)).collect();
+        let Some(from) = st.tabs.get(st.active).map(|t| t.id) else { return };
+        if let Some(to) = crate::panes::neighbor(&rects, from, dir) {
+            if let Some(i) = st.tabs.iter().position(|t| t.id == to) {
+                self.select_tab(i);
+            }
+        }
+    }
+
+    /// Cierra un panel (terminal `idx`); si era el último de su pestaña, la pestaña. Devuelve
+    /// `true` si ya no queda ninguna.
+    pub fn close_pane(&mut self, idx: usize) -> bool {
+        let st = self.st();
+        let Some(id) = st.tabs.get(idx).map(|t| t.id) else { return st.tabs.is_empty() };
         st.tabs.remove(idx);
-        if st.tabs.is_empty() {
+        if let Some(g) = st.groups.iter().position(|g| g.layout.contains(id)) {
+            let layout = std::mem::replace(&mut st.groups[g].layout, crate::panes::Layout::Leaf(0));
+            match layout.remove(id) {
+                Some(rest) => {
+                    let group = &mut st.groups[g];
+                    if group.focus == id {
+                        group.focus = rest.leaves()[0];
+                    }
+                    group.layout = rest;
+                }
+                None => {
+                    st.groups.remove(g);
+                    if g < st.group || st.group >= st.groups.len() {
+                        st.group = st.group.saturating_sub(1);
+                    }
+                }
+            }
+        }
+        if st.tabs.is_empty() || st.groups.is_empty() {
             return true;
         }
-        if st.active >= idx && st.active > 0 {
-            st.active -= 1;
-        }
-        st.last_ws.num_cols = 0;
+        self.sync_active();
+        self.st().last_ws.num_cols = 0;
         self.relayout();
         self.update_title();
         false
     }
 
+    /// Cierra una pestaña de la barra con todos sus paneles.
+    pub fn close_tab(&mut self, g: usize) -> bool {
+        let Some(ids) = self.st().groups.get(g).map(|g| g.layout.leaves()) else { return false };
+        let mut last = false;
+        for id in ids {
+            if let Some(i) = self.st().tabs.iter().position(|t| t.id == id) {
+                last = self.close_pane(i);
+            }
+        }
+        last
+    }
+
+    /// Lleva el foco al terminal `idx` (y a su pestaña).
     pub fn select_tab(&mut self, idx: usize) {
         let st = self.st();
-        if idx < st.tabs.len() && idx != st.active {
+        let Some(id) = st.tabs.get(idx).map(|t| t.id) else { return };
+        let Some(g) = st.groups.iter().position(|g| g.layout.contains(id)) else { return };
+        st.group = g;
+        st.groups[g].focus = id;
+        if idx != st.active {
             st.active = idx;
+            st.search = None;
             st.window.request_redraw();
             self.update_title();
+        }
+    }
+
+    /// Activa la pestaña `g` de la barra (con el panel que tenía el foco).
+    pub fn select_group(&mut self, g: usize) {
+        let Some(id) = self.st().groups.get(g).map(|g| g.focus) else { return };
+        if let Some(i) = self.st().tabs.iter().position(|t| t.id == id) {
+            self.select_tab(i);
         }
     }
 
@@ -325,6 +484,39 @@ impl App {
             let cb = if to_primary { &mut st.selection_clip } else { &mut st.clipboard };
             if let Err(e) = cb.set_contents(text) {
                 log::warn!("portapapeles: {e}");
+            }
+        }
+    }
+
+    /// Abre lo encontrado con Ctrl+clic (ver `links.rs`).
+    pub fn open_link(&mut self, target: crate::links::Target) {
+        use crate::links::{Open, Target};
+        let cwd = self.active_tab().and_then(Tab::cwd);
+        let open = match target {
+            Target::Url(url) => Open::Spawn(vec!["xdg-open".into(), url]),
+            Target::File { path, line, col } => {
+                let editor = std::env::var("VISUAL").ok().filter(|e| !e.is_empty()).or_else(|| std::env::var("EDITOR").ok());
+                crate::links::open_file(&path, line, col, editor.as_deref())
+            }
+        };
+        match open {
+            Open::Spawn(cmd) => {
+                let mut c = std::process::Command::new(&cmd[0]);
+                c.args(&cmd[1..]).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
+                if let Some(d) = &cwd {
+                    c.current_dir(d);
+                }
+                match c.spawn() {
+                    // Se recoge en segundo plano para que no quede como proceso zombi.
+                    Ok(mut child) => drop(std::thread::spawn(move || child.wait())),
+                    Err(e) => log::warn!("No se pudo abrir {:?}: {e}", cmd),
+                }
+            }
+            Open::InTab(cmd) => {
+                self.new_tab();
+                if let Some(tab) = self.active_tab() {
+                    tab.input(format!("{cmd}\r").into_bytes());
+                }
             }
         }
     }
@@ -418,34 +610,41 @@ impl App {
     pub fn run_action(&mut self, action: Action) -> bool {
         match action {
             Action::NewTab => self.new_tab(),
+            // Cierra el panel con el foco (y la pestaña si era el único).
             Action::CloseTab => {
                 let idx = self.st().active;
-                return self.close_tab(idx);
+                return self.close_pane(idx);
             }
             Action::NextTab | Action::PrevTab => {
                 let st = self.st();
-                let n = st.tabs.len();
+                let n = st.groups.len();
                 if n > 1 {
                     let d = if action == Action::NextTab { 1 } else { n - 1 };
-                    let idx = (st.active + d) % n;
-                    self.select_tab(idx);
+                    let g = (st.group + d) % n;
+                    self.select_group(g);
                 }
             }
             Action::MoveTabLeft | Action::MoveTabRight => {
                 let st = self.st();
-                let i = st.active;
+                let i = st.group;
                 let j = if action == Action::MoveTabLeft { i.checked_sub(1) } else { Some(i + 1) };
-                if let Some(j) = j.filter(|&j| j < st.tabs.len()) {
-                    st.tabs.swap(i, j);
-                    st.active = j;
+                if let Some(j) = j.filter(|&j| j < st.groups.len()) {
+                    st.groups.swap(i, j);
+                    st.group = j;
                     st.window.request_redraw();
                 }
             }
             Action::GotoTab(i) => {
-                let n = self.st().tabs.len();
+                let n = self.st().groups.len();
                 // Alt+9 siempre va a la última, como en los navegadores
-                self.select_tab(if i == 8 { n - 1 } else { i });
+                self.select_group(if i == 8 { n - 1 } else { i });
             }
+            Action::SplitRight => self.split(true),
+            Action::SplitDown => self.split(false),
+            Action::FocusLeft => self.focus_pane(crate::panes::Dir::Left),
+            Action::FocusRight => self.focus_pane(crate::panes::Dir::Right),
+            Action::FocusUp => self.focus_pane(crate::panes::Dir::Up),
+            Action::FocusDown => self.focus_pane(crate::panes::Dir::Down),
             Action::Copy => {
                 // Sin texto seleccionado pero con un bloque seleccionado: se copia el bloque.
                 let st = self.st();
@@ -464,6 +663,18 @@ impl App {
                 st.window.request_redraw();
             }
             Action::ToggleAgents => self.toggle_panel(true),
+            Action::Search => {
+                let st = self.st();
+                let tab = st.tabs.get(st.active).map(|t| (t.id, t.selected_block));
+                st.search = match (&st.search, tab) {
+                    (Some(s), Some((id, _))) if s.tab == id => None,
+                    (_, Some((id, block))) => Some(crate::search::Search::new(id, block)),
+                    _ => None,
+                };
+                st.palette = None;
+                st.menu = None;
+                st.window.request_redraw();
+            }
             Action::TogglePorts => self.toggle_panel(false),
             Action::PrevBlock => self.goto_block(-1),
             Action::NextBlock => self.goto_block(1),
@@ -515,13 +726,14 @@ impl App {
     pub fn refresh_sessions(&mut self) -> bool {
         let now = Instant::now();
         let Some(st) = self.st.as_mut() else { return false };
-        let (active, focused) = (st.active, st.focused);
+        let focused = st.focused;
         let mut changed = false;
         let agents_panel = st.panel.agents;
         let ncfg = &self.cfg.notifications;
         let min_work = std::time::Duration::from_secs(ncfg.min_work_secs);
-        for (i, tab) in st.tabs.iter_mut().enumerate() {
-            let viewing = focused && i == active;
+        let visible: Vec<u64> = st.groups.get(st.group).map(|g| g.layout.leaves()).unwrap_or_default();
+        for tab in st.tabs.iter_mut() {
+            let viewing = focused && visible.contains(&tab.id);
             changed |= tab.refresh_session(viewing, now);
             if agents_panel {
                 changed |= tab.refresh_subagents(now);
@@ -532,17 +744,41 @@ impl App {
                     crate::notify::close(id);
                 }
             }
-            if let Some(worked) = tab.notice.update(tab.session.is_working(), min_work, now) {
-                let alive = tab.session.status != crate::sessions::Status::Exited;
-                if let Some(agent) = tab.session.agent.filter(|_| alive && crate::notify::wanted(ncfg, viewing)) {
-                    let dir = crate::terminal::short_dir(&tab.cwd_label);
-                    let (title, body) = crate::notify::notice_text(agent.name, tab.label(), &dir, worked);
-                    // Uno por pestaña: el anterior sobra.
-                    if let Some(old) = tab.notice.shown.take() {
-                        crate::notify::close(old);
-                    }
-                    crate::notify::send(crate::notify::Notice { tab: tab.id, title, body, sound: ncfg.sound }, self.proxy.clone());
+            // Con OSC 7501 el agente dice si trabaja, te espera o terminó; si no, se deduce de su salida.
+            use crate::notify::Activity;
+            use crate::status::State;
+            let activity = match tab.session.reported {
+                Some(State::Working) => Activity::Working,
+                Some(State::Blocked) => Activity::Blocked,
+                Some(State::Done | State::Error) => Activity::Finished,
+                Some(State::Idle) => Activity::Idle,
+                None if tab.session.is_working() => Activity::Working,
+                None => Activity::Quiet,
+            };
+            let alive = tab.session.status != crate::sessions::Status::Exited;
+            let agent = tab.session.agent.filter(|_| alive);
+            let dir = crate::terminal::short_dir(&tab.cwd_label);
+            let mut notice = None;
+            if let Some(worked) = tab.notice.update(activity, min_work, now) {
+                if let Some(agent) = agent.filter(|_| crate::notify::wanted(ncfg, viewing)) {
+                    notice = Some(crate::notify::notice_text(agent.name, tab.label(), &dir, worked));
                 }
+            }
+            let blocked = match tab.session.status {
+                crate::sessions::Status::Blocked(kind) => Some(kind),
+                _ => None,
+            };
+            if tab.notice.blocked_now(blocked.is_some(), now) && ncfg.blocked && !viewing {
+                if let (Some(agent), Some(kind)) = (agent, blocked) {
+                    notice = Some(crate::notify::blocked_text(agent.name, kind, tab.session.detail.as_deref(), tab.label(), &dir));
+                }
+            }
+            if let Some((title, body)) = notice {
+                // Uno por pestaña: el anterior sobra.
+                if let Some(old) = tab.notice.shown.take() {
+                    crate::notify::close(old);
+                }
+                crate::notify::send(crate::notify::Notice { tab: tab.id, title, body, sound: ncfg.sound }, self.proxy.clone());
             }
         }
         // Animación del indicador "trabajando" (~7 fps, solo mientras algún agente trabaja).
@@ -816,13 +1052,28 @@ impl App {
         let st = self.st.as_mut().unwrap();
         let (w, h) = st.renderer.size();
         let views: Vec<ui::TabView> = st
-            .tabs
+            .groups
             .iter()
-            .map(|t| ui::TabView {
-                label: t.label().to_string(),
-                exited: t.exited,
-                agent: t.session.agent,
-                status: t.session.status,
+            .filter_map(|g| {
+                let panes: Vec<&Tab> = g.layout.leaves().iter().filter_map(|id| st.tabs.iter().find(|t| t.id == *id)).collect();
+                let focus = panes.iter().find(|t| t.id == g.focus).or(panes.first())?;
+                // El indicador de la pestaña, del panel más urgente: te necesita, trabaja, terminó.
+                use crate::sessions::Status;
+                let rank = |t: &&&Tab| match (t.session.agent, t.session.status) {
+                    (None, _) => 0,
+                    (_, Status::Blocked(_)) => 4,
+                    (_, Status::Working) => 3,
+                    (_, Status::Done) => 2,
+                    _ => 1,
+                };
+                let lead = panes.iter().max_by_key(rank).unwrap_or(focus);
+                let n = panes.len();
+                Some(ui::TabView {
+                    label: if n > 1 { format!("{} (+{})", focus.label(), n - 1) } else { focus.label().to_string() },
+                    exited: focus.exited,
+                    agent: lead.session.agent,
+                    status: lead.session.status,
+                })
             })
             .collect();
         let toggles = ui::Toggles { agents: st.panel.agents, ports: st.panel.ports };
@@ -841,15 +1092,18 @@ impl App {
                 atlas: &st.renderer.atlas,
             };
             if let Some(tb) = &geo.tab_bar {
-                tb.draw(&mut p, theme, w, &views, st.active, st.hover, st.scale, st.update.as_ref(), toggles, phase);
+                tb.draw(&mut p, theme, w, &views, st.group, st.hover, st.scale, st.update.as_ref(), toggles, phase);
             }
-            if let Some(tab) = st.tabs.get(st.active) {
+            let multi = geo.panes.len() > 1;
+            for pane in &geo.panes {
+                let Some(tab) = st.tabs.get(pane.idx) else { continue };
+                let is_focus = pane.idx == st.active;
                 let term = tab.term.lock();
                 let v = TermView {
-                    x: geo.x,
-                    y: geo.y,
-                    lines: geo.ws.num_lines as usize,
-                    focused: st.focused && st.palette.is_none() && st.settings.is_none(),
+                    x: pane.x,
+                    y: pane.y,
+                    lines: pane.ws.num_lines as usize,
+                    focused: is_focus && st.focused && st.palette.is_none() && st.settings.is_none(),
                     cursor_on: st.cursor_on || !st.focused,
                 };
                 let bs = tab.blocks.lock().unwrap();
@@ -860,10 +1114,15 @@ impl App {
                     .and_then(|_| tab.cwd())
                     .and_then(|d| crate::complete::git_branch(&d));
                 view::draw_prompts(&mut p, &term, theme, &v, &bs, branch.as_deref(), st.scale);
-                view::draw_terminal(&mut p, &term, theme, &v, Some(&bs));
+                let search = st.search.as_mut().filter(|s| s.tab == tab.id);
+                let hl = search.map(|s| s.highlights(&term));
+                view::draw_terminal(&mut p, &term, theme, &v, Some(&bs), hl.as_ref());
+                if let Some((_, _, Some(found))) = st.link.as_ref().filter(|l| l.0 == tab.id) {
+                    view::draw_underline(&mut p, &term, theme, &v, found.start, found.end, st.scale);
+                }
                 let start = bs.input_start;
                 // Menú de completado: se refina con lo que se escribe y se cierra si deja de aplicar.
-                if st.menu.is_some() || st.menu_auto.is_some() {
+                if is_focus && (st.menu.is_some() || st.menu_auto.is_some()) {
                     let input = crate::terminal::input_for(&term, start);
                     let cwd = input.as_ref().and_then(|_| tab.cwd());
                     if let Some(menu) = st.menu.as_mut() {
@@ -891,12 +1150,36 @@ impl App {
                     }
                 }
                 if show_blocks {
-                    view::draw_blocks(&mut p, &term, theme, &v, &bs, tab.selected_block, w, st.scale);
+                    view::draw_blocks(&mut p, &term, theme, &v, &bs, tab.selected_block, (pane.rect[0], pane.rect[0] + pane.rect[2]), st.scale);
                 }
-                if let Some(menu) = st.menu.as_mut().filter(|_| v.focused) {
+                if let Some(menu) = st.menu.as_mut().filter(|m| v.focused && m.tab == tab.id) {
                     // Por encima del texto del terminal.
                     p.out.append(p.fg);
                     view::draw_menu(&mut p, &term, theme, &v, menu, st.scale);
+                }
+                if let Some(search) = st.search.as_mut().filter(|s| s.tab == tab.id) {
+                    p.out.append(p.fg);
+                    let area_w = pane.ws.num_cols as f32 * p.metrics().width;
+                    search.draw(&mut p, theme, pane.x, pane.y, area_w, st.scale);
+                }
+            }
+            // Con varios paneles: líneas divisorias y los que no tienen el foco, algo atenuados.
+            if multi {
+                p.out.append(p.fg);
+                for pane in geo.panes.iter().filter(|p| p.idx != st.active) {
+                    let [x, y, w, h] = pane.rect;
+                    p.rect(x, y, w, h, theme.background, 0.35);
+                }
+                let line = st.scale.round().max(1.0);
+                for d in &geo.dividers {
+                    let [x, y, w, h] = d.rect;
+                    let dragging = st.drag.as_ref().is_some_and(|g| g.0 == d.path);
+                    let (c, a) = if dragging { (theme.accent, 1.0) } else { (theme.foreground, 0.16) };
+                    if d.side {
+                        p.rect((x + (w - line) / 2.0).round(), y, line, h, c, a);
+                    } else {
+                        p.rect(x, (y + (h - line) / 2.0).round(), w, line, c, a);
+                    }
                 }
             }
             if let Some((px, py, pw, ph)) = geo.panel {
@@ -912,6 +1195,7 @@ impl App {
                             label: t.dir_label(),
                             agent: t.session.agent?,
                             status: t.session.status,
+                            detail: t.session.detail.as_deref(),
                             since: t.session.since,
                             active: i == st.active,
                             subagents: &t.subagents.list,

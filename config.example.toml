@@ -45,6 +45,7 @@ complete_as_you_type = false # abrir el menú de completado solo, mientras se es
 agents = "unfocused"     # unfocused: si no estás viendo su pestaña | always | never
 min_work_secs = 5        # solo si trabajó al menos estos segundos
 sound = true
+blocked = true           # avisar también cuando un agente espera tu permiso o tu respuesta
 
 # Sobrescribe colores del tema elegido
 [colors]

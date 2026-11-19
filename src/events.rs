@@ -20,6 +20,19 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow};
 use winit::keyboard::{Key, ModifiersState, NamedKey};
 use winit::window::{CursorIcon, ResizeDirection, Window, WindowId};
 
+/// Línea divisoria de paneles bajo el ratón (con unos píxeles de margen para atinar).
+fn divider_at(geo: &crate::app::Geometry, x: f32, y: f32, scale: f32) -> Option<&crate::panes::Divider> {
+    let m = 4.0 * scale;
+    geo.dividers.iter().find(|d| {
+        let [dx, dy, dw, dh] = d.rect;
+        if d.side {
+            x >= dx - m && x < dx + dw + m && y >= dy && y < dy + dh
+        } else {
+            y >= dy - m && y < dy + dh + m && x >= dx && x < dx + dw
+        }
+    })
+}
+
 fn resize_cursor(dir: ResizeDirection) -> CursorIcon {
     match dir {
         ResizeDirection::East => CursorIcon::EResize,
@@ -246,7 +259,7 @@ impl ApplicationHandler<UserEvent> for App {
                 st.tabs[idx].write(fmt(VteRgb { r: c.0, g: c.1, b: c.2 }).into_bytes());
             }
             TermEvent::TextAreaSizeRequest(fmt) => {
-                let ws = st.last_ws;
+                let ws = st.tabs[idx].ws;
                 st.tabs[idx].write(fmt(ws).into_bytes());
             }
             TermEvent::CursorBlinkingChange => {
@@ -254,8 +267,8 @@ impl ApplicationHandler<UserEvent> for App {
                 st.next_blink = Instant::now() + BLINK;
             }
             TermEvent::Exit | TermEvent::ChildExit(_) => {
-                // Como en la mayoría de terminales modernas: al salir el shell se cierra la pestaña.
-                if self.close_tab(idx) {
+                // Como en la mayoría de terminales modernas: al salir el shell se cierra su panel.
+                if self.close_pane(idx) {
                     el.exit();
                 }
             }
@@ -287,7 +300,18 @@ impl ApplicationHandler<UserEvent> for App {
                 }
                 st.window.request_redraw();
             }
-            WindowEvent::ModifiersChanged(m) => self.st().mods = m.state(),
+            WindowEvent::ModifiersChanged(m) => {
+                let st = self.st();
+                let ctrl_was = st.mods.control_key();
+                st.mods = m.state();
+                // Ctrl subraya el enlace bajo el ratón (y al soltarlo, deja de hacerlo).
+                if ctrl_was != st.mods.control_key() {
+                    st.link = None;
+                    let (x, y) = st.mouse;
+                    st.window.request_redraw();
+                    self.on_mouse_move(x, y);
+                }
+            }
             WindowEvent::KeyboardInput { event, .. } if event.state == ElementState::Pressed => {
                 if self.on_key(event) {
                     el.exit();
@@ -398,6 +422,11 @@ impl App {
             return false;
         }
 
+        // Búsqueda abierta (Ctrl+Shift+F): el teclado va a la barra.
+        if self.search_open() {
+            return self.on_search_key(&ev);
+        }
+
         // Menú de completado abierto: ↑ ↓ (o Tab / Shift+Tab) eligen, Intro o → aceptan y Esc
         // cierra. El resto de teclas llega al shell y el menú se refina con lo escrito (`App::draw`).
         if self.on_menu_key(&ev) {
@@ -406,7 +435,11 @@ impl App {
 
         let mods = self.st().mods;
         if let Some(action) = self.keys.lookup(&ev.logical_key, mods) {
-            return self.run_action(action);
+            use crate::keybindings::Action::{FocusDown, FocusLeft, FocusRight, FocusUp};
+            let pane_nav = matches!(action, FocusLeft | FocusRight | FocusUp | FocusDown);
+            if !pane_nav || self.has_splits() {
+                return self.run_action(action);
+            }
         }
 
         let tcfg = &self.cfg.terminal;
@@ -478,6 +511,59 @@ impl App {
             }
             self.scroll_to_bottom();
         }
+        false
+    }
+
+    /// ¿Hay una búsqueda abierta en la pestaña activa?
+    fn search_open(&self) -> bool {
+        let Some(st) = self.st.as_ref() else { return false };
+        st.search.as_ref().is_some_and(|s| st.tabs.get(st.active).is_some_and(|t| t.id == s.tab))
+    }
+
+    /// Teclas con la búsqueda abierta: escribir busca, Intro / ↑ van a la anterior, Shift+Intro /
+    /// ↓ a la siguiente y Esc cierra. Los atajos de Garbo siguen funcionando (Ctrl+Shift+F cierra;
+    /// pegar pega en lo buscado).
+    fn on_search_key(&mut self, ev: &KeyEvent) -> bool {
+        use crate::keybindings::Action;
+        let mods = self.st().mods;
+        let mut pasted = None;
+        match self.keys.lookup(&ev.logical_key, mods) {
+            Some(Action::Paste) => {
+                let text = self.st().clipboard.get_contents().unwrap_or_default();
+                pasted = Some(text.lines().next().unwrap_or("").chars().filter(|c| !c.is_control()).collect::<String>());
+            }
+            Some(action) => return self.run_action(action),
+            None => {}
+        }
+        let st = self.st();
+        if ev.logical_key == Key::Named(NamedKey::Escape) {
+            st.search = None;
+            st.window.request_redraw();
+            return false;
+        }
+        let Some(tab) = st.tabs.get(st.active) else { return false };
+        let Some(search) = st.search.as_mut() else { return false };
+        let typed = ev.text.as_ref().filter(|t| !mods.control_key() && !mods.alt_key() && t.chars().all(|c| !c.is_control()));
+        match &ev.logical_key {
+            Key::Named(NamedKey::Enter) => search.step(&mut tab.term.lock(), !mods.shift_key()),
+            Key::Named(NamedKey::ArrowUp) => search.step(&mut tab.term.lock(), true),
+            Key::Named(NamedKey::ArrowDown) => search.step(&mut tab.term.lock(), false),
+            Key::Named(NamedKey::Backspace) => {
+                if mods.control_key() {
+                    search.query.clear();
+                } else {
+                    search.query.pop();
+                }
+                search.update(&mut tab.term.lock());
+            }
+            _ => {
+                if let Some(t) = pasted.as_deref().or(typed.map(|t| t.as_str())) {
+                    search.query.push_str(t);
+                    search.update(&mut tab.term.lock());
+                }
+            }
+        }
+        st.window.request_redraw();
         false
     }
 
@@ -613,12 +699,27 @@ impl App {
             st.hover = hover;
             st.window.request_redraw();
         }
+        // Arrastrando una línea divisoria: cambia el reparto de los paneles.
+        if let Some((path, side, area)) = self.st().drag.clone() {
+            let ratio = if side { (x - area[0]) / area[2].max(1.0) } else { (y - area[1]) / area[3].max(1.0) };
+            let st = self.st();
+            let g = st.group;
+            if let Some(group) = st.groups.get_mut(g) {
+                group.layout.set_ratio(&path, ratio);
+            }
+            self.relayout();
+            return;
+        }
         let in_bar = geo.tab_bar.as_ref().is_some_and(|tb| y < tb.height);
-        let in_gutter = !in_bar && x < geo.x && self.blocks_active();
+        let in_gutter = !in_bar && self.blocks_active() && geo.panes.iter().any(|p| x >= p.rect[0] && x < p.x && y >= p.y && y < p.rect[1] + p.rect[3]);
+        let divider = (!in_bar).then(|| divider_at(&geo, x, y, self.st().scale)).flatten();
+        let on_link = !in_bar && !in_gutter && divider.is_none() && self.update_link(x, y);
         let icon = match self.resize_edge(x, y) {
             Some(dir) => resize_cursor(dir),
             None if in_bar => CursorIcon::Default,
-            None if in_gutter => CursorIcon::Pointer,
+            None if divider.is_some_and(|d| d.side) => CursorIcon::ColResize,
+            None if divider.is_some() => CursorIcon::RowResize,
+            None if in_gutter || on_link => CursorIcon::Pointer,
             None => CursorIcon::Text,
         };
         let st = self.st();
@@ -716,6 +817,30 @@ impl App {
             return false;
         }
 
+        // Barra de búsqueda: sus botones (el resto de clics sigue su camino).
+        if pressed && button == MouseButton::Left && self.search_open() {
+            let st = self.st();
+            if let Some(hit) = st.search.as_ref().and_then(|s| s.hit(x, y)) {
+                use crate::search::Hit;
+                if hit == Hit::Close {
+                    st.search = None;
+                } else if let (Some(tab), Some(search)) = (st.tabs.get(st.active), st.search.as_mut()) {
+                    let mut term = tab.term.lock();
+                    match hit {
+                        Hit::Prev => search.step(&mut term, true),
+                        Hit::Next => search.step(&mut term, false),
+                        Hit::Block => {
+                            search.block_only = !search.block_only;
+                            search.update(&mut term);
+                        }
+                        _ => {}
+                    }
+                }
+                st.window.request_redraw();
+                return false;
+            }
+        }
+
         // Menú de completado: un clic en una opción la elige; fuera, lo cierra (y el clic sigue).
         if pressed && self.st().menu.is_some() {
             let st = self.st();
@@ -764,7 +889,7 @@ impl App {
                 let double = now.duration_since(st.last_click.0) < MULTI_CLICK && st.last_click.1 == 1;
                 st.last_click = (now, if double { 0 } else { 1 });
                 match (tb.hit(x, y), button) {
-                    (Some(TabHit::Tab(i)), MouseButton::Left) => self.select_tab(i),
+                    (Some(TabHit::Tab(i)), MouseButton::Left) => self.select_group(i),
                     (Some(TabHit::Tab(i) | TabHit::Close(i)), MouseButton::Middle)
                     | (Some(TabHit::Close(i)), MouseButton::Left) => return self.close_tab(i),
                     (Some(TabHit::NewTab), _) => self.new_tab(),
@@ -788,8 +913,32 @@ impl App {
             return false;
         }
 
+        // Paneles: arrastrar una línea divisoria los redimensiona; un clic en otro panel le da el foco.
+        if button == MouseButton::Left && !pressed && self.st().drag.take().is_some() {
+            self.st().window.request_redraw();
+            return false;
+        }
+        if pressed && button == MouseButton::Left {
+            if let Some(d) = divider_at(&geo, x, y, self.st().scale) {
+                let drag = (d.path.clone(), d.side, d.area);
+                self.st().drag = Some(drag);
+                self.st().window.request_redraw();
+                return false;
+            }
+        }
+        let geo = match geo.panes.iter().find(|p| {
+            let [px, py, pw, ph] = p.rect;
+            x >= px && x < px + pw && y >= py && y < py + ph
+        }) {
+            Some(p) if pressed && p.idx != self.st().active => {
+                self.select_tab(p.idx);
+                self.geometry()
+            }
+            _ => geo,
+        };
+
         // Margen izquierdo: clic selecciona (o deselecciona) el bloque de esa línea.
-        if pressed && button == MouseButton::Left && x < geo.x && y >= geo.y && self.blocks_active() {
+        if pressed && button == MouseButton::Left && x >= geo.pane[0] && x < geo.x && y >= geo.y && self.blocks_active() {
             let row = ((y - geo.y) / self.st().glyphs.fonts.metrics.height).max(0.0) as i32;
             let st = self.st();
             if let Some(tab) = st.tabs.get_mut(st.active) {
@@ -818,6 +967,16 @@ impl App {
         }
 
         let (col, row, side) = self.cell_at(x, y);
+
+        // Ctrl+clic en un enlace o en una ruta: se abre (también en programas que usan el ratón).
+        if pressed && button == MouseButton::Left && self.st().mods == ModifiersState::CONTROL {
+            self.update_link(x, y);
+            if let Some((_, _, Some(found))) = self.st().link.clone() {
+                self.open_link(found.target);
+                return false;
+            }
+        }
+
         let st = self.st();
         let Some(tab) = st.tabs.get(st.active) else { return false };
         let mode = *tab.term.lock().mode();
@@ -886,6 +1045,39 @@ impl App {
             _ => {}
         }
         false
+    }
+
+    /// Con Ctrl pulsado, busca el enlace o la ruta bajo el ratón (solo al cambiar de celda) para
+    /// subrayarlo. Devuelve si hay uno.
+    fn update_link(&mut self, x: f32, y: f32) -> bool {
+        let cell = self.cell_at(x, y);
+        let st = self.st();
+        if !st.mods.control_key() || st.settings.is_some() || st.palette.is_some() {
+            if st.link.take().is_some_and(|l| l.2.is_some()) {
+                st.window.request_redraw();
+            }
+            return false;
+        }
+        let Some(tab) = st.tabs.get(st.active) else { return false };
+        let key = (cell.0, cell.1);
+        if let Some((id, k, found)) = &st.link {
+            if *id == tab.id && *k == key {
+                return found.is_some();
+            }
+        }
+        let cwd = tab.cwd();
+        let found = {
+            let term = tab.term.lock();
+            let offset = term.grid().display_offset() as i32;
+            crate::links::find(&term, Point::new(Line(cell.1 as i32 - offset), Column(cell.0)), cwd.as_deref())
+        };
+        let changed = st.link.as_ref().map(|l| &l.2) != Some(&found);
+        let has = found.is_some();
+        st.link = Some((tab.id, key, found));
+        if changed {
+            st.window.request_redraw();
+        }
+        has
     }
 
     fn blocks_active(&self) -> bool {

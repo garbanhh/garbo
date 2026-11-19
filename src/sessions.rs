@@ -10,6 +10,7 @@
 
 use std::os::fd::RawFd;
 use std::path::PathBuf;
+use crate::status::{Kind, State, Summary};
 use std::time::{Duration, Instant};
 
 /// Sin salida durante este tiempo, el agente se considera parado.
@@ -47,6 +48,8 @@ const AGENTS: &[(&str, Agent)] = &[
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Status {
     Working,
+    /// Espera algo del usuario para seguir (solo si el agente lo dice por OSC 7501).
+    Blocked(Option<Kind>),
     Done,
     Waiting,
     Exited,
@@ -56,6 +59,10 @@ impl Status {
     pub fn label(self) -> &'static str {
         match self {
             Status::Working => "Trabajando…",
+            Status::Blocked(Some(Kind::Permission)) => "Necesita tu permiso",
+            Status::Blocked(Some(Kind::Question)) => "Te ha hecho una pregunta",
+            Status::Blocked(Some(Kind::Auth)) => "Necesita que inicies sesión",
+            Status::Blocked(None) => "Te necesita",
             Status::Done => "Terminado",
             Status::Waiting => "Esperando tu mensaje",
             Status::Exited => "Cerrado",
@@ -72,19 +79,24 @@ pub struct Session {
     pub since: Instant,
     /// Proceso del agente (líder del grupo en primer plano) mientras se está ejecutando.
     pub pid: Option<i32>,
+    /// Lo que el agente dice que hace o espera (OSC 7501): "Writing hola.txt", "trust this folder".
+    pub detail: Option<String>,
+    /// Estado que informa el propio agente (OSC 7501); `None`: se deduce de su salida.
+    pub reported: Option<State>,
     checked: Option<Instant>,
 }
 
 impl Default for Session {
     fn default() -> Self {
-        Self { agent: None, status: Status::Waiting, since: Instant::now(), pid: None, checked: None }
+        Self { agent: None, status: Status::Waiting, since: Instant::now(), pid: None, detail: None, reported: None, checked: None }
     }
 }
 
 impl Session {
-    /// Recalcula el estado. `viewing` = la pestaña está a la vista del usuario.
+    /// Recalcula el estado. `viewing` = la pestaña está a la vista del usuario. `report`: lo que
+    /// informa el propio programa (OSC 7501), que manda sobre la heurística de salida reciente.
     /// Devuelve `true` si cambió algo visible.
-    pub fn refresh(&mut self, fd: Option<RawFd>, last_output: Instant, viewing: bool, now: Instant) -> bool {
+    pub fn refresh(&mut self, fd: Option<RawFd>, last_output: Instant, viewing: bool, now: Instant, report: Option<Summary>) -> bool {
         let identify = self.checked.is_none_or(|t| now.duration_since(t) >= IDENTIFY_EVERY);
         let mut present = self.agent.is_some() && self.status != Status::Exited;
         let mut changed = false;
@@ -103,6 +115,8 @@ impl Session {
                 }
                 None if present => {
                     self.pid = None;
+                    self.detail = None;
+                    self.reported = None;
                     self.set(Status::Exited, now);
                     return true;
                 }
@@ -112,12 +126,29 @@ impl Session {
         if !present {
             return changed;
         }
-        let working = now.duration_since(last_output) < WORK_WINDOW;
-        let next = match (working, self.status) {
-            (true, _) => Status::Working,
-            (false, Status::Working) if !viewing => Status::Done,
-            (false, Status::Done) if !viewing => Status::Done,
-            _ => Status::Waiting,
+        self.reported = report.as_ref().map(|r| r.state);
+        let detail = report.as_ref().filter(|r| matches!(r.state, State::Working | State::Blocked)).and_then(|r| r.msg.clone());
+        if detail != self.detail {
+            self.detail = detail;
+            changed = true;
+        }
+        // "Terminado" queda hasta que se ve la pestaña; al verla, "Esperando tu mensaje".
+        let unseen = |s: Status| !viewing && matches!(s, Status::Working | Status::Blocked(_) | Status::Done);
+        let next = match report {
+            Some(r) => match r.state {
+                State::Working => Status::Working,
+                State::Blocked => Status::Blocked(r.kind),
+                State::Done | State::Error if unseen(self.status) => Status::Done,
+                _ => Status::Waiting,
+            },
+            None => {
+                let working = now.duration_since(last_output) < WORK_WINDOW;
+                match (working, self.status) {
+                    (true, _) => Status::Working,
+                    (false, Status::Working | Status::Done) if !viewing => Status::Done,
+                    _ => Status::Waiting,
+                }
+            }
         };
         if next != self.status {
             self.set(next, now);
@@ -128,7 +159,8 @@ impl Session {
 
     /// El agente avisó con la campana (p. ej. al terminar): se marca pendiente de ver.
     pub fn bell(&mut self, viewing: bool, now: Instant) -> bool {
-        if self.agent.is_some() && self.status != Status::Exited && !viewing && self.status != Status::Done {
+        let settled = matches!(self.status, Status::Exited | Status::Done | Status::Blocked(_));
+        if self.agent.is_some() && !settled && !viewing && self.reported.is_none() {
             self.set(Status::Done, now);
             return true;
         }
@@ -226,15 +258,15 @@ mod tests {
         let t0 = Instant::now();
         // Evita re-identificar (no hay PTY en el test): se marca como recién comprobado.
         s.checked = Some(t0);
-        assert!(s.refresh(None, t0, false, t0));
+        assert!(s.refresh(None, t0, false, t0, None));
         assert_eq!(s.status, Status::Working);
         // Deja de escribir sin que se mire la pestaña: Terminado (pendiente de ver).
         let t1 = t0 + WORK_WINDOW + Duration::from_millis(200);
         s.checked = Some(t1);
-        s.refresh(None, t0, false, t1);
+        s.refresh(None, t0, false, t1, None);
         assert_eq!(s.status, Status::Done);
         // Al mirarla pasa a Esperando.
-        s.refresh(None, t0, true, t1);
+        s.refresh(None, t0, true, t1, None);
         assert_eq!(s.status, Status::Waiting);
     }
 

@@ -68,6 +68,8 @@ impl Dimensions for TermSize {
 
 pub struct Tab {
     pub id: u64,
+    /// Tamaño actual (filas y columnas de su panel).
+    pub ws: WindowSize,
     pub term: Arc<FairMutex<Term<Listener>>>,
     pub blocks: Arc<Mutex<BlockState>>,
     /// Bloque seleccionado (navegación con Ctrl+Shift+↑/↓ o clic en el margen).
@@ -183,6 +185,7 @@ impl Tab {
 
         Ok(Self {
             id,
+            ws,
             term,
             blocks,
             selected_block: None,
@@ -288,6 +291,7 @@ impl Tab {
     }
 
     pub fn resize(&mut self, ws: WindowSize) {
+        self.ws = ws;
         self.sender.send(Msg::Resize(ws));
         let size = TermSize { columns: ws.num_cols as usize, lines: ws.num_lines as usize };
         self.term.lock().resize(size);
@@ -297,7 +301,8 @@ impl Tab {
     pub fn refresh_session(&mut self, viewing: bool, now: std::time::Instant) -> bool {
         use std::os::fd::AsRawFd;
         let fd = self.master.as_ref().map(|f| f.as_raw_fd());
-        let mut changed = self.session.refresh(fd, self.last_output, viewing, now);
+        let report = self.blocks.lock().unwrap().program.summary();
+        let mut changed = self.session.refresh(fd, self.last_output, viewing, now, report);
         if self.cwd_checked.is_none_or(|t| now.duration_since(t).as_millis() >= 1000) {
             self.cwd_checked = Some(now);
             if let Some(l) = crate::sessions::cwd_label(self.child_pid) {

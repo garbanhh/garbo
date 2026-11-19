@@ -33,6 +33,13 @@ pub enum Action {
     Settings,
     ToggleAgents,
     TogglePorts,
+    Search,
+    SplitRight,
+    SplitDown,
+    FocusLeft,
+    FocusRight,
+    FocusUp,
+    FocusDown,
 }
 
 impl Action {
@@ -41,7 +48,7 @@ impl Action {
         use Action::*;
         let mut v = vec![
             (NewTab, "new_tab", "Nueva pestaña", "ctrl+shift+t"),
-            (CloseTab, "close_tab", "Cerrar pestaña", "ctrl+shift+w"),
+            (CloseTab, "close_tab", "Cerrar panel o pestaña", "ctrl+shift+w"),
             (NextTab, "next_tab", "Pestaña siguiente", "ctrl+tab, ctrl+pagedown"),
             (PrevTab, "prev_tab", "Pestaña anterior", "ctrl+shift+tab, ctrl+pageup"),
             (MoveTabLeft, "move_tab_left", "Mover pestaña a la izquierda", "ctrl+shift+pageup"),
@@ -67,6 +74,13 @@ impl Action {
             (Settings, "settings", "Ajustes", "ctrl+comma"),
             (ToggleAgents, "toggle_agents", "Panel de agentes", "ctrl+shift+a"),
             (TogglePorts, "toggle_ports", "Panel de puertos", "ctrl+shift+e"),
+            (Search, "search", "Buscar en el historial", "ctrl+shift+f"),
+            (SplitRight, "split_right", "Dividir: panel a la derecha", "ctrl+shift+d"),
+            (SplitDown, "split_down", "Dividir: panel debajo", "ctrl+shift+alt+d"),
+            (FocusLeft, "focus_pane_left", "Panel de la izquierda", "alt+left"),
+            (FocusRight, "focus_pane_right", "Panel de la derecha", "alt+right"),
+            (FocusUp, "focus_pane_up", "Panel de arriba", "alt+up"),
+            (FocusDown, "focus_pane_down", "Panel de abajo", "alt+down"),
         ];
         const GOTO: [&str; 9] = [
             "goto_tab_1", "goto_tab_2", "goto_tab_3", "goto_tab_4", "goto_tab_5",

@@ -185,7 +185,8 @@ impl TabBar {
                 cross(p, cx, cy, 3.5 * s, 1.4 * s, if over { theme.foreground } else { dimc });
                 right = tx + tw - self.close_w;
             }
-            // Estado del agente: animación mientras trabaja, punto verde si terminó sin mirarlo.
+            // Estado del agente: animación mientras trabaja, punto amarillo si te espera y verde si
+            // terminó sin mirarlo.
             if tab.agent.is_some() {
                 let cy = (self.height / 2.0).round();
                 match tab.status {
@@ -194,9 +195,10 @@ impl TabBar {
                         crate::panel::spinner(p, right, cy, s * 0.9, theme.accent, phase);
                         right -= 8.0 * s;
                     }
-                    Status::Done => {
+                    Status::Done | Status::Blocked(_) => {
+                        let c = if tab.status == Status::Done { theme.palette[2] } else { theme.palette[3] };
                         right -= 8.0 * s;
-                        p.circle(right, cy, 3.5 * s, theme.palette[2], 1.0);
+                        p.circle(right, cy, 3.5 * s, c, 1.0);
                         right -= 8.0 * s;
                     }
                     _ => {}

@@ -511,7 +511,34 @@ pub struct TermView {
 }
 
 /// `bs`: bloques de la pestaña, para dar estilo al prompt de Garbo (ver `draw_prompts`).
-pub fn draw_terminal<T: EventListener>(p: &mut Painter, term: &Term<T>, theme: &Theme, v: &TermView, bs: Option<&BlockState>) {
+/// Subraya las celdas de `start` a `end` (enlace bajo el ratón con Ctrl).
+#[allow(clippy::too_many_arguments)]
+pub fn draw_underline<T: EventListener>(p: &mut Painter, term: &Term<T>, theme: &Theme, v: &TermView, start: alacritty_terminal::index::Point, end: alacritty_terminal::index::Point, scale: f32) {
+    let m = p.metrics();
+    let off = term.grid().display_offset() as i32;
+    let cols = term.columns();
+    let t = (1.5 * scale).round().max(1.0);
+    for l in start.line.0..=end.line.0 {
+        let row = l + off;
+        if row < 0 || row >= v.lines as i32 {
+            continue;
+        }
+        let a = if l == start.line.0 { start.column.0 } else { 0 };
+        let b = if l == end.line.0 { end.column.0 + 1 } else { cols };
+        let y = v.y + row as f32 * m.height + m.underline_pos.min(m.height - t);
+        p.rect(v.x + a as f32 * m.width, y.round(), (b - a) as f32 * m.width, t, theme.accent, 1.0);
+    }
+}
+
+/// `hl`: coincidencias de la búsqueda (Ctrl+Shift+F) que se resaltan.
+pub fn draw_terminal<T: EventListener>(
+    p: &mut Painter,
+    term: &Term<T>,
+    theme: &Theme,
+    v: &TermView,
+    bs: Option<&BlockState>,
+    hl: Option<&crate::search::Highlights>,
+) {
     let m = p.metrics();
     let (cw, chh) = (m.width, m.height);
     let current_prompt = bs.and_then(BlockState::idle_current);
@@ -524,6 +551,10 @@ pub fn draw_terminal<T: EventListener>(p: &mut Painter, term: &Term<T>, theme: &
     let cursor_row = cursor.point.line.0 + offset;
     let show_cursor = v.cursor_on && cursor.shape != CursorShape::Hidden && (0..v.lines as i32).contains(&cursor_row);
     let block_cursor = show_cursor && v.focused && cursor.shape == CursorShape::Block;
+
+    // Búsqueda: coincidencias en amarillo suave; la actual, en amarillo.
+    let found = theme.palette[3].lerp(theme.background, 0.6);
+    let mut hl_next = 0;
 
     // Fusión de fondos contiguos del mismo color en una sola instancia.
     let mut run: Option<(i32, f32, f32, Rgb)> = None;
@@ -562,13 +593,28 @@ pub fn draw_terminal<T: EventListener>(p: &mut Painter, term: &Term<T>, theme: &
         if selected {
             bg = theme.selection;
         }
+        let mut found_here = false;
+        if let Some(hl) = hl {
+            // Las celdas llegan en orden: se avanza por las coincidencias (también ordenadas).
+            while hl.all.get(hl_next).is_some_and(|m| *m.end() < point) {
+                hl_next += 1;
+            }
+            if hl.current.as_ref().is_some_and(|m| m.contains(&point)) {
+                bg = theme.palette[3];
+                fg = theme.background;
+                found_here = true;
+            } else if hl.all.get(hl_next).is_some_and(|m| m.contains(&point)) {
+                bg = found;
+                found_here = true;
+            }
+        }
         if is_cursor {
             bg = theme.cursor;
             fg = theme.background;
         }
 
         // Fondo
-        if bg != theme.background || selected || is_cursor {
+        if bg != theme.background || selected || is_cursor || found_here {
             match &mut run {
                 Some((r, _, x1, c)) if *r == row && (*x1 - x).abs() < 0.5 && *c == bg => *x1 = x + w,
                 _ => {
@@ -680,7 +726,7 @@ pub fn draw_blocks<T: EventListener>(
     v: &TermView,
     bs: &BlockState,
     selected: Option<u32>,
-    width: f32,
+    span: (f32, f32),
     scale: f32,
 ) {
     if !bs.active {
@@ -705,7 +751,9 @@ pub fn draw_blocks<T: EventListener>(
     let dim = theme.foreground.lerp(theme.background, 0.45);
     let (ok, err) = (theme.palette[2], theme.palette[1]);
     let bar_w = (3.0 * scale).round().max(2.0);
-    let bar_x = (v.x * 0.55 - bar_w / 2.0).round().max(0.0);
+    // La barra de estado va en el margen izquierdo del panel (de `span.0` a `v.x`).
+    let bar_x = (span.0 + (v.x - span.0) * 0.55 - bar_w / 2.0).round().max(span.0);
+    let width = span.1 - span.0;
     let line_w = scale.round().max(1.0);
 
     for (i, a) in anchors.iter().enumerate() {
@@ -727,10 +775,10 @@ pub fn draw_blocks<T: EventListener>(
         let is_sel = selected == Some(a.id);
 
         if is_sel {
-            p.rect(0.0, y0, width, y1 - y0, theme.accent, 0.10);
+            p.rect(span.0, y0, width, y1 - y0, theme.accent, 0.10);
         }
         if starts_here && start_row > 0 {
-            p.rect(v.x, y0, width - 2.0 * v.x, line_w, theme.foreground, 0.10);
+            p.rect(v.x, y0, width - 2.0 * (v.x - span.0), line_w, theme.foreground, 0.10);
         }
         let bar = match status {
             _ if is_sel => Some((theme.accent, 1.0)),
