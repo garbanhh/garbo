@@ -814,7 +814,8 @@ impl App {
                 // Sugerencia del historial, en gris tras el cursor.
                 if cfg.terminal.autosuggest && v.focused {
                     let start = tab.blocks.lock().unwrap().input_start;
-                    if let Some(rest) = crate::terminal::suggestion_for(&term, start) {
+                    let cwd = start.and_then(|_| tab.cwd());
+                    if let Some(rest) = crate::terminal::suggestion_for(&term, start, cwd.as_deref()) {
                         view::draw_ghost(&mut p, &term, theme, &v, &rest);
                     }
                 }

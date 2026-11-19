@@ -81,11 +81,16 @@ Todos los atajos se pueden modificar en la sección `[keybindings]` de la config
 
 ### Sugerencias del historial
 
-Mientras se escribe en el prompt, Garbo muestra en gris el resto del comando más reciente del
-historial que empieza igual. `Tab` (o `→` al final de la línea) lo acepta; si no hay sugerencia,
-`Tab` llega al shell y funciona su autocompletado habitual. El historial combina `$HISTFILE`
-(`~/.bash_history`) con los comandos ejecutados en cualquier pestaña durante la sesión; los que
-empiezan por un espacio no se guardan. Requiere la integración con bash (véase *Bloques de
+Mientras se escribe en el prompt (a partir de dos caracteres), Garbo muestra en gris el resto del
+comando más reciente del historial que empieza igual. `Tab` (o `→` al final de la línea) lo acepta;
+si no hay sugerencia, `Tab` llega al shell y funciona su autocompletado habitual. El historial
+combina `$HISTFILE` (`~/.bash_history`) con los comandos ejecutados en cualquier pestaña durante la
+sesión; los que empiezan por un espacio no se guardan.
+
+Solo se sugieren comandos que se pueden ejecutar: su primera palabra debe ser un programa del
+`PATH`, una orden interna de bash o un alias o función de los archivos de arranque (`~/.bashrc`,
+`~/.bashrc.d/`, `~/.bash_aliases`). Así se descartan erratas y comandos fallidos. Un `cd` solo se
+sugiere si el directorio de destino existe, y no hay sugerencias durante la búsqueda con `Ctrl+R`. Requiere la integración con bash (véase *Bloques de
 comandos*) y puede desactivarse en *Ajustes → Terminal*.
 
 ### Pegar capturas de pantalla

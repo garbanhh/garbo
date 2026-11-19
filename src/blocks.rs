@@ -142,6 +142,8 @@ pub struct BlockState {
     /// Dónde empieza lo que se está escribiendo en el prompt (entre las marcas B y C), en
     /// coordenadas absolutas (ver `suggest::cursor_mark`).
     pub input_start: Option<(i64, usize)>,
+    /// Comando aceptado que aún no ha terminado: pasa al historial al conocer su código de salida.
+    pending_cmd: Option<String>,
 }
 
 impl BlockState {
@@ -191,10 +193,8 @@ impl BlockState {
             }
             Mark::OutputStart => {
                 term.set_hyperlink(None);
-                // El comando aceptado pasa al historial de sugerencias.
-                if let Some(cmd) = self.input_start.take().and_then(|s| crate::suggest::executed_command(term, s)) {
-                    crate::suggest::record(&cmd);
-                }
+                // El comando aceptado pasará al historial de sugerencias cuando termine.
+                self.pending_cmd = self.input_start.take().and_then(|s| crate::suggest::executed_command(term, s));
                 if let Some(info) = self.current_mut() {
                     info.started = Some(Instant::now());
                 }
@@ -202,6 +202,9 @@ impl BlockState {
             Mark::CommandEnd(code) => {
                 term.set_hyperlink(None);
                 self.input_start = None;
+                if let Some(cmd) = self.pending_cmd.take() {
+                    crate::suggest::record(&cmd, code);
+                }
                 if let Some(info) = self.current_mut() {
                     if let (Some(start), None) = (info.started, info.duration) {
                         info.duration = Some(start.elapsed());

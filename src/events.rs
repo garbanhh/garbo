@@ -59,10 +59,19 @@ impl ApplicationHandler<UserEvent> for App {
         // Identificador de la app: GNOME lo usa para asociar la ventana con su .desktop e icono.
         #[cfg(all(unix, not(target_os = "macos")))]
         let attrs = {
+            use winit::platform::startup_notify::{self, EventLoopExtStartupNotify, WindowAttributesExtStartupNotify};
             use winit::platform::wayland::WindowAttributesExtWayland;
             use winit::platform::x11::WindowAttributesExtX11;
             let attrs = WindowAttributesExtWayland::with_name(attrs, crate::APP_ID, "garbo");
-            WindowAttributesExtX11::with_name(attrs, crate::APP_ID, "garbo")
+            let mut attrs = WindowAttributesExtX11::with_name(attrs, crate::APP_ID, "garbo");
+            // Notificación de arranque: el lanzador (GNOME) pasa un token y muestra el cursor de
+            // "cargando" hasta que la ventana lo usa. Sin usarlo, el cursor seguía así ~30 s.
+            // Después se quita del entorno para que no lo hereden los programas de las pestañas.
+            if let Some(token) = el.read_token_from_env() {
+                attrs = attrs.with_activation_token(token);
+            }
+            startup_notify::reset_activation_token_env();
+            attrs
         };
         let window = match el.create_window(attrs) {
             Ok(w) => Arc::new(w),

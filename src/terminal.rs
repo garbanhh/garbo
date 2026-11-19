@@ -220,9 +220,10 @@ impl Tab {
 
     /// Resto del comando sugerido desde el historial, si se está escribiendo en el prompt.
     pub fn suggestion(&self) -> Option<String> {
+        let cwd = self.cwd();
         let term = self.term.lock();
         let start = self.blocks.lock().unwrap().input_start;
-        suggestion_for(&term, start)
+        suggestion_for(&term, start, cwd.as_deref())
     }
 
     pub fn resize(&mut self, ws: WindowSize) {
@@ -323,13 +324,13 @@ fn is_echo(last_input: std::time::Instant, now: std::time::Instant) -> bool {
 }
 
 /// Sugerencia para un terminal ya bloqueado (`start` = inicio de lo escrito en el prompt).
-pub fn suggestion_for<T>(term: &Term<T>, start: Option<(i64, usize)>) -> Option<String> {
+pub fn suggestion_for<T>(term: &Term<T>, start: Option<(i64, usize)>, cwd: Option<&std::path::Path>) -> Option<String> {
     use alacritty_terminal::term::TermMode;
     if term.mode().contains(TermMode::ALT_SCREEN) || term.grid().display_offset() != 0 {
         return None;
     }
     let input = crate::suggest::current_input(term, start?)?;
-    crate::suggest::suggest(&input)
+    crate::suggest::suggest(&input, cwd)
 }
 
 /// Quita del título los símbolos de estado que algunos programas anteponen ("✳ Tarea" -> "Tarea").
