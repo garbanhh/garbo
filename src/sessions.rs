@@ -8,7 +8,6 @@
 //!   - Cerrado: el agente salió y la pestaña volvió al shell.
 //! Todo se recalcula solo cuando hay salida o mientras algún agente trabaja: en reposo, nada.
 
-use crate::config::Rgb;
 use std::os::fd::RawFd;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -20,24 +19,29 @@ const IDENTIFY_EVERY: Duration = Duration::from_millis(700);
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Agent {
+    /// Nombre que se muestra ("Claude Code").
     pub name: &'static str,
-    /// Inicial para la insignia (genérica: no se usan logotipos de terceros).
-    pub badge: char,
-    pub color: Rgb,
+    /// Lanza subagentes que se pueden seguir desde el panel (ver `subagents.rs`).
+    pub subagents: bool,
 }
 
+const fn agent(name: &'static str) -> Agent {
+    Agent { name, subagents: false }
+}
+
+/// Nombre del proceso (o de su script) -> agente.
 const AGENTS: &[(&str, Agent)] = &[
-    ("claude", Agent { name: "Claude Code", badge: 'C', color: Rgb(0xD9, 0x77, 0x57) }),
-    ("codex", Agent { name: "Codex", badge: 'X', color: Rgb(0xC8, 0xC8, 0xC8) }),
-    ("gemini", Agent { name: "Gemini CLI", badge: 'G', color: Rgb(0x6F, 0x9B, 0xF5) }),
-    ("aider", Agent { name: "Aider", badge: 'A', color: Rgb(0x4E, 0xC9, 0x8B) }),
-    ("opencode", Agent { name: "OpenCode", badge: 'O', color: Rgb(0xE5, 0xC0, 0x7B) }),
-    ("cursor-agent", Agent { name: "Cursor Agent", badge: 'U', color: Rgb(0xB0, 0xB0, 0xB0) }),
-    ("copilot", Agent { name: "Copilot CLI", badge: 'P', color: Rgb(0xA3, 0x8B, 0xF5) }),
-    ("qwen", Agent { name: "Qwen Code", badge: 'Q', color: Rgb(0x7F, 0x6B, 0xF0) }),
-    ("goose", Agent { name: "Goose", badge: 'S', color: Rgb(0xC5, 0x86, 0xC0) }),
-    ("amp", Agent { name: "Amp", badge: 'M', color: Rgb(0xF1, 0x4C, 0x4C) }),
-    ("crush", Agent { name: "Crush", badge: 'R', color: Rgb(0xE0, 0x6C, 0xC0) }),
+    ("claude", Agent { name: "Claude Code", subagents: true }),
+    ("codex", agent("Codex")),
+    ("gemini", agent("Gemini CLI")),
+    ("aider", agent("Aider")),
+    ("opencode", agent("OpenCode")),
+    ("cursor-agent", agent("Cursor Agent")),
+    ("copilot", agent("Copilot CLI")),
+    ("qwen", agent("Qwen Code")),
+    ("goose", agent("Goose")),
+    ("amp", agent("Amp")),
+    ("crush", agent("Crush")),
 ];
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -66,12 +70,14 @@ pub struct Session {
     pub status: Status,
     /// Momento del último cambio de estado.
     pub since: Instant,
+    /// Proceso del agente (líder del grupo en primer plano) mientras se está ejecutando.
+    pub pid: Option<i32>,
     checked: Option<Instant>,
 }
 
 impl Default for Session {
     fn default() -> Self {
-        Self { agent: None, status: Status::Waiting, since: Instant::now(), checked: None }
+        Self { agent: None, status: Status::Waiting, since: Instant::now(), pid: None, checked: None }
     }
 }
 
@@ -84,9 +90,10 @@ impl Session {
         let mut changed = false;
         if identify {
             self.checked = Some(now);
-            let found = fd.and_then(foreground_pgid).and_then(identify_agent);
-            match found {
+            let pgid = fd.and_then(foreground_pgid);
+            match pgid.and_then(identify_agent) {
                 Some(a) => {
+                    self.pid = pgid;
                     if self.agent != Some(a) || self.status == Status::Exited {
                         self.agent = Some(a);
                         self.set(Status::Waiting, now);
@@ -95,6 +102,7 @@ impl Session {
                     present = true;
                 }
                 None if present => {
+                    self.pid = None;
                     self.set(Status::Exited, now);
                     return true;
                 }
@@ -189,7 +197,7 @@ mod tests {
 
     #[test]
     fn transiciones_de_estado() {
-        let mut s = Session { agent: Some(AGENTS[0].1), status: Status::Waiting, since: Instant::now(), checked: None };
+        let mut s = Session { agent: Some(AGENTS[0].1), pid: None, ..Default::default() };
         let t0 = Instant::now();
         // Evita re-identificar (no hay PTY en el test): se marca como recién comprobado.
         s.checked = Some(t0);

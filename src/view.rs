@@ -1,6 +1,6 @@
 //! Convierte el estado del terminal en instancias para la GPU.
 
-use crate::atlas::GlyphCache;
+use crate::atlas::{GlyphCache, UiVariant};
 use crate::blocks::{self, BlockState, Status};
 use crate::config::{Rgb, Theme};
 use crate::font::{CellMetrics, Style};
@@ -82,30 +82,44 @@ impl Painter<'_> {
         self.glyphs.ui.metrics
     }
 
+    /// Alto de línea de una variante de texto de interfaz.
+    pub fn ui_line_h(&self, v: UiVariant) -> f32 {
+        (self.glyphs.ui.metrics.height * v.scale()).ceil()
+    }
+
     pub fn ui_measure(&mut self, s: &str) -> f32 {
-        s.chars().map(|c| self.glyphs.ui_advance(c)).sum()
+        self.ui_measure_v(s, UiVariant::Normal)
+    }
+
+    pub fn ui_measure_v(&mut self, s: &str, v: UiVariant) -> f32 {
+        s.chars().map(|c| self.glyphs.ui_advance(c, v)).sum()
     }
 
     /// Texto de interfaz con la fuente proporcional; `y` es el borde superior de la línea.
     /// Se recorta con "…" si no cabe en `max_w`. Devuelve el ancho dibujado.
     pub fn ui_text(&mut self, x: f32, y: f32, s: &str, color: Rgb, max_w: f32) -> f32 {
-        let m = self.glyphs.ui.metrics;
-        let total = self.ui_measure(s);
-        let ell = self.glyphs.ui_advance('…');
+        self.ui_text_v(x, y, s, color, max_w, UiVariant::Normal)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn ui_text_v(&mut self, x: f32, y: f32, s: &str, color: Rgb, max_w: f32, v: UiVariant) -> f32 {
+        let baseline = y + (self.glyphs.ui.metrics.baseline * v.scale()).round();
+        let total = self.ui_measure_v(s, v);
+        let ell = self.glyphs.ui_advance('…', v);
         let limit = if total > max_w { (max_w - ell).max(0.0) } else { f32::MAX };
         let mut cx = x;
         let mut cut = false;
         for ch in s.chars() {
-            let adv = self.glyphs.ui_advance(ch);
+            let adv = self.glyphs.ui_advance(ch, v);
             if cx + adv - x > limit {
                 cut = true;
                 break;
             }
-            self.ui_glyph(ch, cx, y + m.baseline, color);
+            self.ui_glyph(ch, cx, baseline, color, v);
             cx += adv;
         }
         if cut && max_w >= ell {
-            self.ui_glyph('…', cx, y + m.baseline, color);
+            self.ui_glyph('…', cx, baseline, color, v);
             cx += ell;
         }
         cx - x
@@ -117,11 +131,11 @@ impl Painter<'_> {
         self.ui_text(x, (y + (h - lh) / 2.0).round(), s, color, max_w)
     }
 
-    fn ui_glyph(&mut self, ch: char, x: f32, baseline: f32, color: Rgb) {
+    fn ui_glyph(&mut self, ch: char, x: f32, baseline: f32, color: Rgb, v: UiVariant) {
         if ch == ' ' {
             return;
         }
-        let (g, _) = self.glyphs.get_ui(self.queue, self.atlas, ch);
+        let (g, _) = self.glyphs.get_ui(self.queue, self.atlas, ch, v);
         if let Some(g) = g {
             self.fg.push(Instance {
                 pos: [(x + g.left).round(), (baseline - g.top).round()],
@@ -184,7 +198,7 @@ impl Painter<'_> {
     }
 }
 
-fn resolve(color: AnsiColor, theme: &Theme, colors: &Colors) -> Rgb {
+pub fn resolve(color: AnsiColor, theme: &Theme, colors: &Colors) -> Rgb {
     let idx = match color {
         AnsiColor::Spec(c) => return Rgb(c.r, c.g, c.b),
         AnsiColor::Indexed(i) => i as usize,
@@ -208,6 +222,52 @@ fn resolve(color: AnsiColor, theme: &Theme, colors: &Colors) -> Rgb {
         }
         _ => theme.foreground,
     }
+}
+
+/// Últimas líneas con contenido de la pantalla de un terminal, en tramos de color, para la
+/// vista previa del panel lateral. Se quitan los marcos (dibujo de cajas) y los espacios de los
+/// extremos, y se saltan las líneas que solo tienen eso.
+pub fn preview_lines<T: EventListener>(term: &Term<T>, theme: &Theme, max: usize) -> Vec<Vec<(String, Rgb)>> {
+    let grid = term.grid();
+    let colors = term.colors();
+    let cols = term.columns();
+    let is_frame = |c: char| c == ' ' || c == '\0' || ('\u{2500}'..='\u{259F}').contains(&c);
+    let mut out = Vec::new();
+    for row in (0..term.screen_lines() as i32).rev() {
+        let line = &grid[Line(row)];
+        let cells: Vec<(char, Rgb)> = (0..cols)
+            .filter_map(|c| {
+                let cell = &line[Column(c)];
+                if cell.flags.intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER) {
+                    return None;
+                }
+                let mut fg = resolve(if cell.flags.contains(Flags::INVERSE) { cell.bg } else { cell.fg }, theme, colors);
+                if cell.flags.contains(Flags::DIM) {
+                    fg = fg.lerp(theme.background, 0.35);
+                }
+                if fg == theme.background {
+                    fg = theme.foreground;
+                }
+                Some((cell.c, fg))
+            })
+            .collect();
+        let Some(start) = cells.iter().position(|(c, _)| !is_frame(*c)) else { continue };
+        let end = cells.iter().rposition(|(c, _)| !is_frame(*c)).unwrap_or(start);
+        let mut runs: Vec<(String, Rgb)> = Vec::new();
+        for &(c, fg) in &cells[start..=end] {
+            let c = if c == '\0' { ' ' } else { c };
+            match runs.last_mut() {
+                Some((text, color)) if *color == fg || c == ' ' => text.push(c),
+                _ => runs.push((c.to_string(), fg)),
+            }
+        }
+        out.push(runs);
+        if out.len() >= max {
+            break;
+        }
+    }
+    out.reverse();
+    out
 }
 
 pub struct TermView {

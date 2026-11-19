@@ -20,6 +20,8 @@ pub struct Palette {
     pub selected: usize,
     entries: Vec<Entry>,
     pub filtered: Vec<usize>,
+    /// Rueda acumulada (fracciones de elemento).
+    wheel: f32,
 }
 
 pub const MAX_VISIBLE: usize = 10;
@@ -36,9 +38,9 @@ impl Palette {
             })
             .collect();
         for &t in Theme::NAMES {
-            entries.push(Entry { label: format!("Tema: {t}"), hint: String::new(), item: Item::Theme(t) });
+            entries.push(Entry { label: format!("Tema: {}", Theme::display_name(t)), hint: String::new(), item: Item::Theme(t) });
         }
-        let mut p = Self { query: String::new(), selected: 0, entries, filtered: vec![] };
+        let mut p = Self { query: String::new(), selected: 0, entries, filtered: vec![], wheel: 0.0 };
         p.refilter();
         p
     }
@@ -61,6 +63,14 @@ impl Palette {
 
     pub fn current(&self) -> Option<Item> {
         self.entry(self.selected).map(|e| e.item.clone())
+    }
+
+    /// Acumula la rueda y devuelve cuántos elementos enteros hay que avanzar (positivo = arriba).
+    pub fn wheel(&mut self, steps: f32) -> i32 {
+        self.wheel += steps;
+        let n = self.wheel.trunc() as i32;
+        self.wheel -= n as f32;
+        n
     }
 
     pub fn move_sel(&mut self, delta: i32) {

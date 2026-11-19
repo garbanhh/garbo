@@ -490,8 +490,12 @@ impl App {
         let Some(st) = self.st.as_mut() else { return false };
         let (active, focused) = (st.active, st.focused);
         let mut changed = false;
+        let agents_panel = st.panel.agents;
         for (i, tab) in st.tabs.iter_mut().enumerate() {
             changed |= tab.refresh_session(focused && i == active, now);
+            if agents_panel {
+                changed |= tab.refresh_subagents(now);
+            }
         }
         // Animación del indicador "trabajando" (~7 fps, solo mientras algún agente trabaja).
         let working = st.tabs.iter().any(|t| t.session.is_working());
@@ -521,14 +525,22 @@ impl App {
         if st.panel.agents && st.tabs.iter().any(|t| t.session.agent.is_some()) {
             push(now + std::time::Duration::from_secs(1));
         }
+        // Despliegue de una fila del panel: fotogramas solo mientras dura la animación.
+        if st.panel.animating(now) {
+            push(now + std::time::Duration::from_millis(12));
+        }
         next
     }
 
     pub fn toggle_panel(&mut self, agents: bool) {
         let proxy = self.proxy.clone();
         let st = self.st();
+        st.panel.set_hover(None, Instant::now());
         if agents {
             st.panel.agents = !st.panel.agents;
+            for tab in &mut st.tabs {
+                tab.subagents.invalidate();
+            }
         } else {
             st.panel.ports = !st.panel.ports;
             if st.panel.ports {
@@ -540,6 +552,20 @@ impl App {
         }
         st.last_ws.num_cols = 0;
         self.relayout();
+    }
+
+    /// Zona del panel lateral bajo el punto (x, y), si el panel está abierto y el punto dentro.
+    pub fn panel_hit(&self, x: f32, y: f32, now: Instant) -> Option<crate::panel::Hit> {
+        let (px, py, pw, ph) = self.geometry().panel?;
+        let st = self.st.as_ref()?;
+        let subs: Vec<usize> = st
+            .tabs
+            .iter()
+            .filter(|t| t.session.agent.is_some())
+            .map(|t| crate::panel::sub_lines(&t.subagents.list))
+            .collect();
+        let m = crate::panel::Metrics::from_ui(st.glyphs.ui.metrics.height);
+        st.panel.hit(x, y, &subs, px, py, pw, ph, st.scale, m, now)
     }
 
     /// Clic dentro del panel lateral.
@@ -749,17 +775,24 @@ impl App {
                 }
             }
             if let Some((px, py, pw, ph)) = geo.panel {
+                let previewed: Vec<usize> = st.panel.previewed(now).collect();
                 let rows: Vec<crate::panel::AgentRow> = st
                     .tabs
                     .iter()
                     .enumerate()
-                    .filter_map(|(i, t)| {
+                    .filter(|(_, t)| t.session.agent.is_some())
+                    .enumerate()
+                    .filter_map(|(k, (i, t))| {
                         Some(crate::panel::AgentRow {
                             label: t.label(),
                             agent: t.session.agent?,
                             status: t.session.status,
                             since: t.session.since,
                             active: i == st.active,
+                            subagents: &t.subagents.list,
+                            preview: previewed.contains(&k).then(|| {
+                                view::preview_lines(&t.term.lock(), theme, crate::panel::PREVIEW_LINES)
+                            }),
                         })
                     })
                     .collect();

@@ -101,8 +101,13 @@ secciones:
 
 - **Agentes**: pestañas que ejecutan un agente de código (Claude Code, Codex, Gemini CLI, Aider,
   OpenCode, entre otros), con su estado (*Trabajando*, *Terminado*, *Esperando tu mensaje*) y el
-  tiempo transcurrido. Un clic activa la pestaña. La propia pestaña muestra también un indicador.
-  La detección se basa en el proceso en primer plano de cada terminal y en su actividad.
+  tiempo transcurrido. Un clic activa la pestaña; al pasar el ratón, la fila se despliega y muestra
+  las últimas líneas de esa pestaña sin necesidad de cambiar a ella. La propia pestaña muestra
+  también un indicador. La detección se basa en el proceso en primer plano de cada terminal y en
+  su actividad.
+- **Subagentes**: bajo cada sesión de Claude Code se listan los subagentes que lanza, con su
+  descripción, el tiempo en marcha y la última herramienta que están usando. Se obtienen, en modo
+  de solo lectura, de los archivos de sesión que Claude Code guarda en `~/.claude/projects`.
 - **Puertos**: servidores web locales del usuario (detectados mediante una petición HTTP), con el
   programa que los ejecuta; un clic los abre en el navegador. El resto de puertos en escucha se
   agrupa en una lista desplegable. Esta sección solo consulta el sistema mientras está visible.
@@ -114,8 +119,11 @@ modificar el tema, la fuente, el tamaño, el interlineado, el margen, la opacida
 historial, los bloques y la búsqueda de actualizaciones. Los cambios se aplican de inmediato y se
 guardan en `~/.config/garbo/config.toml`, conservando el resto del archivo y sus comentarios.
 
-Navegación con teclado: `↑` `↓` para elegir, `←` `→` para cambiar el valor, `Intro` para activar
-y `Esc` para cerrar.
+Los temas se presentan como una cuadrícula de muestras, cada una con los colores del tema; un clic
+lo aplica. La rueda del ratón desplaza la lista sin cambiar el elemento seleccionado.
+
+Navegación con teclado: `↑` `↓` para elegir, `←` `→` para cambiar el valor (también el tema),
+`Intro` para activar y `Esc` para cerrar.
 
 ## Configuración
 
@@ -178,7 +186,8 @@ src/
   update.rs       comprobación e instalación de actualizaciones
   sessions.rs     detección de agentes en primer plano y su estado
   ports.rs        puertos en escucha y detección de servidores web
-  panel.rs        panel lateral de agentes y puertos
+  subagents.rs    subagentes de Claude Code a partir de sus archivos de sesión
+  panel.rs        panel lateral de agentes y puertos, con vista previa al pasar el ratón
 shell/            integración con bash
 packaging/        icono, entrada de escritorio y metadatos AppStream
 scripts/          publicación de versiones

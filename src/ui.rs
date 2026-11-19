@@ -157,7 +157,6 @@ impl TabBar {
             Some(TabHit::Tab(j) | TabHit::Close(j)) => Some(j),
             _ => None,
         };
-        let lh = p.ui_metrics().height;
         for (i, &(tx, tw)) in self.tabs.iter().enumerate() {
             let is_active = i == active;
             let hovered = hovered_tab == Some(i);
@@ -186,8 +185,8 @@ impl TabBar {
                 cross(p, cx, cy, 3.5 * s, 1.4 * s, if over { theme.foreground } else { dimc });
                 right = tx + tw - self.close_w;
             }
-            // Indicador del agente: insignia + estado (animación al trabajar, punto si terminó).
-            if let Some(agent) = tab.agent.filter(|_| tab.status != Status::Exited) {
+            // Estado del agente: animación mientras trabaja, punto verde si terminó sin mirarlo.
+            if tab.agent.is_some() {
                 let cy = (self.height / 2.0).round();
                 match tab.status {
                     Status::Working => {
@@ -202,10 +201,6 @@ impl TabBar {
                     }
                     _ => {}
                 }
-                let bs = (lh * 0.95).round();
-                right -= bs;
-                crate::panel::badge(p, right, (cy - bs / 2.0).round(), bs, agent, s);
-                right -= 6.0 * s;
             }
             let label = if tab.exited { format!("{} (terminado)", tab.label) } else { tab.label.clone() };
             p.ui_text_in(tx + pad, 0.0, self.height, &label, color, (right - tx - pad).max(0.0));

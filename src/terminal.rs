@@ -66,6 +66,8 @@ pub struct Tab {
     /// Última vez que el programa escribió en pantalla.
     pub last_output: std::time::Instant,
     pub session: crate::sessions::Session,
+    /// Subagentes de Claude Code (solo se consultan con el panel de agentes abierto).
+    pub subagents: crate::subagents::Watch,
     /// Directorio actual abreviado (título de la pestaña).
     pub cwd_label: String,
     cwd_checked: Option<std::time::Instant>,
@@ -162,6 +164,7 @@ impl Tab {
             master,
             last_output: std::time::Instant::now(),
             session: Default::default(),
+            subagents: Default::default(),
             cwd_label: String::new(),
             cwd_checked: None,
             title,
@@ -198,6 +201,12 @@ impl Tab {
             }
         }
         changed
+    }
+
+    /// Actualiza los subagentes del agente en primer plano (si sabe lanzarlos).
+    pub fn refresh_subagents(&mut self, now: std::time::Instant) -> bool {
+        let pid = self.session.agent.filter(|a| a.subagents).and(self.session.pid);
+        self.subagents.refresh(pid, now)
     }
 
     /// Título visible de la pestaña: el directorio actual (o el título del shell si no se sabe).

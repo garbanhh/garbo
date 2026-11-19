@@ -78,14 +78,24 @@ const SECTIONS: &[(&str, &[(Field, &str)])] = &[
 
 enum Item {
     Section(&'static str),
-    Row,
+    /// Fila de ajuste (índice en `fields()`).
+    Row(usize),
+    /// Una fila de la cuadrícula de temas.
+    Themes(usize),
 }
 
-fn items() -> Vec<Item> {
+fn items(cols: usize) -> Vec<Item> {
     let mut v = Vec::new();
+    let mut ri = 0;
     for (title, rows) in SECTIONS {
         v.push(Item::Section(title));
-        v.extend(rows.iter().map(|_| Item::Row));
+        for (f, _) in rows.iter() {
+            v.push(Item::Row(ri));
+            if *f == Field::Theme {
+                v.extend((0..Theme::NAMES.len().div_ceil(cols)).map(Item::Themes));
+            }
+            ri += 1;
+        }
     }
     v
 }
@@ -101,12 +111,19 @@ pub enum Hit {
     Row(usize),
     Dec(usize),
     Inc(usize),
+    /// Tarjeta de un tema (índice en `Theme::NAMES`).
+    Theme(usize),
     Panel,
 }
 
 pub struct Settings {
     pub selected: usize,
-    scroll: f32,
+    /// Primer elemento visible. El desplazamiento va por elementos enteros: nada queda cortado.
+    first: usize,
+    /// Rueda acumulada en píxeles (positivo = hacia arriba), pendiente de convertirse en elementos.
+    wheel: f32,
+    /// La selección cambió con el teclado: hay que mantenerla a la vista.
+    follow: bool,
     fonts: Vec<String>,
     pub restart_note: bool,
     pub hover: Option<Hit>,
@@ -126,6 +143,10 @@ struct Layout {
     rows: Vec<(usize, f32, f32)>,
     /// (y, título) de las cabeceras de sección visibles
     sections: Vec<(f32, &'static str)>,
+    /// (índice del tema, x, y, ancho, alto de la muestra) de las tarjetas visibles
+    cards: Vec<(usize, f32, f32, f32, f32)>,
+    /// Alto del nombre bajo cada tarjeta.
+    name_h: f32,
     control_w: f32,
     /// (inicio, tamaño) de la barra de scroll relativa al cuerpo, si el contenido no cabe.
     scrollbar: Option<(f32, f32)>,
@@ -133,13 +154,11 @@ struct Layout {
 
 impl Settings {
     pub fn new() -> Self {
-        Self {
-            selected: 0,
-            scroll: 0.0,
-            fonts: crate::font::FontSet::monospace_families(),
-            restart_note: false,
-            hover: None,
-        }
+        Self::with_fonts(crate::font::FontSet::monospace_families())
+    }
+
+    fn with_fonts(fonts: Vec<String>) -> Self {
+        Self { selected: 0, first: 0, wheel: 0.0, follow: true, fonts, restart_note: false, hover: None }
     }
 
     fn field(&self, i: usize) -> Field {
@@ -149,11 +168,29 @@ impl Settings {
     pub fn move_sel(&mut self, d: i32) {
         let n = fields().len() as i32;
         self.selected = (self.selected as i32 + d).clamp(0, n - 1) as usize;
+        self.follow = true;
+    }
+
+    /// Rueda o touchpad: desplaza el contenido (no la selección). `px` > 0 = hacia arriba.
+    pub fn wheel(&mut self, px: f32) {
+        self.wheel += px;
+        self.follow = false;
+    }
+
+    /// Elige un tema de la cuadrícula.
+    pub fn pick_theme(&mut self, i: usize, cfg: &mut Config) -> Change {
+        let Some(name) = Theme::NAMES.get(i) else { return Change::None };
+        self.selected = fields().iter().position(|f| *f == Field::Theme).unwrap_or(0);
+        if cfg.theme.eq_ignore_ascii_case(name) {
+            return Change::None;
+        }
+        cfg.theme = name.to_string();
+        Change::Theme
     }
 
     pub fn value_text(&self, f: Field, cfg: &Config) -> String {
         match f {
-            Field::Theme => cfg.theme.clone(),
+            Field::Theme => Theme::display_name(&cfg.theme),
             Field::FontFamily => cfg.font.family.clone(),
             Field::FontSize => format!("{} pt", trim_num(cfg.font.size)),
             Field::LineHeight => trim_num(cfg.font.line_height),
@@ -265,12 +302,31 @@ impl Settings {
     }
 
     fn layout(&mut self, width: f32, height: f32, top: f32, s: f32) -> Layout {
+        use Item::*;
         let w = (560.0 * s).min(width - 32.0 * s).max(260.0 * s).round();
         let header_h = (56.0 * s).round();
         let footer_h = (40.0 * s).round();
-        let row_h = (40.0 * s).round();
+        let row_h = (38.0 * s).round();
         let sec_h = (34.0 * s).round();
-        let content: f32 = SECTIONS.iter().map(|(_, r)| sec_h + r.len() as f32 * row_h).sum::<f32>() + 8.0 * s;
+        let pad = (16.0 * s).round();
+        let gap = (10.0 * s).round();
+        let inner = w - 2.0 * pad;
+        let cols = ((inner + gap) / (118.0 * s + gap)).floor().clamp(2.0, 4.0) as usize;
+        let card_w = ((inner - gap * (cols as f32 - 1.0)) / cols as f32).floor();
+        let card_h = (card_w * 0.52).max(56.0 * s).round();
+        let name_h = (24.0 * s).round();
+        let card_row_h = card_h + name_h + (6.0 * s).round();
+
+        let its = items(cols);
+        let heights: Vec<f32> = its
+            .iter()
+            .map(|it| match it {
+                Section(_) => sec_h,
+                Row(_) => row_h,
+                Themes(_) => card_row_h,
+            })
+            .collect();
+        let content: f32 = heights.iter().sum::<f32>() + 8.0 * s;
         let max_h = (height - top - 48.0 * s).max(200.0 * s);
         let h = (header_h + content + footer_h).min(max_h).round();
         let x = ((width - w) / 2.0).round();
@@ -278,60 +334,94 @@ impl Settings {
         let body_y = y + header_h;
         let body_h = h - header_h - footer_h;
 
-        // Scroll: mantener visible la fila seleccionada.
-        let mut cy = 0.0;
-        let mut sel_y = (0.0, 0.0);
-        let mut ri = 0;
-        for it in items() {
-            match it {
-                Item::Section(_) => cy += sec_h,
-                Item::Row => {
-                    if ri == self.selected {
-                        sel_y = (cy, cy + row_h);
-                    }
-                    cy += row_h;
-                    ri += 1;
+        // Último primer elemento posible: el que deja ver el final del contenido.
+        let mut max_first = its.len();
+        let mut tail = 0.0;
+        while max_first > 0 && tail + heights[max_first - 1] <= body_h {
+            max_first -= 1;
+            tail += heights[max_first];
+        }
+        let mut first = self.first.min(max_first);
+
+        // Rueda: se avanza un elemento cuando se ha recorrido más de la mitad de su alto, y se
+        // guarda el resto exacto (nunca supera media fila, así que no rebota hacia atrás).
+        while first > 0 && self.wheel > heights[first - 1] * 0.5 {
+            self.wheel -= heights[first - 1];
+            first -= 1;
+        }
+        while first < max_first && -self.wheel > heights[first] * 0.5 {
+            self.wheel += heights[first];
+            first += 1;
+        }
+        if (first == 0 && self.wheel > 0.0) || (first == max_first && self.wheel < 0.0) {
+            self.wheel = 0.0;
+        }
+
+        // Teclado: la fila elegida (con su cabecera y, si es el tema, su cuadrícula) a la vista.
+        if self.follow {
+            self.follow = false;
+            if let Some(sel) = its.iter().position(|it| matches!(it, Row(r) if *r == self.selected)) {
+                let top_i = if sel > 0 && matches!(its[sel - 1], Section(_)) { sel - 1 } else { sel };
+                let mut bot_i = sel;
+                while bot_i + 1 < its.len() && matches!(its[bot_i + 1], Themes(_)) {
+                    bot_i += 1;
+                }
+                first = first.min(top_i);
+                while first < max_first.min(top_i) && heights[first..=bot_i].iter().sum::<f32>() > body_h {
+                    first += 1;
                 }
             }
         }
-        let max_scroll = (cy + 8.0 * s - body_h).max(0.0);
-        if sel_y.0 < self.scroll {
-            self.scroll = sel_y.0;
-        }
-        if sel_y.1 > self.scroll + body_h {
-            self.scroll = sel_y.1 - body_h;
-        }
-        self.scroll = self.scroll.clamp(0.0, max_scroll);
+        self.first = first;
 
         let mut rows = Vec::new();
         let mut sections = Vec::new();
-        let mut cy = body_y - self.scroll;
-        let mut ri = 0;
-        for it in items() {
-            let ih = if matches!(it, Item::Section(_)) { sec_h } else { row_h };
-            let visible = cy >= body_y - 0.5 && cy + ih <= body_y + body_h + 0.5;
-            match it {
-                Item::Section(t) => {
-                    if visible {
-                        sections.push((cy, t));
+        let mut cards = Vec::new();
+        let mut cy = body_y;
+        for (k, it) in its.iter().enumerate().skip(first) {
+            let ih = heights[k];
+            if cy + ih > body_y + body_h + 0.5 {
+                break;
+            }
+            match *it {
+                Section(t) => sections.push((cy, t)),
+                Row(ri) => rows.push((ri, cy, ih)),
+                Themes(r) => {
+                    for c in 0..cols {
+                        let ti = r * cols + c;
+                        if ti >= Theme::NAMES.len() {
+                            break;
+                        }
+                        cards.push((ti, x + pad + c as f32 * (card_w + gap), cy + 2.0 * s, card_w, card_h));
                     }
-                }
-                Item::Row => {
-                    if visible {
-                        rows.push((ri, cy, row_h));
-                    }
-                    ri += 1;
                 }
             }
             cy += ih;
         }
         let close = (x + w - 30.0 * s, y + header_h / 2.0, 14.0 * s);
-        let total = max_scroll + body_h;
-        let scrollbar = (max_scroll > 0.0).then(|| {
+        let max_offset: f32 = heights[..max_first].iter().sum();
+        let scrollbar = (max_offset > 0.0).then(|| {
+            let total = content.max(body_h + 1.0);
             let size = (body_h * body_h / total).max(24.0 * s);
-            (self.scroll / max_scroll * (body_h - size), size)
+            let offset: f32 = heights[..first].iter().sum();
+            ((offset / max_offset).min(1.0) * (body_h - size), size)
         });
-        Layout { x, y, w, h, header_h, body_y, body_h, close, rows, sections, control_w: (190.0 * s).round(), scrollbar }
+        Layout {
+            x,
+            y,
+            w,
+            h,
+            header_h,
+            body_y,
+            body_h,
+            close,
+            rows,
+            sections,
+            cards,
+            name_h,
+            control_w: (190.0 * s).round(),
+            scrollbar,
+        }
     }
 
     pub fn hit(&mut self, mx: f32, my: f32, width: f32, height: f32, top: f32, s: f32) -> Hit {
@@ -343,13 +433,18 @@ impl Settings {
         if (mx - cx).hypot(my - cy) <= r {
             return Hit::Close;
         }
+        for &(ti, tx, ty, tw, th) in &l.cards {
+            if mx >= tx && mx < tx + tw && my >= ty && my < ty + th + l.name_h {
+                return Hit::Theme(ti);
+            }
+        }
         let pad = (16.0 * s).round();
         for &(i, ry, rh) in &l.rows {
             if my >= ry && my < ry + rh {
                 let right = l.x + l.w - pad;
                 let left = right - l.control_w;
                 let f = self.field(i);
-                if !is_toggle(f) && !matches!(f, Field::EditFile | Field::Version) && mx >= left {
+                if !is_toggle(f) && !matches!(f, Field::EditFile | Field::Version | Field::Theme) && mx >= left {
                     return if mx < left + l.control_w / 2.0 { Hit::Dec(i) } else { Hit::Inc(i) };
                 }
                 return Hit::Row(i);
@@ -379,6 +474,20 @@ impl Settings {
 
         for &(sy, title) in &l.sections {
             p.ui_text(l.x + pad + 4.0 * s, sy + (14.0 * s).round(), title, theme.accent, l.w);
+        }
+
+        for &(ti, tx, ty, tw, th) in &l.cards {
+            let name = Theme::NAMES[ti];
+            let selected = cfg.theme.eq_ignore_ascii_case(name);
+            let hovered = self.hover == Some(Hit::Theme(ti));
+            if let Some(t) = Theme::builtin(name) {
+                theme_card(p, &t, theme, tx, ty, tw, th, selected, hovered, s);
+            }
+            let label = Theme::display_name(name);
+            let c = if selected || hovered { theme.foreground } else { dimc };
+            let nh = p.ui_line_h(crate::atlas::UiVariant::Small);
+            let ny = (ty + th + (l.name_h - nh) / 2.0).round();
+            p.ui_text_v(tx + 2.0 * s, ny, &label, c, tw - 4.0 * s, crate::atlas::UiVariant::Small);
         }
 
         for &(i, ry, rh) in &l.rows {
@@ -411,7 +520,8 @@ impl Settings {
                 let kr = th / 2.0 - 3.0 * s;
                 let kx = if on { tx + tw - th / 2.0 } else { tx + th / 2.0 };
                 p.circle(kx, mid, kr, Rgb(255, 255, 255), 0.95);
-            } else if f == Field::Version {
+            } else if matches!(f, Field::Version | Field::Theme) {
+                // Solo lectura (el tema se elige en la cuadrícula de debajo).
                 let t = self.value_text(f, cfg);
                 let tw = p.ui_measure(&t);
                 p.ui_text_in(right - tw, ry, rh, &t, dimc, tw + 2.0);
@@ -438,22 +548,8 @@ impl Settings {
                 let value = self.value_text(f, cfg);
                 let inner = l.control_w - 56.0 * s;
                 let vw = p.ui_measure(&value).min(inner);
-                let mut vx = left + (l.control_w - vw) / 2.0;
-                if f == Field::Theme {
-                    // Muestras de color del tema
-                    if let Some(t) = Theme::builtin(&cfg.theme) {
-                        let sw = 5.0 * s;
-                        let total = 4.0 * (2.0 * sw + 2.0 * s);
-                        let sx0 = left + 28.0 * s;
-                        for (k, c) in [t.background, t.accent, t.palette[2], t.palette[1]].iter().enumerate() {
-                            let ccx = sx0 + sw + k as f32 * (2.0 * sw + 2.0 * s);
-                            p.circle(ccx, mid, sw + hair, theme.foreground, 0.25);
-                            p.circle(ccx, mid, sw, *c, 1.0);
-                        }
-                        vx = vx.max(sx0 + total + 6.0 * s);
-                    }
-                }
-                p.ui_text_in(vx.round(), ry, rh, &value, theme.foreground, right - 28.0 * s - vx);
+                let vx = left + (l.control_w - vw) / 2.0;
+                p.ui_text_in(vx.round(), ry, rh, &value, theme.foreground, inner + 1.0);
             }
         }
 
@@ -476,6 +572,49 @@ impl Settings {
             dimc,
             l.w - 2.0 * pad,
         );
+    }
+}
+
+/// Muestra de un tema: un terminal en miniatura con sus colores.
+#[allow(clippy::too_many_arguments)]
+fn theme_card(p: &mut Painter, t: &Theme, ui: &Theme, x: f32, y: f32, w: f32, h: f32, selected: bool, hovered: bool, s: f32) {
+    use crate::atlas::UiVariant::Small;
+    let r = (8.0 * s).round();
+    let hair = s.round().max(1.0);
+    if selected {
+        let b = (2.0 * s).round();
+        p.rounded(x - b, y - b, w + 2.0 * b, h + 2.0 * b, ui.accent, 1.0, r + b);
+    } else {
+        let a = if hovered { 0.40 } else { 0.14 };
+        p.rounded(x - hair, y - hair, w + 2.0 * hair, h + 2.0 * hair, ui.foreground, a, r + hair);
+    }
+    p.rounded(x, y, w, h, t.background, 1.0, r);
+
+    let lh = p.ui_line_h(Small);
+    let tx = x + (9.0 * s).round();
+    let max = w - 18.0 * s;
+    let mut ly = y + (7.0 * s).round();
+    let pw = p.ui_text_v(tx, ly, "$ ", t.accent, max, Small);
+    p.ui_text_v(tx + pw, ly, "ls", t.foreground, max - pw, Small);
+    ly += lh;
+    // Solo las palabras que caben enteras.
+    let mut cx = tx;
+    for (word, c) in [("src", t.palette[4]), ("docs", t.palette[4]), ("main.rs", t.foreground)] {
+        let ww = p.ui_measure_v(word, Small);
+        if cx + ww > tx + max {
+            break;
+        }
+        p.ui_text_v(cx, ly, word, c, ww + 1.0, Small);
+        cx += ww + p.ui_measure_v(" ", Small);
+    }
+    // Paleta del tema
+    let sw_h = (5.0 * s).round();
+    let sy = y + h - sw_h - (8.0 * s).round();
+    let n = 6.0;
+    let sgap = (3.0 * s).round();
+    let sw = ((max - sgap * (n - 1.0)) / n).floor();
+    for k in 0..6 {
+        p.rounded(tx + k as f32 * (sw + sgap), sy, sw, sw_h, t.palette[k + 1], 1.0, sw_h / 2.0);
     }
 }
 
@@ -505,7 +644,7 @@ mod tests {
         std::fs::write(&path, "# mi comentario\n[shell]\nprogram = \"/bin/zsh\"\n").unwrap();
 
         let mut cfg = Config::load();
-        let mut set = Settings { selected: 0, scroll: 0.0, fonts: vec![], restart_note: false, hover: None };
+        let mut set = Settings::with_fonts(vec![]);
         let i_theme = fields().iter().position(|f| *f == Field::Theme).unwrap();
         let i_size = fields().iter().position(|f| *f == Field::FontSize).unwrap();
         let i_blocks = fields().iter().position(|f| *f == Field::Blocks).unwrap();
@@ -527,9 +666,53 @@ mod tests {
     }
 
     #[test]
+    fn rueda_desplaza_sin_cambiar_la_seleccion() {
+        let mut set = Settings::with_fonts(vec![]);
+        let (w, h, top, s) = (900.0, 420.0, 40.0, 1.0);
+        set.layout(w, h, top, s);
+        assert_eq!(set.first, 0);
+        // Muchos eventos pequeños de touchpad: avanzan por elementos enteros, sin saltos.
+        for _ in 0..10 {
+            set.wheel(-4.0);
+            set.layout(w, h, top, s);
+        }
+        assert_eq!(set.first, 1, "40 px de rueda = un elemento");
+        assert_eq!(set.selected, 0, "la rueda no mueve la selección");
+        // Hasta el final y de vuelta: siempre dentro de los límites.
+        set.wheel(-100_000.0);
+        let l = set.layout(w, h, top, s);
+        assert!(!l.rows.is_empty());
+        let last = fields().len() - 1;
+        assert!(l.rows.iter().any(|r| r.0 == last), "se llega a la última fila");
+        set.wheel(100_000.0);
+        set.layout(w, h, top, s);
+        assert_eq!(set.first, 0);
+        // El teclado sí vuelve a mostrar la fila elegida.
+        set.move_sel(1000);
+        let l = set.layout(w, h, top, s);
+        assert!(l.rows.iter().any(|r| r.0 == last));
+    }
+
+    #[test]
+    fn elegir_tema_de_la_cuadricula() {
+        let mut cfg = Config::default();
+        let mut set = Settings::with_fonts(vec![]);
+        set.selected = 3;
+        assert_eq!(set.pick_theme(4, &mut cfg), Change::Theme);
+        assert_eq!(cfg.theme, Theme::NAMES[4]);
+        assert_eq!(set.field(set.selected), Field::Theme);
+        assert_eq!(set.pick_theme(4, &mut cfg), Change::None);
+        assert_eq!(set.pick_theme(99, &mut cfg), Change::None);
+        // Con el ancho normal caben todas las tarjetas en dos filas.
+        let l = set.layout(900.0, 1400.0, 40.0, 1.0);
+        assert_eq!(l.cards.len(), Theme::NAMES.len());
+        assert_eq!(Theme::display_name("catppuccin-mocha"), "Catppuccin Mocha");
+    }
+
+    #[test]
     fn limites_de_valores() {
         let mut cfg = Config::default();
-        let mut set = Settings { selected: 0, scroll: 0.0, fonts: vec![], restart_note: false, hover: None };
+        let mut set = Settings::with_fonts(vec![]);
         let i = fields().iter().position(|f| *f == Field::FontSize).unwrap();
         for _ in 0..100 {
             set.adjust(i, -1, &mut cfg);

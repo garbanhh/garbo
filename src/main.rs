@@ -16,6 +16,7 @@ mod pty_loop;
 mod renderer;
 mod sessions;
 mod settings;
+mod subagents;
 mod terminal;
 mod ui;
 mod update;

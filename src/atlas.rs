@@ -46,6 +46,38 @@ impl Packer {
     }
 }
 
+/// Variantes del texto de la interfaz: mismo juego de fuentes a otra escala o grosor.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum UiVariant {
+    Normal,
+    /// Títulos: negrita y algo más grande.
+    Title,
+    /// Texto secundario denso (vista previa de una pestaña).
+    Small,
+}
+
+impl UiVariant {
+    pub fn scale(self) -> f32 {
+        match self {
+            UiVariant::Normal => 1.0,
+            UiVariant::Title => 1.22,
+            UiVariant::Small => 0.88,
+        }
+    }
+
+    fn style(self) -> Style {
+        if self == UiVariant::Title { Style::Bold } else { Style::Regular }
+    }
+
+    fn id(self) -> u8 {
+        match self {
+            UiVariant::Normal => 1,
+            UiVariant::Title => 2,
+            UiVariant::Small => 3,
+        }
+    }
+}
+
 /// Caché de glifos: char -> glifo en atlas. Sube a la GPU solo la primera vez.
 pub struct GlyphCache {
     /// Fuente monoespaciada del terminal.
@@ -53,10 +85,10 @@ pub struct GlyphCache {
     /// Fuente proporcional de la interfaz (pestañas, paleta, ajustes).
     pub ui: FontSet,
     packer: Packer,
-    /// (juego de fuentes 0=terminal 1=interfaz, slot, glifo, ancho doble)
+    /// (juego de fuentes 0=terminal 1..=3=interfaz por variante, slot, glifo, ancho doble)
     map: HashMap<(u8, u16, u16, bool), Option<AtlasGlyph>>,
-    /// Avances de la fuente de interfaz por carácter.
-    ui_adv: HashMap<char, f32>,
+    /// Avances de la fuente de interfaz por carácter y variante.
+    ui_adv: HashMap<(char, u8), f32>,
     /// Se activa cuando el atlas se llenó y se vació: el frame debe repetirse.
     pub overflowed: bool,
 }
@@ -95,29 +127,39 @@ impl GlyphCache {
     }
 
     /// Glifo de la interfaz y su avance horizontal.
-    pub fn get_ui(&mut self, queue: &wgpu::Queue, texture: &wgpu::Texture, ch: char) -> (Option<AtlasGlyph>, f32) {
+    pub fn get_ui(
+        &mut self,
+        queue: &wgpu::Queue,
+        texture: &wgpu::Texture,
+        ch: char,
+        v: UiVariant,
+    ) -> (Option<AtlasGlyph>, f32) {
         let emoji = ch as u32 >= 0x1F000;
-        let (slot, gid) = self.ui.resolve(ch, Style::Regular, emoji);
-        let adv = self.ui_advance(ch);
-        let key = (1, slot, gid, false);
+        let (slot, gid) = self.ui.resolve(ch, v.style(), emoji);
+        let adv = self.ui_advance(ch, v);
+        let key = (v.id(), slot, gid, false);
         if let Some(g) = self.map.get(&key) {
             return (*g, adv);
         }
+        // Mismas fuentes a otro tamaño: se cambia el tamaño solo durante el rasterizado.
+        let base = self.ui.size_px;
+        self.ui.size_px = base * v.scale();
         let max_w = self.ui.size_px * 1.3;
         let raster = rasterize_with_fallback(&mut self.ui, ch, slot, gid, max_w);
+        self.ui.size_px = base;
         let glyph = raster.and_then(|r| self.upload(queue, texture, r));
         self.map.insert(key, glyph);
         (glyph, adv)
     }
 
-    pub fn ui_advance(&mut self, ch: char) -> f32 {
-        if let Some(&a) = self.ui_adv.get(&ch) {
+    pub fn ui_advance(&mut self, ch: char, v: UiVariant) -> f32 {
+        if let Some(&a) = self.ui_adv.get(&(ch, v.id())) {
             return a;
         }
         let emoji = ch as u32 >= 0x1F000;
-        let (slot, gid) = self.ui.resolve(ch, Style::Regular, emoji);
-        let a = if emoji { self.ui.size_px * 1.3 } else { self.ui.advance(slot, gid) };
-        self.ui_adv.insert(ch, a);
+        let (slot, gid) = self.ui.resolve(ch, v.style(), emoji);
+        let a = if emoji { self.ui.size_px * 1.3 } else { self.ui.advance(slot, gid) } * v.scale();
+        self.ui_adv.insert((ch, v.id()), a);
         a
     }
 

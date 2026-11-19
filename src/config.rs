@@ -310,6 +310,18 @@ impl Theme {
         "nord",
     ];
 
+    /// Nombre para mostrar en la interfaz ("garbo-black" -> "Garbo Black").
+    pub fn display_name(name: &str) -> String {
+        name.split(['-', '_'])
+            .filter(|w| !w.is_empty())
+            .map(|w| {
+                let mut c = w.chars();
+                c.next().map_or(String::new(), |f| f.to_uppercase().collect::<String>() + c.as_str())
+            })
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
     pub fn builtin(name: &str) -> Option<Theme> {
         let (fg, bg, cursor, sel, bar, active, accent, pal): (u32, u32, u32, u32, u32, u32, u32, [u32; 16]) =
             match name {

@@ -235,7 +235,8 @@ impl ApplicationHandler<UserEvent> for App {
             WindowEvent::CursorMoved { position, .. } => self.on_mouse_move(position.x as f32, position.y as f32),
             WindowEvent::CursorLeft { .. } => {
                 let st = self.st();
-                if st.hover.take().is_some() {
+                let panel = st.panel.set_hover(None, Instant::now());
+                if st.hover.take().is_some() || panel {
                     st.window.request_redraw();
                 }
             }
@@ -384,12 +385,11 @@ impl App {
             }
             return;
         }
-        if let Some((px, py, pw, ph)) = geo.panel {
-            let n = st.tabs.iter().filter(|t| t.session.agent.is_some()).count();
-            let lh = st.glyphs.ui.metrics.height;
-            let hit = st.panel.hit(x, y, n, px, py, pw, ph, st.scale, lh);
-            if hit != st.panel.hover {
-                st.panel.hover = hit;
+        if geo.panel.is_some() {
+            let now = Instant::now();
+            let hit = self.panel_hit(x, y, now);
+            let st = self.st();
+            if st.panel.set_hover(hit, now) {
                 st.window.request_redraw();
             }
             if hit.is_some() {
@@ -404,6 +404,7 @@ impl App {
                 return;
             }
         }
+        let st = self.st();
         let hover = geo.tab_bar.as_ref().and_then(|tb| tb.hit(x, y));
         if hover != st.hover {
             st.hover = hover;
@@ -492,6 +493,7 @@ impl App {
                     set.selected = i;
                     set.adjust(i, 0, &mut self.cfg)
                 }
+                Hit::Theme(i) => set.pick_theme(i, &mut self.cfg),
                 Hit::Panel => crate::settings::Change::None,
             };
             st.window.request_redraw();
@@ -517,13 +519,10 @@ impl App {
         }
 
         // Panel lateral
-        if let Some((px, py, pw, ph)) = geo.panel {
+        if let Some((px, py, _, _)) = geo.panel {
             if x >= px && y >= py {
                 if pressed && button == MouseButton::Left {
-                    let st = self.st();
-                    let n = st.tabs.iter().filter(|t| t.session.agent.is_some()).count();
-                    let lh = st.glyphs.ui.metrics.height;
-                    if let Some(hit) = st.panel.hit(x, y, n, px, py, pw, ph, st.scale, lh) {
+                    if let Some(hit) = self.panel_hit(x, y, Instant::now()) {
                         self.on_panel_click(hit);
                     }
                 }
@@ -692,6 +691,7 @@ impl App {
 
     fn on_wheel(&mut self, delta: MouseScrollDelta) {
         let mult = self.cfg.terminal.scroll_multiplier;
+        let top = self.geometry().tab_bar.as_ref().map_or(0.0, |t| t.height);
         let st = self.st();
         let ch = st.glyphs.fonts.metrics.height;
         let lines = match delta {
@@ -699,12 +699,28 @@ impl App {
             MouseScrollDelta::PixelDelta(p) => p.y as f32 / ch,
         };
         if let Some(pal) = st.palette.as_mut() {
-            pal.move_sel(if lines > 0.0 { -1 } else { 1 });
-            st.window.request_redraw();
+            // Un elemento por "muesca" de la rueda (o por cada ~36 px de touchpad), no por evento.
+            let steps = match delta {
+                MouseScrollDelta::LineDelta(_, y) => y,
+                MouseScrollDelta::PixelDelta(p) => p.y as f32 / (36.0 * st.scale),
+            };
+            let n = pal.wheel(steps);
+            if n != 0 {
+                pal.move_sel(-n);
+                st.window.request_redraw();
+            }
             return;
         }
         if let Some(set) = st.settings.as_mut() {
-            set.move_sel(if lines > 0.0 { -1 } else { 1 });
+            // La rueda desplaza la lista; la selección solo la mueve el teclado.
+            let px = match delta {
+                MouseScrollDelta::LineDelta(_, y) => y * 48.0 * st.scale,
+                MouseScrollDelta::PixelDelta(p) => p.y as f32,
+            };
+            set.wheel(px);
+            let (w, h) = st.renderer.size();
+            let (mx, my) = st.mouse;
+            set.hover = Some(set.hit(mx, my, w, h, top, st.scale));
             st.window.request_redraw();
             return;
         }
