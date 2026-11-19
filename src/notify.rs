@@ -59,10 +59,16 @@ const BLOCKED_EVERY: Duration = Duration::from_secs(3);
 
 impl Tracker {
     /// Sigue el estado de trabajo. Devuelve cuánto trabajó si el aviso de "terminado" toca ahora.
-    pub fn update(&mut self, activity: Activity, min_work: Duration, now: Instant) -> Option<Duration> {
+    pub fn update(
+        &mut self,
+        activity: Activity,
+        min_work: Duration,
+        now: Instant,
+    ) -> Option<Duration> {
         // Al dejar de esperar al usuario, el rato de espera se descuenta del trabajo.
         if activity != Activity::Blocked {
-            if let (Some(b), Some(start)) = (self.blocked_since.take(), self.working_since.as_mut()) {
+            if let (Some(b), Some(start)) = (self.blocked_since.take(), self.working_since.as_mut())
+            {
                 *start += now.duration_since(b);
             }
         }
@@ -70,7 +76,8 @@ impl Tracker {
             Activity::Working => {
                 if self.working_since.is_none() {
                     // Si vuelve a trabajar antes de confirmar, es la misma tarea.
-                    self.working_since = Some(self.pending.take().map_or(now, |(_, start, _)| start));
+                    self.working_since =
+                        Some(self.pending.take().map_or(now, |(_, start, _)| start));
                 }
                 return None;
             }
@@ -98,7 +105,9 @@ impl Tracker {
             Some((at, start, stopped)) if now >= at => {
                 self.pending = None;
                 // Los `WORK_WINDOW` de silencio que `sessions` cuenta como trabajo no se suman.
-                let worked = stopped.duration_since(start).saturating_sub(crate::sessions::WORK_WINDOW);
+                let worked = stopped
+                    .duration_since(start)
+                    .saturating_sub(crate::sessions::WORK_WINDOW);
                 (worked >= min_work).then_some(worked)
             }
             _ => None,
@@ -109,7 +118,11 @@ impl Tracker {
     pub fn blocked_now(&mut self, blocked: bool, now: Instant) -> bool {
         let edge = blocked && !self.was_blocked;
         self.was_blocked = blocked;
-        if edge && self.blocked_notice.is_none_or(|t| now.duration_since(t) >= BLOCKED_EVERY) {
+        if edge
+            && self
+                .blocked_notice
+                .is_none_or(|t| now.duration_since(t) >= BLOCKED_EVERY)
+        {
             self.blocked_notice = Some(now);
             return true;
         }
@@ -144,7 +157,13 @@ static LIVE: Mutex<Option<HashSet<u32>>> = Mutex::new(None);
 
 /// Texto del aviso cuando el agente espera al usuario: "Claude Code necesita tu permiso" y, debajo,
 /// lo que dice el agente ("Bash: rm -r build") y la pestaña.
-pub fn blocked_text(agent: &str, kind: Option<crate::status::Kind>, msg: Option<&str>, task: &str, dir: &str) -> (String, String) {
+pub fn blocked_text(
+    agent: &str,
+    kind: Option<crate::status::Kind>,
+    msg: Option<&str>,
+    task: &str,
+    dir: &str,
+) -> (String, String) {
     use crate::status::Kind;
     let title = match kind {
         Some(Kind::Permission) => format!("{agent} necesita tu permiso"),
@@ -172,39 +191,60 @@ pub fn notice_text(agent: &str, task: &str, dir: &str, worked: Duration) -> (Str
         lines.push(task.to_string());
     }
     let took = format!("trabajó {}", crate::blocks::format_duration(worked));
-    lines.push(if dir.is_empty() { took } else { format!("{dir} · {took}") });
+    lines.push(if dir.is_empty() {
+        took
+    } else {
+        format!("{dir} · {took}")
+    });
     (format!("{agent} ha terminado"), lines.join("\n"))
 }
 
 /// El cuerpo admite marcas (negrita…) en GNOME: lo que venga del agente se escapa.
 fn escape_markup(s: &str) -> String {
-    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
 }
 
 fn clean(s: &str) -> String {
-    s.chars().map(|c| if c.is_control() && c != '\n' { ' ' } else { c }).collect()
+    s.chars()
+        .map(|c| if c.is_control() && c != '\n' { ' ' } else { c })
+        .collect()
 }
-
 
 /// Envía el aviso en segundo plano. Avisa a la app del proceso (`NoticeShown`) y de si se pulsa
 /// (`NoticeClicked`, con el permiso de activación si el escritorio lo da).
 pub fn send(n: Notice, proxy: EventLoopProxy<UserEvent>) {
     let mut cmd = Command::new("notify-send");
-    cmd.args(["-a", "Garbo", "-i", APP_ID, "-h"]).arg(format!("string:desktop-entry:{APP_ID}"));
+    cmd.args(["-a", "Garbo", "-i", APP_ID, "-h"])
+        .arg(format!("string:desktop-entry:{APP_ID}"));
     // El permiso de activación sale por stdout justo antes del nombre de la acción.
     cmd.args(["-A", "default=Abrir", "--activation-token-fd=1", "-h"]);
-    cmd.arg(if n.sound { "string:sound-name:complete" } else { "boolean:suppress-sound:true" });
-    cmd.arg("--").arg(clean(&n.title)).arg(escape_markup(&clean(&n.body)));
-    cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null());
+    cmd.arg(if n.sound {
+        "string:sound-name:complete"
+    } else {
+        "boolean:suppress-sound:true"
+    });
+    cmd.arg("--")
+        .arg(clean(&n.title))
+        .arg(escape_markup(&clean(&n.body)));
+    cmd.stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
     let mut child = match cmd.spawn() {
         Ok(c) => c,
         Err(e) => {
-            log::warn!("No se pudo enviar el aviso (¿falta notify-send, del paquete libnotify?): {e}");
+            log::warn!(
+                "No se pudo enviar el aviso (¿falta notify-send, del paquete libnotify?): {e}"
+            );
             return;
         }
     };
     let pid = child.id();
-    LIVE.lock().unwrap_or_else(|e| e.into_inner()).get_or_insert_with(HashSet::new).insert(pid);
+    LIVE.lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get_or_insert_with(HashSet::new)
+        .insert(pid);
     log::info!("Aviso (notify-send {pid}): {}", n.title);
     let _ = proxy.send_event(UserEvent::NoticeShown(n.tab, pid));
     std::thread::spawn(move || {
@@ -263,7 +303,10 @@ mod tests {
         assert_eq!(t.update(Quiet, min, s(10_000)), None);
         assert_eq!(t.next_wake(), Some(s(10_000) + CONFIRM));
         assert_eq!(t.update(Quiet, min, s(11_000)), None, "aún sin confirmar");
-        assert_eq!(t.update(Quiet, min, s(12_600)), Some(Duration::from_millis(8_500)));
+        assert_eq!(
+            t.update(Quiet, min, s(12_600)),
+            Some(Duration::from_millis(8_500))
+        );
         assert_eq!(t.next_wake(), None, "solo una vez");
         assert_eq!(t.update(Quiet, min, s(20_000)), None);
 
@@ -273,7 +316,10 @@ mod tests {
         t.update(Quiet, min, s(4_000));
         t.update(Working, min, s(5_000));
         t.update(Quiet, min, s(8_000));
-        assert_eq!(t.update(Quiet, min, s(10_600)), Some(Duration::from_millis(6_500)));
+        assert_eq!(
+            t.update(Quiet, min, s(10_600)),
+            Some(Duration::from_millis(6_500))
+        );
 
         // Poco trabajo: sin aviso.
         let mut t = Tracker::default();
@@ -294,9 +340,16 @@ mod tests {
         t.update(Working, min, s(0));
         assert_eq!(t.update(Blocked, min, s(4_000)), None);
         assert_eq!(t.update(Blocked, min, s(30_000)), None);
-        assert_eq!(t.next_wake(), None, "esperando al usuario no hay nada pendiente");
+        assert_eq!(
+            t.next_wake(),
+            None,
+            "esperando al usuario no hay nada pendiente"
+        );
         t.update(Working, min, s(64_000));
-        assert_eq!(t.update(Finished, min, s(67_000)), Some(Duration::from_secs(7)));
+        assert_eq!(
+            t.update(Finished, min, s(67_000)),
+            Some(Duration::from_secs(7))
+        );
         assert_eq!(t.update(Finished, min, s(68_000)), None, "solo una vez");
         // Interrumpido (idle): sin aviso.
         t.update(Working, min, s(70_000));
@@ -306,17 +359,40 @@ mod tests {
 
     #[test]
     fn texto_y_politica() {
-        let (title, body) = notice_text("Claude Code", "Rediseñar los ajustes", "GRBTER", Duration::from_secs(125));
+        let (title, body) = notice_text(
+            "Claude Code",
+            "Rediseñar los ajustes",
+            "GRBTER",
+            Duration::from_secs(125),
+        );
         assert_eq!(title, "Claude Code ha terminado");
         assert_eq!(body, "Rediseñar los ajustes\nGRBTER · trabajó 2 min 05 s");
         let (_, body) = notice_text("Aider", "Aider", "src", Duration::from_secs(7));
-        assert_eq!(body, "src · trabajó 7,0 s", "sin repetir el nombre del agente");
-        let (title, body) = blocked_text("Claude Code", Some(crate::status::Kind::Permission), Some("trust this folder"), "Claude Code", "GRBTER");
-        assert_eq!((title.as_str(), body.as_str()), ("Claude Code necesita tu permiso", "trust this folder\nGRBTER"));
+        assert_eq!(
+            body, "src · trabajó 7,0 s",
+            "sin repetir el nombre del agente"
+        );
+        let (title, body) = blocked_text(
+            "Claude Code",
+            Some(crate::status::Kind::Permission),
+            Some("trust this folder"),
+            "Claude Code",
+            "GRBTER",
+        );
+        assert_eq!(
+            (title.as_str(), body.as_str()),
+            (
+                "Claude Code necesita tu permiso",
+                "trust this folder\nGRBTER"
+            )
+        );
         assert_eq!(escape_markup("a <b> & c"), "a &lt;b&gt; &amp; c");
         assert_eq!(clean("x\u{1b}[31my"), "x [31my");
         let mut cfg = NotifyConfig::default();
-        assert!(wanted(&cfg, false) && !wanted(&cfg, true), "por defecto, solo si no se está viendo");
+        assert!(
+            wanted(&cfg, false) && !wanted(&cfg, true),
+            "por defecto, solo si no se está viendo"
+        );
         cfg.agents = NotifyWhen::Always;
         assert!(wanted(&cfg, true));
         cfg.agents = NotifyWhen::Never;
@@ -326,9 +402,19 @@ mod tests {
     #[test]
     fn permiso_de_activacion_antes_del_clic() {
         let mut token = None;
-        assert_eq!(clicked("2b1f6c0e-9a7d-4c1e-8f3a-5d6e7f8a9b0c", &mut token), None);
-        assert_eq!(clicked("default", &mut token), Some(Some("2b1f6c0e-9a7d-4c1e-8f3a-5d6e7f8a9b0c".into())));
-        assert_eq!(clicked("default", &mut token), Some(None), "sin permiso: se pulsa igual");
+        assert_eq!(
+            clicked("2b1f6c0e-9a7d-4c1e-8f3a-5d6e7f8a9b0c", &mut token),
+            None
+        );
+        assert_eq!(
+            clicked("default", &mut token),
+            Some(Some("2b1f6c0e-9a7d-4c1e-8f3a-5d6e7f8a9b0c".into()))
+        );
+        assert_eq!(
+            clicked("default", &mut token),
+            Some(None),
+            "sin permiso: se pulsa igual"
+        );
         assert_eq!(clicked("con espacios raros", &mut token), None);
         assert_eq!(token, None);
     }

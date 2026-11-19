@@ -28,7 +28,14 @@ pub fn pt_to_px(pt: f32, scale: f32) -> f32 {
 pub fn build_glyphs(cfg: &Config, font_pt: f32, scale: f32) -> GlyphCache {
     let db = FontSet::system_db();
     let f = &cfg.font;
-    let term = FontSet::from_db(&db, &f.family, &f.fallback, pt_to_px(font_pt, scale), f.line_height, true);
+    let term = FontSet::from_db(
+        &db,
+        &f.family,
+        &f.fallback,
+        pt_to_px(font_pt, scale),
+        f.line_height,
+        true,
+    );
     let ui_px = pt_to_px(f.ui_size, scale);
     let ui = if f.ui_family.trim().is_empty() {
         FontSet::from_db(&db, &f.family, &f.fallback, ui_px, 1.0, true)
@@ -135,7 +142,13 @@ impl App {
     pub fn new(cfg: Config, proxy: EventLoopProxy<UserEvent>) -> Self {
         let theme = cfg.theme();
         let keys = Keybindings::new(&cfg.keybindings);
-        Self { cfg, theme, keys, proxy, st: None }
+        Self {
+            cfg,
+            theme,
+            keys,
+            proxy,
+            st: None,
+        }
     }
 
     pub fn init(&mut self, window: Arc<Window>) {
@@ -181,7 +194,12 @@ impl App {
             cursor_on: true,
             next_blink: now,
             scroll_accum: 0.0,
-            last_ws: WindowSize { num_lines: 0, num_cols: 0, cell_width: 0, cell_height: 0 },
+            last_ws: WindowSize {
+                num_lines: 0,
+                num_cols: 0,
+                cell_width: 0,
+                cell_height: 0,
+            },
             out: Vec::with_capacity(8192),
             fg: Vec::with_capacity(8192),
         });
@@ -200,13 +218,23 @@ impl App {
         match st.update.clone() {
             Some(U::Available(rel)) => {
                 if update::can_install(&rel) {
-                    update::start_install(rel, proxy);
+                    let version = rel.version.clone();
+                    st.update = Some(match update::start_install(rel, proxy) {
+                        Ok(()) => U::Downloading(version),
+                        Err(e) => U::Failed(e.to_string()),
+                    });
+                    st.window.request_redraw();
                 } else {
-                    let _ = std::process::Command::new("xdg-open").arg(&rel.page).spawn();
+                    let _ = std::process::Command::new("xdg-open")
+                        .arg(&rel.page)
+                        .spawn();
                 }
             }
             Some(U::Installed(_)) => {
-                if std::process::Command::new(update::restart_path()).spawn().is_ok() {
+                if std::process::Command::new(update::restart_path())
+                    .spawn()
+                    .is_ok()
+                {
                     return true;
                 }
             }
@@ -234,18 +262,39 @@ impl App {
         let tab_bar = (integrated || self.cfg.window.always_show_tabs || n_tabs > 1)
             .then(|| TabBar::layout(n_tabs, w, st.scale, integrated, st.update.is_some()));
         let top = tab_bar.as_ref().map_or(0.0, |t| t.height);
-        let panel_w = if st.panel.visible() { crate::panel::PanelState::width(st.scale, w) } else { 0.0 };
-        let panel = (panel_w > 0.0).then(|| (w - panel_w, top, panel_w, h - top));
+        let panel_w = if st.panel.visible() {
+            crate::panel::PanelState::width(st.scale, w)
+        } else {
+            0.0
+        };
+        let panel = (panel_w > 0.0).then_some((w - panel_w, top, panel_w, h - top));
         let area = [0.0, top, w - panel_w, h - top];
         let gap = crate::panes::gap(st.scale);
         let (panes, dividers) = match st.groups.get(st.group) {
-            Some(g) => (self.pane_geos(&g.layout, area), g.layout.dividers(area, gap)),
+            Some(g) => (
+                self.pane_geos(&g.layout, area),
+                g.layout.dividers(area, gap),
+            ),
             None => (Vec::new(), Vec::new()),
         };
-        let focus = panes.iter().find(|p| p.idx == st.active).or(panes.first()).copied();
+        let focus = panes
+            .iter()
+            .find(|p| p.idx == st.active)
+            .or(panes.first())
+            .copied();
         let fallback = self.pane_geo(usize::MAX, area);
         let f = focus.unwrap_or(fallback);
-        Geometry { tab_bar, x: f.x, y: f.y, ws: f.ws, panel, pane: f.rect, panes, dividers, area }
+        Geometry {
+            tab_bar,
+            x: f.x,
+            y: f.y,
+            ws: f.ws,
+            panel,
+            pane: f.rect,
+            panes,
+            dividers,
+            area,
+        }
     }
 
     /// Dónde empiezan las celdas de un panel y cuántas caben (con el margen de la ventana).
@@ -260,7 +309,12 @@ impl App {
             rect,
             x: rect[0] + pad,
             y: rect[1] + pad,
-            ws: WindowSize { num_lines: lines as u16, num_cols: cols as u16, cell_width: m.width as u16, cell_height: m.height as u16 },
+            ws: WindowSize {
+                num_lines: lines as u16,
+                num_cols: cols as u16,
+                cell_width: m.width as u16,
+                cell_height: m.height as u16,
+            },
         }
     }
 
@@ -269,22 +323,35 @@ impl App {
         layout
             .rects(area, crate::panes::gap(st.scale))
             .into_iter()
-            .filter_map(|(id, r)| st.tabs.iter().position(|t| t.id == id).map(|i| self.pane_geo(i, r)))
+            .filter_map(|(id, r)| {
+                st.tabs
+                    .iter()
+                    .position(|t| t.id == id)
+                    .map(|i| self.pane_geo(i, r))
+            })
             .collect()
     }
 
     /// Pone `active` en el terminal con el foco de la pestaña activa.
     fn sync_active(&mut self) {
         let st = self.st();
-        if let Some(i) = st.groups.get(st.group).and_then(|g| st.tabs.iter().position(|t| t.id == g.focus)) {
+        if let Some(i) = st
+            .groups
+            .get(st.group)
+            .and_then(|g| st.tabs.iter().position(|t| t.id == g.focus))
+        {
             st.active = i;
         }
     }
 
     /// ¿Tiene la pestaña activa más de un panel?
     pub fn has_splits(&self) -> bool {
-        let Some(st) = self.st.as_ref() else { return false };
-        st.groups.get(st.group).is_some_and(|g| matches!(g.layout, crate::panes::Layout::Split { .. }))
+        let Some(st) = self.st.as_ref() else {
+            return false;
+        };
+        st.groups
+            .get(st.group)
+            .is_some_and(|g| matches!(g.layout, crate::panes::Layout::Split { .. }))
     }
 
     /// Recalcula filas/columnas de cada panel y avisa a los PTY que cambiaron (a todos si
@@ -294,10 +361,15 @@ impl App {
         let area = geo.area;
         let sizes: Vec<(usize, WindowSize)> = {
             let st = self.st.as_ref().unwrap();
-            st.groups.iter().flat_map(|g| self.pane_geos(&g.layout, area)).map(|p| (p.idx, p.ws)).collect()
+            st.groups
+                .iter()
+                .flat_map(|g| self.pane_geos(&g.layout, area))
+                .map(|p| (p.idx, p.ws))
+                .collect()
         };
         let same = |a: &WindowSize, b: &WindowSize| {
-            (a.num_lines, a.num_cols, a.cell_width, a.cell_height) == (b.num_lines, b.num_cols, b.cell_width, b.cell_height)
+            (a.num_lines, a.num_cols, a.cell_width, a.cell_height)
+                == (b.num_lines, b.num_cols, b.cell_width, b.cell_height)
         };
         let st = self.st();
         let force = st.last_ws.num_cols == 0;
@@ -326,7 +398,15 @@ impl App {
         let id = st.next_id;
         st.next_id += 1;
         let ws_guess = st.last_ws;
-        let ws = if ws_guess.num_cols == 0 { WindowSize { num_lines: 24, num_cols: 80, ..ws_guess } } else { ws_guess };
+        let ws = if ws_guess.num_cols == 0 {
+            WindowSize {
+                num_lines: 24,
+                num_cols: 80,
+                ..ws_guess
+            }
+        } else {
+            ws_guess
+        };
         match Tab::spawn(id, &cfg, ws, cwd, proxy) {
             Ok(tab) => {
                 let st = self.st();
@@ -350,7 +430,9 @@ impl App {
         let proxy = self.proxy.clone();
         let cfg = self.cfg.clone();
         let st = self.st();
-        let Some(focus) = st.groups.get(st.group).map(|g| g.focus) else { return };
+        let Some(focus) = st.groups.get(st.group).map(|g| g.focus) else {
+            return;
+        };
         let id = st.next_id;
         st.next_id += 1;
         let ws = st.last_ws;
@@ -374,8 +456,14 @@ impl App {
     pub fn focus_pane(&mut self, dir: crate::panes::Dir) {
         let geo = self.geometry();
         let st = self.st();
-        let rects: Vec<(u64, crate::panes::Rect)> = geo.panes.iter().map(|p| (st.tabs[p.idx].id, p.rect)).collect();
-        let Some(from) = st.tabs.get(st.active).map(|t| t.id) else { return };
+        let rects: Vec<(u64, crate::panes::Rect)> = geo
+            .panes
+            .iter()
+            .map(|p| (st.tabs[p.idx].id, p.rect))
+            .collect();
+        let Some(from) = st.tabs.get(st.active).map(|t| t.id) else {
+            return;
+        };
         if let Some(to) = crate::panes::neighbor(&rects, from, dir) {
             if let Some(i) = st.tabs.iter().position(|t| t.id == to) {
                 self.select_tab(i);
@@ -387,7 +475,9 @@ impl App {
     /// `true` si ya no queda ninguna.
     pub fn close_pane(&mut self, idx: usize) -> bool {
         let st = self.st();
-        let Some(id) = st.tabs.get(idx).map(|t| t.id) else { return st.tabs.is_empty() };
+        let Some(id) = st.tabs.get(idx).map(|t| t.id) else {
+            return st.tabs.is_empty();
+        };
         st.tabs.remove(idx);
         if let Some(g) = st.groups.iter().position(|g| g.layout.contains(id)) {
             let layout = std::mem::replace(&mut st.groups[g].layout, crate::panes::Layout::Leaf(0));
@@ -419,7 +509,9 @@ impl App {
 
     /// Cierra una pestaña de la barra con todos sus paneles.
     pub fn close_tab(&mut self, g: usize) -> bool {
-        let Some(ids) = self.st().groups.get(g).map(|g| g.layout.leaves()) else { return false };
+        let Some(ids) = self.st().groups.get(g).map(|g| g.layout.leaves()) else {
+            return false;
+        };
         let mut last = false;
         for id in ids {
             if let Some(i) = self.st().tabs.iter().position(|t| t.id == id) {
@@ -432,8 +524,12 @@ impl App {
     /// Lleva el foco al terminal `idx` (y a su pestaña).
     pub fn select_tab(&mut self, idx: usize) {
         let st = self.st();
-        let Some(id) = st.tabs.get(idx).map(|t| t.id) else { return };
-        let Some(g) = st.groups.iter().position(|g| g.layout.contains(id)) else { return };
+        let Some(id) = st.tabs.get(idx).map(|t| t.id) else {
+            return;
+        };
+        let Some(g) = st.groups.iter().position(|g| g.layout.contains(id)) else {
+            return;
+        };
         st.group = g;
         st.groups[g].focus = id;
         if idx != st.active {
@@ -446,7 +542,9 @@ impl App {
 
     /// Activa la pestaña `g` de la barra (con el panel que tenía el foco).
     pub fn select_group(&mut self, g: usize) {
-        let Some(id) = self.st().groups.get(g).map(|g| g.focus) else { return };
+        let Some(id) = self.st().groups.get(g).map(|g| g.focus) else {
+            return;
+        };
         if let Some(i) = self.st().tabs.iter().position(|t| t.id == id) {
             self.select_tab(i);
         }
@@ -478,10 +576,16 @@ impl App {
 
     pub fn copy_selection(&mut self, to_primary: bool) {
         let st = self.st();
-        let Some(tab) = st.tabs.get(st.active) else { return };
+        let Some(tab) = st.tabs.get(st.active) else {
+            return;
+        };
         let text = tab.term.lock().selection_to_string();
         if let Some(text) = text.filter(|t| !t.is_empty()) {
-            let cb = if to_primary { &mut st.selection_clip } else { &mut st.clipboard };
+            let cb = if to_primary {
+                &mut st.selection_clip
+            } else {
+                &mut st.clipboard
+            };
             if let Err(e) = cb.set_contents(text) {
                 log::warn!("portapapeles: {e}");
             }
@@ -495,14 +599,20 @@ impl App {
         let open = match target {
             Target::Url(url) => Open::Spawn(vec!["xdg-open".into(), url]),
             Target::File { path, line, col } => {
-                let editor = std::env::var("VISUAL").ok().filter(|e| !e.is_empty()).or_else(|| std::env::var("EDITOR").ok());
+                let editor = std::env::var("VISUAL")
+                    .ok()
+                    .filter(|e| !e.is_empty())
+                    .or_else(|| std::env::var("EDITOR").ok());
                 crate::links::open_file(&path, line, col, editor.as_deref())
             }
         };
         match open {
             Open::Spawn(cmd) => {
                 let mut c = std::process::Command::new(&cmd[0]);
-                c.args(&cmd[1..]).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
+                c.args(&cmd[1..])
+                    .stdin(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null());
                 if let Some(d) = &cwd {
                     c.current_dir(d);
                 }
@@ -524,30 +634,42 @@ impl App {
     pub fn paste(&mut self, from_primary: bool) {
         let proxy = self.proxy.clone();
         let st = self.st();
-        let cb = if from_primary { &mut st.selection_clip } else { &mut st.clipboard };
+        let cb = if from_primary {
+            &mut st.selection_clip
+        } else {
+            &mut st.clipboard
+        };
         match cb.get_contents() {
             Ok(text) if !text.is_empty() => self.paste_text(&text),
             // Sin texto: quizá una imagen (captura de pantalla). Se guarda y se pega su ruta.
             _ if !from_primary => {
-                let Some(id) = st.tabs.get(st.active).map(|t| t.id) else { return };
-                let _ = std::thread::Builder::new().name("pegar-imagen".into()).spawn(move || {
-                    let r = crate::clipboard::save_image();
-                    let _ = proxy.send_event(UserEvent::PasteImage(id, r));
-                });
+                let Some(id) = st.tabs.get(st.active).map(|t| t.id) else {
+                    return;
+                };
+                let _ = std::thread::Builder::new()
+                    .name("pegar-imagen".into())
+                    .spawn(move || {
+                        let r = crate::clipboard::save_image();
+                        let _ = proxy.send_event(UserEvent::PasteImage(id, r));
+                    });
             }
             _ => {}
         }
     }
 
     pub fn paste_text(&mut self, text: &str) {
-        let Some(id) = self.active_tab().map(|t| t.id) else { return };
+        let Some(id) = self.active_tab().map(|t| t.id) else {
+            return;
+        };
         self.paste_text_to(id, text);
     }
 
     /// Pega en la pestaña `id` (respetando el modo "bracketed paste" del programa).
     pub fn paste_text_to(&mut self, id: u64, text: &str) {
         let st = self.st();
-        let Some(tab) = st.tabs.iter().find(|t| t.id == id) else { return };
+        let Some(tab) = st.tabs.iter().find(|t| t.id == id) else {
+            return;
+        };
         let mode = *tab.term.lock().mode();
         let bytes = if mode.contains(TermMode::BRACKETED_PASTE) {
             // Evita que el texto pegado cierre el modo bracketed por su cuenta.
@@ -580,7 +702,11 @@ impl App {
     }
 
     pub fn reload_config(&mut self) {
-        let old_font = (self.cfg.font.family.clone(), self.cfg.font.fallback.clone(), self.cfg.font.line_height);
+        let old_font = (
+            self.cfg.font.family.clone(),
+            self.cfg.font.fallback.clone(),
+            self.cfg.font.line_height,
+        );
         self.cfg = Config::load();
         self.theme = self.cfg.theme();
         self.keys = Keybindings::new(&self.cfg.keybindings);
@@ -590,7 +716,13 @@ impl App {
         for tab in &st.tabs {
             tab.term.lock().set_options(tc.clone());
         }
-        if old_font != (cfg.font.family.clone(), cfg.font.fallback.clone(), cfg.font.line_height) {
+        if old_font
+            != (
+                cfg.font.family.clone(),
+                cfg.font.fallback.clone(),
+                cfg.font.line_height,
+            )
+        {
             let px = pt_to_px(cfg.font.size, st.scale);
             let _ = px;
             st.glyphs = build_glyphs(&cfg, cfg.font.size, st.scale);
@@ -627,7 +759,11 @@ impl App {
             Action::MoveTabLeft | Action::MoveTabRight => {
                 let st = self.st();
                 let i = st.group;
-                let j = if action == Action::MoveTabLeft { i.checked_sub(1) } else { Some(i + 1) };
+                let j = if action == Action::MoveTabLeft {
+                    i.checked_sub(1)
+                } else {
+                    Some(i + 1)
+                };
                 if let Some(j) = j.filter(|&j| j < st.groups.len()) {
                     st.groups.swap(i, j);
                     st.group = j;
@@ -648,8 +784,17 @@ impl App {
             Action::Copy => {
                 // Sin texto seleccionado pero con un bloque seleccionado: se copia el bloque.
                 let st = self.st();
-                let has_sel = st.tabs.get(st.active).is_some_and(|t| t.term.lock().selection.as_ref().is_some_and(|s| !s.is_empty()));
-                let has_block = st.tabs.get(st.active).is_some_and(|t| t.selected_block.is_some());
+                let has_sel = st.tabs.get(st.active).is_some_and(|t| {
+                    t.term
+                        .lock()
+                        .selection
+                        .as_ref()
+                        .is_some_and(|s| !s.is_empty())
+                });
+                let has_block = st
+                    .tabs
+                    .get(st.active)
+                    .is_some_and(|t| t.selected_block.is_some());
                 if !has_sel && has_block {
                     self.copy_block(BlockPart::Whole);
                 } else {
@@ -659,7 +804,11 @@ impl App {
             Action::Settings => {
                 let st = self.st();
                 st.palette = None;
-                st.settings = if st.settings.is_some() { None } else { Some(crate::settings::Settings::new()) };
+                st.settings = if st.settings.is_some() {
+                    None
+                } else {
+                    Some(crate::settings::Settings::new())
+                };
                 st.window.request_redraw();
             }
             Action::ToggleAgents => self.toggle_panel(true),
@@ -709,12 +858,19 @@ impl App {
             Action::CommandPalette => {
                 let keys = &self.keys;
                 let st = self.st.as_mut().unwrap();
-                st.palette = if st.palette.is_some() { None } else { Some(Palette::new(keys)) };
+                st.palette = if st.palette.is_some() {
+                    None
+                } else {
+                    Some(Palette::new(keys))
+                };
                 st.window.request_redraw();
             }
             Action::NextTheme => {
                 let names = Theme::NAMES;
-                let i = names.iter().position(|n| *n == self.cfg.theme).map_or(0, |i| (i + 1) % names.len());
+                let i = names
+                    .iter()
+                    .position(|n| *n == self.cfg.theme)
+                    .map_or(0, |i| (i + 1) % names.len());
                 self.set_theme(names[i]);
             }
         }
@@ -725,13 +881,19 @@ impl App {
     /// pestaña, y la identificación del proceso como mucho cada 700 ms.
     pub fn refresh_sessions(&mut self) -> bool {
         let now = Instant::now();
-        let Some(st) = self.st.as_mut() else { return false };
+        let Some(st) = self.st.as_mut() else {
+            return false;
+        };
         let focused = st.focused;
         let mut changed = false;
         let agents_panel = st.panel.agents;
         let ncfg = &self.cfg.notifications;
         let min_work = std::time::Duration::from_secs(ncfg.min_work_secs);
-        let visible: Vec<u64> = st.groups.get(st.group).map(|g| g.layout.leaves()).unwrap_or_default();
+        let visible: Vec<u64> = st
+            .groups
+            .get(st.group)
+            .map(|g| g.layout.leaves())
+            .unwrap_or_default();
         for tab in st.tabs.iter_mut() {
             let viewing = focused && visible.contains(&tab.id);
             changed |= tab.refresh_session(viewing, now);
@@ -761,7 +923,12 @@ impl App {
             let mut notice = None;
             if let Some(worked) = tab.notice.update(activity, min_work, now) {
                 if let Some(agent) = agent.filter(|_| crate::notify::wanted(ncfg, viewing)) {
-                    notice = Some(crate::notify::notice_text(agent.name, tab.label(), &dir, worked));
+                    notice = Some(crate::notify::notice_text(
+                        agent.name,
+                        tab.label(),
+                        &dir,
+                        worked,
+                    ));
                 }
             }
             let blocked = match tab.session.status {
@@ -770,7 +937,13 @@ impl App {
             };
             if tab.notice.blocked_now(blocked.is_some(), now) && ncfg.blocked && !viewing {
                 if let (Some(agent), Some(kind)) = (agent, blocked) {
-                    notice = Some(crate::notify::blocked_text(agent.name, kind, tab.session.detail.as_deref(), tab.label(), &dir));
+                    notice = Some(crate::notify::blocked_text(
+                        agent.name,
+                        kind,
+                        tab.session.detail.as_deref(),
+                        tab.label(),
+                        &dir,
+                    ));
                 }
             }
             if let Some((title, body)) = notice {
@@ -778,7 +951,15 @@ impl App {
                 if let Some(old) = tab.notice.shown.take() {
                     crate::notify::close(old);
                 }
-                crate::notify::send(crate::notify::Notice { tab: tab.id, title, body, sound: ncfg.sound }, self.proxy.clone());
+                crate::notify::send(
+                    crate::notify::Notice {
+                        tab: tab.id,
+                        title,
+                        body,
+                        sound: ncfg.sound,
+                    },
+                    self.proxy.clone(),
+                );
             }
         }
         // Animación del indicador "trabajando" (~7 fps, solo mientras algún agente trabaja).
@@ -806,7 +987,11 @@ impl App {
             if tab.session.is_working() {
                 push(now + std::time::Duration::from_millis(150));
             } else if now.duration_since(tab.last_output) < crate::sessions::WORK_WINDOW {
-                push(tab.last_output + crate::sessions::WORK_WINDOW + std::time::Duration::from_millis(60));
+                push(
+                    tab.last_output
+                        + crate::sessions::WORK_WINDOW
+                        + std::time::Duration::from_millis(60),
+                );
             }
         }
         if st.panel.agents && st.tabs.iter().any(|t| t.session.agent.is_some()) {
@@ -862,14 +1047,29 @@ impl App {
             Hit::CloseAgents => self.toggle_panel(true),
             Hit::ClosePorts => self.toggle_panel(false),
             Hit::Agent(i) => {
-                let tab = self.st().tabs.iter().enumerate().filter(|(_, t)| t.session.agent.is_some()).nth(i).map(|(j, _)| j);
+                let tab = self
+                    .st()
+                    .tabs
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, t)| t.session.agent.is_some())
+                    .nth(i)
+                    .map(|(j, _)| j);
                 if let Some(j) = tab {
                     self.select_tab(j);
                 }
             }
             Hit::Port(port) => {
-                if self.st().panel.ports_data.iter().any(|p| p.port == port && p.web) {
-                    let _ = std::process::Command::new("xdg-open").arg(format!("http://localhost:{port}")).spawn();
+                if self
+                    .st()
+                    .panel
+                    .ports_data
+                    .iter()
+                    .any(|p| p.port == port && p.web)
+                {
+                    let _ = std::process::Command::new("xdg-open")
+                        .arg(format!("http://localhost:{port}"))
+                        .spawn();
                 }
             }
             Hit::MorePorts => {
@@ -945,10 +1145,23 @@ impl App {
                 // Aviso de muestra, con el sonido elegido y aunque los avisos estén desactivados.
                 let st = self.st();
                 let tab = st.tabs.get(st.active).map_or(0, |t| t.id);
-                let dir = st.tabs.get(st.active).map(|t| crate::terminal::short_dir(&t.cwd_label)).unwrap_or_default();
-                let (title, body) =
-                    crate::notify::notice_text("Claude Code", "Así se verá el aviso", &dir, std::time::Duration::from_secs(125));
-                let n = crate::notify::Notice { tab, title, body, sound: self.cfg.notifications.sound };
+                let dir = st
+                    .tabs
+                    .get(st.active)
+                    .map(|t| crate::terminal::short_dir(&t.cwd_label))
+                    .unwrap_or_default();
+                let (title, body) = crate::notify::notice_text(
+                    "Claude Code",
+                    "Así se verá el aviso",
+                    &dir,
+                    std::time::Duration::from_secs(125),
+                );
+                let n = crate::notify::Notice {
+                    tab,
+                    title,
+                    body,
+                    sound: self.cfg.notifications.sound,
+                };
                 crate::notify::send(n, self.proxy.clone());
                 return false;
             }
@@ -962,7 +1175,11 @@ impl App {
                 return false;
             }
         }
-        if let Err(e) = self.cfg.save() {
+        let saved = self.cfg.save();
+        if let Some(settings) = self.st().settings.as_mut() {
+            settings.save_failed = saved.is_err();
+        }
+        if let Err(e) = saved {
             log::warn!("No se pudo guardar la configuración: {e}");
         }
         self.st().window.request_redraw();
@@ -972,18 +1189,23 @@ impl App {
     /// Selecciona el bloque anterior/siguiente y hace scroll hasta él si no está a la vista.
     pub fn goto_block(&mut self, dir: i32) {
         let st = self.st();
-        let Some(tab) = st.tabs.get_mut(st.active) else { return };
+        let Some(tab) = st.tabs.get_mut(st.active) else {
+            return;
+        };
         let mut term = tab.term.lock();
         let idle = tab.blocks.lock().unwrap().idle_current();
         // Navegables: todos menos el prompt actual si aún no ha ejecutado nada.
-        let nav: Vec<blocks::Anchor> = blocks::anchors(&term, term.topmost_line(), term.bottommost_line())
-            .into_iter()
-            .filter(|a| Some(a.id) != idle)
-            .collect();
+        let nav: Vec<blocks::Anchor> =
+            blocks::anchors(&term, term.topmost_line(), term.bottommost_line())
+                .into_iter()
+                .filter(|a| Some(a.id) != idle)
+                .collect();
         if nav.is_empty() {
             return;
         }
-        let pos = tab.selected_block.and_then(|id| nav.iter().position(|a| a.id == id));
+        let pos = tab
+            .selected_block
+            .and_then(|id| nav.iter().position(|a| a.id == id));
         let next = match (pos, dir < 0) {
             (Some(i), true) => Some(i.saturating_sub(1)),
             (Some(i), false) => (i + 1 < nav.len()).then_some(i + 1),
@@ -1014,10 +1236,16 @@ impl App {
     /// Copia parte del bloque seleccionado (o del último comando ejecutado).
     pub fn copy_block(&mut self, part: BlockPart) {
         let st = self.st();
-        let Some(tab) = st.tabs.get(st.active) else { return };
+        let Some(tab) = st.tabs.get(st.active) else {
+            return;
+        };
         let term = tab.term.lock();
-        let id = tab.selected_block.or_else(|| tab.blocks.lock().unwrap().last_run());
-        let Some(range) = id.and_then(|id| blocks::find_block(&term, id)) else { return };
+        let id = tab
+            .selected_block
+            .or_else(|| tab.blocks.lock().unwrap().last_run());
+        let Some(range) = id.and_then(|id| blocks::find_block(&term, id)) else {
+            return;
+        };
         let text = match part {
             BlockPart::Output => range.output(&term),
             BlockPart::Command => range.command(&term),
@@ -1055,7 +1283,12 @@ impl App {
             .groups
             .iter()
             .filter_map(|g| {
-                let panes: Vec<&Tab> = g.layout.leaves().iter().filter_map(|id| st.tabs.iter().find(|t| t.id == *id)).collect();
+                let panes: Vec<&Tab> = g
+                    .layout
+                    .leaves()
+                    .iter()
+                    .filter_map(|id| st.tabs.iter().find(|t| t.id == *id))
+                    .collect();
                 let focus = panes.iter().find(|t| t.id == g.focus).or(panes.first())?;
                 // El indicador de la pestaña, del panel más urgente: te necesita, trabaja, terminó.
                 use crate::sessions::Status;
@@ -1069,14 +1302,21 @@ impl App {
                 let lead = panes.iter().max_by_key(rank).unwrap_or(focus);
                 let n = panes.len();
                 Some(ui::TabView {
-                    label: if n > 1 { format!("{} (+{})", focus.label(), n - 1) } else { focus.label().to_string() },
+                    label: if n > 1 {
+                        format!("{} (+{})", focus.label(), n - 1)
+                    } else {
+                        focus.label().to_string()
+                    },
                     exited: focus.exited,
                     agent: lead.session.agent,
                     status: lead.session.status,
                 })
             })
             .collect();
-        let toggles = ui::Toggles { agents: st.panel.agents, ports: st.panel.ports };
+        let toggles = ui::Toggles {
+            agents: st.panel.agents,
+            ports: st.panel.ports,
+        };
         let now = Instant::now();
         let phase = (now.duration_since(st.anim_epoch).as_millis() / 300) as usize;
 
@@ -1092,18 +1332,34 @@ impl App {
                 atlas: &st.renderer.atlas,
             };
             if let Some(tb) = &geo.tab_bar {
-                tb.draw(&mut p, theme, w, &views, st.group, st.hover, st.scale, st.update.as_ref(), toggles, phase);
+                tb.draw(
+                    &mut p,
+                    theme,
+                    w,
+                    &views,
+                    st.group,
+                    st.hover,
+                    st.scale,
+                    st.update.as_ref(),
+                    toggles,
+                    phase,
+                );
             }
             let multi = geo.panes.len() > 1;
             for pane in &geo.panes {
-                let Some(tab) = st.tabs.get(pane.idx) else { continue };
+                let Some(tab) = st.tabs.get(pane.idx) else {
+                    continue;
+                };
                 let is_focus = pane.idx == st.active;
                 let term = tab.term.lock();
                 let v = TermView {
                     x: pane.x,
                     y: pane.y,
                     lines: pane.ws.num_lines as usize,
-                    focused: is_focus && st.focused && st.palette.is_none() && st.settings.is_none(),
+                    focused: is_focus
+                        && st.focused
+                        && st.palette.is_none()
+                        && st.settings.is_none(),
                     cursor_on: st.cursor_on || !st.focused,
                 };
                 let bs = tab.blocks.lock().unwrap();
@@ -1118,7 +1374,15 @@ impl App {
                 let hl = search.map(|s| s.highlights(&term));
                 view::draw_terminal(&mut p, &term, theme, &v, Some(&bs), hl.as_ref());
                 if let Some((_, _, Some(found))) = st.link.as_ref().filter(|l| l.0 == tab.id) {
-                    view::draw_underline(&mut p, &term, theme, &v, found.start, found.end, st.scale);
+                    view::draw_underline(
+                        &mut p,
+                        &term,
+                        theme,
+                        &v,
+                        found.start,
+                        found.end,
+                        st.scale,
+                    );
                 }
                 let start = bs.input_start;
                 // Menú de completado: se refina con lo que se escribe y se cierra si deja de aplicar.
@@ -1126,18 +1390,27 @@ impl App {
                     let input = crate::terminal::input_for(&term, start);
                     let cwd = input.as_ref().and_then(|_| tab.cwd());
                     if let Some(menu) = st.menu.as_mut() {
-                        let keep = menu.tab == tab.id && input.as_deref().is_some_and(|i| menu.refresh(i, cwd.as_deref()));
+                        let keep = menu.tab == tab.id
+                            && input
+                                .as_deref()
+                                .is_some_and(|i| menu.refresh(i, cwd.as_deref()));
                         if !keep {
                             st.menu = None;
                         }
                     } else if let Some((before, since)) = &st.menu_auto {
                         match &input {
                             Some(now) if now != before => {
-                                let comp = crate::complete::complete(now, cwd.as_deref()).filter(|c| c.opens_as_you_type());
-                                st.menu = comp.map(|c| crate::complete::Menu::new(tab.id, now.clone(), c).opened_while_typing());
+                                let comp = crate::complete::complete(now, cwd.as_deref())
+                                    .filter(|c| c.opens_as_you_type());
+                                st.menu = comp.map(|c| {
+                                    crate::complete::Menu::new(tab.id, now.clone(), c)
+                                        .opened_while_typing()
+                                });
                                 st.menu_auto = None;
                             }
-                            _ if since.elapsed() > std::time::Duration::from_secs(1) => st.menu_auto = None,
+                            _ if since.elapsed() > std::time::Duration::from_secs(1) => {
+                                st.menu_auto = None
+                            }
                             _ => {}
                         }
                     }
@@ -1145,12 +1418,23 @@ impl App {
                 // Sugerencia en gris tras el cursor (no con el menú abierto).
                 if cfg.terminal.autosuggest && v.focused && st.menu.is_none() {
                     let cwd = start.and_then(|_| tab.cwd());
-                    if let Some(rest) = crate::terminal::suggestion_for(&term, start, cwd.as_deref()) {
+                    if let Some(rest) =
+                        crate::terminal::suggestion_for(&term, start, cwd.as_deref())
+                    {
                         view::draw_ghost(&mut p, &term, theme, &v, &rest);
                     }
                 }
                 if show_blocks {
-                    view::draw_blocks(&mut p, &term, theme, &v, &bs, tab.selected_block, (pane.rect[0], pane.rect[0] + pane.rect[2]), st.scale);
+                    view::draw_blocks(
+                        &mut p,
+                        &term,
+                        theme,
+                        &v,
+                        &bs,
+                        tab.selected_block,
+                        (pane.rect[0], pane.rect[0] + pane.rect[2]),
+                        st.scale,
+                    );
                 }
                 if let Some(menu) = st.menu.as_mut().filter(|m| v.focused && m.tab == tab.id) {
                     // Por encima del texto del terminal.
@@ -1174,7 +1458,11 @@ impl App {
                 for d in &geo.dividers {
                     let [x, y, w, h] = d.rect;
                     let dragging = st.drag.as_ref().is_some_and(|g| g.0 == d.path);
-                    let (c, a) = if dragging { (theme.accent, 1.0) } else { (theme.foreground, 0.16) };
+                    let (c, a) = if dragging {
+                        (theme.accent, 1.0)
+                    } else {
+                        (theme.foreground, 0.16)
+                    };
                     if d.side {
                         p.rect((x + (w - line) / 2.0).round(), y, line, h, c, a);
                     } else {
@@ -1200,12 +1488,18 @@ impl App {
                             active: i == st.active,
                             subagents: &t.subagents.list,
                             preview: previewed.contains(&k).then(|| {
-                                view::preview_lines(&t.term.lock(), theme, crate::panel::PREVIEW_LINES)
+                                view::preview_lines(
+                                    &t.term.lock(),
+                                    theme,
+                                    crate::panel::PREVIEW_LINES,
+                                    t.session.agent.and_then(|agent| agent.subagents),
+                                )
                             }),
                         })
                     })
                     .collect();
-                st.panel.draw(&mut p, theme, &rows, px, py, pw, ph, st.scale, now, phase);
+                st.panel
+                    .draw(&mut p, theme, &rows, px, py, pw, ph, st.scale, now, phase);
             }
             if let Some(pal) = &st.palette {
                 // El texto del terminal va debajo del overlay: se vuelca antes de pintarlo.
@@ -1216,7 +1510,10 @@ impl App {
             if let Some(set) = st.settings.as_mut() {
                 p.out.append(p.fg);
                 let top = geo.tab_bar.as_ref().map_or(0.0, |t| t.height);
-                let upd = crate::settings::UpdateView { check: &st.update_check, state: st.update.as_ref() };
+                let upd = crate::settings::UpdateView {
+                    check: &st.update_check,
+                    state: st.update.as_ref(),
+                };
                 set.draw(&mut p, theme, cfg, &upd, w, h, top, st.scale);
             }
             p.finish();
@@ -1224,7 +1521,8 @@ impl App {
                 break;
             }
         }
-        st.renderer.render(&st.out, theme.background.to_f32(opacity));
+        st.renderer
+            .render(&st.out, theme.background.to_f32(opacity));
     }
 }
 
@@ -1255,6 +1553,7 @@ fn make_clipboards(window: &Window) -> (Box<dyn ClipboardProvider>, Box<dyn Clip
 #[cfg(not(all(unix, not(target_os = "macos"))))]
 fn make_clipboards(_window: &Window) -> (Box<dyn ClipboardProvider>, Box<dyn ClipboardProvider>) {
     let clip: Box<dyn ClipboardProvider> = Box::new(copypasta::ClipboardContext::new().unwrap());
-    let prim: Box<dyn ClipboardProvider> = Box::new(copypasta::nop_clipboard::NopClipboardContext::new().unwrap());
+    let prim: Box<dyn ClipboardProvider> =
+        Box::new(copypasta::nop_clipboard::NopClipboardContext::new().unwrap());
     (clip, prim)
 }

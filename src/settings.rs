@@ -63,7 +63,11 @@ const CATEGORIES: &[(&str, &[(Field, &str)])] = &[
     ("Tema", &[(Field::Theme, "Tema")]),
     (
         "Texto",
-        &[(Field::FontFamily, "Fuente"), (Field::FontSize, "Tamaño"), (Field::LineHeight, "Interlineado")],
+        &[
+            (Field::FontFamily, "Fuente"),
+            (Field::FontSize, "Tamaño"),
+            (Field::LineHeight, "Interlineado"),
+        ],
     ),
     (
         "Terminal",
@@ -120,11 +124,18 @@ const CATEGORIES: &[(&str, &[(Field, &str)])] = &[
 ];
 
 fn fields() -> Vec<Field> {
-    CATEGORIES.iter().flat_map(|(_, rows)| rows.iter().map(|r| r.0)).collect()
+    CATEGORIES
+        .iter()
+        .flat_map(|(_, rows)| rows.iter().map(|r| r.0))
+        .collect()
 }
 
 fn label_of(f: Field) -> &'static str {
-    CATEGORIES.iter().flat_map(|(_, r)| r.iter()).find(|r| r.0 == f).map_or("", |r| r.1)
+    CATEGORIES
+        .iter()
+        .flat_map(|(_, r)| r.iter())
+        .find(|r| r.0 == f)
+        .map_or("", |r| r.1)
 }
 
 /// Rango [inicio, fin) de los índices de `fields()` de una categoría.
@@ -134,7 +145,9 @@ fn cat_range(cat: usize) -> (usize, usize) {
 }
 
 fn cat_of(field_idx: usize) -> usize {
-    (0..CATEGORIES.len()).find(|&c| field_idx < cat_range(c).1).unwrap_or(0)
+    (0..CATEGORIES.len())
+        .find(|&c| field_idx < cat_range(c).1)
+        .unwrap_or(0)
 }
 
 enum Item {
@@ -194,6 +207,7 @@ pub struct Settings {
     pub restart_note: bool,
     /// Nota "Se aplica a las pestañas nuevas" (prompt de Garbo).
     tabs_note: bool,
+    pub save_failed: bool,
     pub hover: Option<Hit>,
 }
 
@@ -240,6 +254,7 @@ impl Settings {
             fonts,
             restart_note: false,
             tabs_note: false,
+            save_failed: false,
             hover: None,
         }
     }
@@ -282,8 +297,15 @@ impl Settings {
             Nav::PrevCategory => self.set_cat((self.cat + n_cats - 1) % n_cats),
             // En la cuadrícula de temas, ↑ ↓ cambian de fila de tarjetas.
             Nav::Up | Nav::Down if on_theme => {
-                let cur = Theme::NAMES.iter().position(|t| t.eq_ignore_ascii_case(&cfg.theme)).unwrap_or(0) as i32;
-                let step = if n == Nav::Up { -(self.cols as i32) } else { self.cols as i32 };
+                let cur = Theme::NAMES
+                    .iter()
+                    .position(|t| t.eq_ignore_ascii_case(&cfg.theme))
+                    .unwrap_or(0) as i32;
+                let step = if n == Nav::Up {
+                    -(self.cols as i32)
+                } else {
+                    self.cols as i32
+                };
                 let next = cur + step;
                 if (0..Theme::NAMES.len() as i32).contains(&next) {
                     self.follow = true;
@@ -301,9 +323,14 @@ impl Settings {
 
     /// Elige un tema de la cuadrícula.
     pub fn pick_theme(&mut self, i: usize, cfg: &mut Config) -> Change {
-        let Some(name) = Theme::NAMES.get(i) else { return Change::None };
+        let Some(name) = Theme::NAMES.get(i) else {
+            return Change::None;
+        };
         self.theme_idx = i;
-        self.selected = fields().iter().position(|f| *f == Field::Theme).unwrap_or(0);
+        self.selected = fields()
+            .iter()
+            .position(|f| *f == Field::Theme)
+            .unwrap_or(0);
         self.cat = cat_of(self.selected);
         if cfg.theme.eq_ignore_ascii_case(name) {
             return Change::None;
@@ -369,7 +396,10 @@ impl Settings {
         let d = if dir == 0 { 1 } else { dir };
         let cycle = |list: &[String], cur: &str| -> String {
             let n = list.len() as i32;
-            let pos = list.iter().position(|x| x.eq_ignore_ascii_case(cur)).map_or(0, |p| p as i32);
+            let pos = list
+                .iter()
+                .position(|x| x.eq_ignore_ascii_case(cur))
+                .map_or(0, |p| p as i32);
             list[(pos + d).rem_euclid(n.max(1)) as usize].clone()
         };
         match f {
@@ -391,7 +421,8 @@ impl Settings {
                 Change::FontSize
             }
             Field::LineHeight => {
-                cfg.font.line_height = ((cfg.font.line_height + 0.05 * d as f32) * 100.0).round() / 100.0;
+                cfg.font.line_height =
+                    ((cfg.font.line_height + 0.05 * d as f32) * 100.0).round() / 100.0;
                 cfg.font.line_height = cfg.font.line_height.clamp(0.8, 2.0);
                 Change::LineHeight
             }
@@ -400,13 +431,21 @@ impl Settings {
                 Change::Layout
             }
             Field::Opacity => {
-                cfg.window.opacity = ((cfg.window.opacity + 0.05 * d as f32) * 100.0).round() / 100.0;
+                cfg.window.opacity =
+                    ((cfg.window.opacity + 0.05 * d as f32) * 100.0).round() / 100.0;
                 cfg.window.opacity = cfg.window.opacity.clamp(0.3, 1.0);
                 Change::Redraw
             }
             Field::CursorStyle => {
-                let order = [CursorStyle::Block, CursorStyle::Beam, CursorStyle::Underline];
-                let pos = order.iter().position(|c| *c == cfg.terminal.cursor_style).unwrap_or(0) as i32;
+                let order = [
+                    CursorStyle::Block,
+                    CursorStyle::Beam,
+                    CursorStyle::Underline,
+                ];
+                let pos = order
+                    .iter()
+                    .position(|c| *c == cfg.terminal.cursor_style)
+                    .unwrap_or(0) as i32;
                 cfg.terminal.cursor_style = order[(pos + d).rem_euclid(3) as usize];
                 Change::TermOptions
             }
@@ -459,15 +498,22 @@ impl Settings {
             Field::EditFile => Change::OpenFile,
             Field::NotifyAgents => {
                 let order = [NotifyWhen::Unfocused, NotifyWhen::Always, NotifyWhen::Never];
-                let pos = order.iter().position(|w| *w == cfg.notifications.agents).unwrap_or(0) as i32;
+                let pos = order
+                    .iter()
+                    .position(|w| *w == cfg.notifications.agents)
+                    .unwrap_or(0) as i32;
                 cfg.notifications.agents = order[(pos + d).rem_euclid(3) as usize];
                 Change::Redraw
             }
             Field::NotifyMinWork => {
                 const STEPS: [u64; 6] = [0, 5, 10, 30, 60, 300];
                 let cur = cfg.notifications.min_work_secs;
-                let pos = STEPS.iter().position(|s| *s >= cur).unwrap_or(STEPS.len() - 1) as i32;
-                cfg.notifications.min_work_secs = STEPS[(pos + d).clamp(0, STEPS.len() as i32 - 1) as usize];
+                let pos = STEPS
+                    .iter()
+                    .position(|s| *s >= cur)
+                    .unwrap_or(STEPS.len() - 1) as i32;
+                cfg.notifications.min_work_secs =
+                    STEPS[(pos + d).clamp(0, STEPS.len() as i32 - 1) as usize];
                 Change::Redraw
             }
             Field::NotifySound => {
@@ -494,7 +540,10 @@ impl Settings {
 
     fn layout(&mut self, width: f32, height: f32, top: f32, s: f32) -> Layout {
         let w = (640.0 * s).min(width - 32.0 * s).max(300.0 * s).round();
-        let h = (540.0 * s).min(height - top - 32.0 * s).max(240.0 * s).round();
+        let h = (540.0 * s)
+            .min(height - top - 32.0 * s)
+            .max(240.0 * s)
+            .round();
         let x = ((width - w) / 2.0).round();
         let y = (top + ((height - top - h) / 2.0).max(16.0 * s)).round();
         let side_w = (176.0 * s).min(w * 0.36).round();
@@ -507,7 +556,9 @@ impl Settings {
         let pad = (20.0 * s).round();
 
         let cat_h = (36.0 * s).round();
-        let cats = (0..CATEGORIES.len()).map(|c| (c, y + (64.0 * s).round() + c as f32 * cat_h, cat_h)).collect();
+        let cats = (0..CATEGORIES.len())
+            .map(|c| (c, y + (64.0 * s).round() + c as f32 * cat_h, cat_h))
+            .collect();
 
         // Elementos de la categoría visible.
         let row_h = (44.0 * s).round();
@@ -521,12 +572,22 @@ impl Settings {
         let card_row_h = card_h + name_h + (8.0 * s).round();
         let (a, b) = cat_range(self.cat);
         let its: Vec<Item> = if self.field(a) == Field::Theme {
-            (0..Theme::NAMES.len().div_ceil(cols)).map(Item::Themes).collect()
+            (0..Theme::NAMES.len().div_ceil(cols))
+                .map(Item::Themes)
+                .collect()
         } else {
             (a..b).map(Item::Row).collect()
         };
-        let heights: Vec<f32> =
-            its.iter().map(|it| if matches!(it, Item::Themes(_)) { card_row_h } else { row_h }).collect();
+        let heights: Vec<f32> = its
+            .iter()
+            .map(|it| {
+                if matches!(it, Item::Themes(_)) {
+                    card_row_h
+                } else {
+                    row_h
+                }
+            })
+            .collect();
 
         // Último primer elemento posible: el que deja ver el final del contenido.
         let mut max_first = its.len();
@@ -581,7 +642,13 @@ impl Settings {
                         if ti >= Theme::NAMES.len() {
                             break;
                         }
-                        cards.push((ti, pane_x + pad + c as f32 * (card_w + gap), cy + 4.0 * s, card_w, card_h));
+                        cards.push((
+                            ti,
+                            pane_x + pad + c as f32 * (card_w + gap),
+                            cy + 4.0 * s,
+                            card_w,
+                            card_h,
+                        ));
                     }
                 }
             }
@@ -650,7 +717,11 @@ impl Settings {
                 let left = right - l.control_w;
                 let f = self.field(i);
                 if has_stepper(f) && mx >= left {
-                    return if mx < left + l.control_w / 2.0 { Hit::Dec(i) } else { Hit::Inc(i) };
+                    return if mx < left + l.control_w / 2.0 {
+                        Hit::Dec(i)
+                    } else {
+                        Hit::Inc(i)
+                    };
                 }
                 return Hit::Row(i);
             }
@@ -670,7 +741,10 @@ impl Settings {
         top: f32,
         s: f32,
     ) {
-        self.theme_idx = Theme::NAMES.iter().position(|n| n.eq_ignore_ascii_case(&cfg.theme)).unwrap_or(0);
+        self.theme_idx = Theme::NAMES
+            .iter()
+            .position(|n| n.eq_ignore_ascii_case(&cfg.theme))
+            .unwrap_or(0);
         let l = self.layout(width, height, top, s);
         p.rect(0.0, 0.0, width, height, Rgb(0, 0, 0), 0.40);
         let radius = (14.0 * s).round();
@@ -682,27 +756,83 @@ impl Settings {
 
         // --- Columna de categorías
         let side = surface(theme, 0.025);
-        p.rounded(l.x + hair, l.y + hair, l.side_w, l.h - 2.0 * hair, side, 1.0, radius - hair);
-        p.rect(l.x + l.side_w - radius, l.y + hair, radius, l.h - 2.0 * hair, side, 1.0);
-        p.rect(l.x + l.side_w, l.y + hair, hair, l.h - 2.0 * hair, theme.foreground, 0.08);
+        p.rounded(
+            l.x + hair,
+            l.y + hair,
+            l.side_w,
+            l.h - 2.0 * hair,
+            side,
+            1.0,
+            radius - hair,
+        );
+        p.rect(
+            l.x + l.side_w - radius,
+            l.y + hair,
+            radius,
+            l.h - 2.0 * hair,
+            side,
+            1.0,
+        );
+        p.rect(
+            l.x + l.side_w,
+            l.y + hair,
+            hair,
+            l.h - 2.0 * hair,
+            theme.foreground,
+            0.08,
+        );
         let th = p.ui_line_h(UiVariant::Title);
-        p.ui_text_v(l.x + pad, l.y + ((60.0 * s - th) / 2.0).round(), "Ajustes", theme.foreground, l.side_w - 2.0 * pad, UiVariant::Title);
+        p.ui_text_v(
+            l.x + pad,
+            l.y + ((60.0 * s - th) / 2.0).round(),
+            "Ajustes",
+            theme.foreground,
+            l.side_w - 2.0 * pad,
+            UiVariant::Title,
+        );
         for &(c, cy, ch) in &l.cats {
             let selected = c == self.cat;
             let hovered = self.hover == Some(Hit::Category(c));
             let (bx, bw) = (l.x + 10.0 * s, l.side_w - 20.0 * s);
             if selected {
-                p.rounded(bx, cy + 2.0 * s, bw, ch - 4.0 * s, theme.accent, 0.18, (8.0 * s).round());
+                p.rounded(
+                    bx,
+                    cy + 2.0 * s,
+                    bw,
+                    ch - 4.0 * s,
+                    theme.accent,
+                    0.18,
+                    (8.0 * s).round(),
+                );
             } else if hovered {
-                p.rounded(bx, cy + 2.0 * s, bw, ch - 4.0 * s, theme.foreground, 0.06, (8.0 * s).round());
+                p.rounded(
+                    bx,
+                    cy + 2.0 * s,
+                    bw,
+                    ch - 4.0 * s,
+                    theme.foreground,
+                    0.06,
+                    (8.0 * s).round(),
+                );
             }
-            let c_txt = if selected || hovered { theme.foreground } else { dimc };
+            let c_txt = if selected || hovered {
+                theme.foreground
+            } else {
+                dimc
+            };
             p.ui_text_in(bx + 12.0 * s, cy, ch, CATEGORIES[c].0, c_txt, bw - 16.0 * s);
         }
 
         // --- Cabecera de la derecha
         let title = CATEGORIES[self.cat].0;
-        p.ui_text_v(l.pane_x + pad, l.y + ((l.header_h - th) / 2.0).round(), title, theme.foreground, l.pane_w / 2.0, UiVariant::Title);
+        p.ui_text_v(
+            l.pane_x + pad,
+            l.y + ((l.header_h - th) / 2.0).round(),
+            title,
+            theme.foreground,
+            l.pane_w / 2.0,
+            UiVariant::Title,
+        );
         let (cx, cy, r) = l.close;
         if self.hover == Some(Hit::Close) {
             p.circle(cx, cy, r, theme.foreground, 0.12);
@@ -718,7 +848,11 @@ impl Settings {
                 theme_card(p, &t, theme, tx, ty, tw, tch, selected, hovered, s);
             }
             let label = Theme::display_name(name);
-            let c = if selected || hovered { theme.foreground } else { dimc };
+            let c = if selected || hovered {
+                theme.foreground
+            } else {
+                dimc
+            };
             let nh = p.ui_line_h(UiVariant::Small);
             let ny = (ty + tch + (l.name_h - nh) / 2.0).round();
             p.ui_text_v(tx + 2.0 * s, ny, &label, c, tw - 4.0 * s, UiVariant::Small);
@@ -727,11 +861,20 @@ impl Settings {
         // --- Filas
         for &(i, ry, rh) in &l.rows {
             let f = self.field(i);
-            let hovered = matches!(self.hover, Some(Hit::Row(j) | Hit::Dec(j) | Hit::Inc(j)) if j == i);
+            let hovered =
+                matches!(self.hover, Some(Hit::Row(j) | Hit::Dec(j) | Hit::Inc(j)) if j == i);
             let (bx, bw) = (l.pane_x + pad / 2.0, l.pane_w - pad);
             if i == self.selected || hovered {
                 let a = if i == self.selected { 0.12 } else { 0.06 };
-                p.rounded(bx, ry + 3.0 * s, bw, rh - 6.0 * s, theme.accent, a, (8.0 * s).round());
+                p.rounded(
+                    bx,
+                    ry + 3.0 * s,
+                    bw,
+                    rh - 6.0 * s,
+                    theme.accent,
+                    a,
+                    (8.0 * s).round(),
+                );
             }
             let lx = l.pane_x + pad;
             // Nota bajo el nombre (estado de la búsqueda de actualizaciones o aviso de reinicio).
@@ -749,8 +892,13 @@ impl Settings {
                 let ty = (ry + (rh - lh - nh) / 2.0).round();
                 p.ui_text(lx, ty, label_of(f), theme.foreground, l.pane_w * 0.5);
                 let nc = match (f, upd.check, upd.state) {
-                    (Field::CheckNow, _, Some(UpdateState::Available(_) | UpdateState::Installed(_))) => theme.accent,
-                    (Field::CheckNow, _, Some(UpdateState::Failed(_))) | (Field::CheckNow, CheckState::Failed(_), None) => theme.palette[1],
+                    (
+                        Field::CheckNow,
+                        _,
+                        Some(UpdateState::Available(_) | UpdateState::Installed(_)),
+                    ) => theme.accent,
+                    (Field::CheckNow, _, Some(UpdateState::Failed(_)))
+                    | (Field::CheckNow, CheckState::Failed(_), None) => theme.palette[1],
                     (Field::CheckNow, CheckState::UpToDate, None) => theme.palette[2],
                     _ => dimc,
                 };
@@ -770,8 +918,24 @@ impl Settings {
                 let tw = p.ui_measure(t);
                 p.ui_text_in(right - tw - 12.0 * s, ry, rh, t, theme.accent, tw + 2.0);
                 let ax = right - 4.0 * s;
-                p.line(ax - 3.0 * s, mid - 4.0 * s, ax + 1.0 * s, mid, 1.5 * s, theme.accent, 1.0);
-                p.line(ax + 1.0 * s, mid, ax - 3.0 * s, mid + 4.0 * s, 1.5 * s, theme.accent, 1.0);
+                p.line(
+                    ax - 3.0 * s,
+                    mid - 4.0 * s,
+                    ax + 1.0 * s,
+                    mid,
+                    1.5 * s,
+                    theme.accent,
+                    1.0,
+                );
+                p.line(
+                    ax + 1.0 * s,
+                    mid,
+                    ax - 3.0 * s,
+                    mid + 4.0 * s,
+                    1.5 * s,
+                    theme.accent,
+                    1.0,
+                );
             } else if f == Field::CheckNow {
                 let (label, primary, enabled, _) = update_button(upd);
                 let bh = (30.0 * s).round();
@@ -782,8 +946,16 @@ impl Settings {
                 let by = (mid - bh / 2.0).round();
                 let over = hovered && enabled;
                 let (fill, alpha, txt) = match (primary, enabled) {
-                    (true, _) => (theme.accent, if over { 1.0 } else { 0.88 }, theme.background),
-                    (false, true) => (theme.foreground, if over { 0.16 } else { 0.09 }, theme.foreground),
+                    (true, _) => (
+                        theme.accent,
+                        if over { 1.0 } else { 0.88 },
+                        theme.background,
+                    ),
+                    (false, true) => (
+                        theme.foreground,
+                        if over { 0.16 } else { 0.09 },
+                        theme.foreground,
+                    ),
                     (false, false) => (theme.foreground, 0.05, dimc),
                 };
                 p.rounded(bx, by, bwid, bh, fill, alpha, (bh / 2.0).round());
@@ -795,20 +967,42 @@ impl Settings {
 
         if let Some((off, size)) = l.scrollbar {
             let bw = (4.0 * s).round();
-            p.rounded(l.x + l.w - bw - 5.0 * s, l.body_y + off + 2.0 * s, bw, size - 4.0 * s, theme.foreground, 0.22, bw / 2.0);
+            p.rounded(
+                l.x + l.w - bw - 5.0 * s,
+                l.body_y + off + 2.0 * s,
+                bw,
+                size - 4.0 * s,
+                theme.foreground,
+                0.22,
+                bw / 2.0,
+            );
         }
 
         // Pie
         let fy = l.body_y + l.body_h;
-        let path = Config::path().map(|p| p.display().to_string()).unwrap_or_default();
+        let path = Config::path()
+            .map(|p| p.display().to_string())
+            .unwrap_or_default();
         let home = std::env::var("HOME").unwrap_or_default();
-        let short = if !home.is_empty() { path.replacen(&home, "~", 1) } else { path };
+        let short = if !home.is_empty() {
+            path.replacen(&home, "~", 1)
+        } else {
+            path
+        };
         let nh = p.ui_line_h(UiVariant::Small);
+        let (message, color) = if self.save_failed {
+            (
+                "No se pudieron guardar los cambios en config.toml".to_owned(),
+                theme.palette[1],
+            )
+        } else {
+            (format!("Se guarda solo en {short}"), dimc)
+        };
         p.ui_text_v(
             l.pane_x + pad,
             (fy + (l.y + l.h - fy - nh) / 2.0).round(),
-            &format!("Se guarda solo en {short}"),
-            dimc,
+            &message,
+            color,
             l.pane_w - 2.0 * pad,
             UiVariant::Small,
         );
@@ -818,11 +1012,23 @@ impl Settings {
 /// Texto del botón de actualizaciones: (etiqueta, principal, activo, nota de estado).
 fn update_button(upd: &UpdateView) -> (String, bool, bool, String) {
     match upd.state {
-        Some(UpdateState::Available(rel)) => (format!("Actualizar a {}", rel.version), true, true, "Hay una versión nueva".into()),
+        Some(UpdateState::Available(rel)) => (
+            rel.button_label(),
+            true,
+            true,
+            "Hay una versión nueva".into(),
+        ),
         Some(UpdateState::Downloading(_)) => ("Descargando…".into(), false, false, String::new()),
         Some(UpdateState::Installing(_)) => ("Instalando…".into(), false, false, String::new()),
-        Some(UpdateState::Installed(v)) => ("Reiniciar".into(), true, true, format!("Instalada la {v}")),
-        Some(UpdateState::Failed(_)) => ("Reintentar".into(), false, true, "No se pudo actualizar".into()),
+        Some(UpdateState::Installed(v)) => {
+            ("Reiniciar".into(), true, true, format!("Instalada la {v}"))
+        }
+        Some(UpdateState::Failed(_)) => (
+            "Reintentar".into(),
+            false,
+            true,
+            "No se pudo actualizar".into(),
+        ),
         None => match upd.check {
             CheckState::Checking => ("Buscando…".into(), false, false, String::new()),
             CheckState::UpToDate => ("Buscar".into(), false, true, "Estás al día".into()),
@@ -857,13 +1063,29 @@ fn toggle(p: &mut Painter, theme: &Theme, right: f32, mid: f32, on: bool, s: f32
         p.rounded(tx, ty, tw, th, theme.foreground, 0.18, th / 2.0);
     }
     let kr = th / 2.0 - 3.0 * s;
-    let kx = if on { tx + tw - th / 2.0 } else { tx + th / 2.0 };
+    let kx = if on {
+        tx + tw - th / 2.0
+    } else {
+        tx + th / 2.0
+    };
     p.circle(kx, mid, kr, Rgb(255, 255, 255), 0.95);
 }
 
 /// Selector ‹ valor ›
 #[allow(clippy::too_many_arguments)]
-fn stepper(p: &mut Painter, theme: &Theme, set: &Settings, i: usize, f: Field, cfg: &Config, right: f32, ry: f32, rh: f32, cw: f32, s: f32) {
+fn stepper(
+    p: &mut Painter,
+    theme: &Theme,
+    set: &Settings,
+    i: usize,
+    f: Field,
+    cfg: &Config,
+    right: f32,
+    ry: f32,
+    rh: f32,
+    cw: f32,
+    s: f32,
+) {
     let dimc = dim(theme);
     let mid = ry + rh / 2.0;
     let left = right - cw;
@@ -874,8 +1096,24 @@ fn stepper(p: &mut Painter, theme: &Theme, set: &Settings, i: usize, f: Field, c
         let over = matches!((set.hover, dir < 0.0), (Some(Hit::Dec(j)), true) | (Some(Hit::Inc(j)), false) if j == i);
         let c = if over { theme.foreground } else { dimc };
         let k = 3.5 * s;
-        p.line(hx + dir * -k * 0.5, mid - k, hx + dir * k * 0.5, mid, 1.6 * s, c, 1.0);
-        p.line(hx + dir * k * 0.5, mid, hx + dir * -k * 0.5, mid + k, 1.6 * s, c, 1.0);
+        p.line(
+            hx + dir * -k * 0.5,
+            mid - k,
+            hx + dir * k * 0.5,
+            mid,
+            1.6 * s,
+            c,
+            1.0,
+        );
+        p.line(
+            hx + dir * k * 0.5,
+            mid,
+            hx + dir * -k * 0.5,
+            mid + k,
+            1.6 * s,
+            c,
+            1.0,
+        );
     }
     let value = set.value_text(f, cfg);
     let inner = cw - 56.0 * s;
@@ -886,16 +1124,43 @@ fn stepper(p: &mut Painter, theme: &Theme, set: &Settings, i: usize, f: Field, c
 
 /// Muestra de un tema: un terminal en miniatura con sus colores.
 #[allow(clippy::too_many_arguments)]
-fn theme_card(p: &mut Painter, t: &Theme, ui: &Theme, x: f32, y: f32, w: f32, h: f32, selected: bool, hovered: bool, s: f32) {
+fn theme_card(
+    p: &mut Painter,
+    t: &Theme,
+    ui: &Theme,
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+    selected: bool,
+    hovered: bool,
+    s: f32,
+) {
     use UiVariant::Small;
     let r = (8.0 * s).round();
     let hair = s.round().max(1.0);
     if selected {
         let b = (2.0 * s).round();
-        p.rounded(x - b, y - b, w + 2.0 * b, h + 2.0 * b, ui.accent, 1.0, r + b);
+        p.rounded(
+            x - b,
+            y - b,
+            w + 2.0 * b,
+            h + 2.0 * b,
+            ui.accent,
+            1.0,
+            r + b,
+        );
     } else {
         let a = if hovered { 0.40 } else { 0.14 };
-        p.rounded(x - hair, y - hair, w + 2.0 * hair, h + 2.0 * hair, ui.foreground, a, r + hair);
+        p.rounded(
+            x - hair,
+            y - hair,
+            w + 2.0 * hair,
+            h + 2.0 * hair,
+            ui.foreground,
+            a,
+            r + hair,
+        );
     }
     p.rounded(x, y, w, h, t.background, 1.0, r);
 
@@ -908,7 +1173,11 @@ fn theme_card(p: &mut Painter, t: &Theme, ui: &Theme, x: f32, y: f32, w: f32, h:
     ly += lh;
     // Solo las palabras que caben enteras.
     let mut cx = tx;
-    for (word, c) in [("src", t.palette[4]), ("docs", t.palette[4]), ("main.rs", t.foreground)] {
+    for (word, c) in [
+        ("src", t.palette[4]),
+        ("docs", t.palette[4]),
+        ("main.rs", t.foreground),
+    ] {
         let ww = p.ui_measure_v(word, Small);
         if cx + ww > tx + max {
             break;
@@ -923,7 +1192,15 @@ fn theme_card(p: &mut Painter, t: &Theme, ui: &Theme, x: f32, y: f32, w: f32, h:
     let sgap = (3.0 * s).round();
     let sw = ((max - sgap * (n - 1.0)) / n).floor();
     for k in 0..6 {
-        p.rounded(tx + k as f32 * (sw + sgap), sy, sw, sw_h, t.palette[k + 1], 1.0, sw_h / 2.0);
+        p.rounded(
+            tx + k as f32 * (sw + sgap),
+            sy,
+            sw,
+            sw_h,
+            t.palette[k + 1],
+            1.0,
+            sw_h / 2.0,
+        );
     }
 }
 
@@ -943,13 +1220,11 @@ mod tests {
 
     #[test]
     fn guardar_conserva_comentarios_y_relee() {
-        let dir = std::env::temp_dir().join(format!("garbo-test-{}", std::process::id()));
-        std::fs::create_dir_all(dir.join("garbo")).unwrap();
-        std::env::set_var("XDG_CONFIG_HOME", &dir);
-        let path = dir.join("garbo/config.toml");
+        let dir = crate::temp_dir::TempDir::new_in(&std::env::temp_dir()).unwrap();
+        let path = dir.path().join("config.toml");
         std::fs::write(&path, "# mi comentario\n[shell]\nprogram = \"/bin/zsh\"\n").unwrap();
 
-        let mut cfg = Config::load();
+        let mut cfg = Config::load_at(&path);
         let mut set = Settings::with_fonts(vec![]);
         assert_eq!(set.adjust(idx(Field::Theme), 1, &mut cfg), Change::Theme);
         assert_eq!(cfg.theme, Theme::NAMES[1]);
@@ -957,12 +1232,12 @@ mod tests {
         set.adjust(idx(Field::Blocks), 0, &mut cfg);
         set.adjust(idx(Field::Autosuggest), 0, &mut cfg);
         set.adjust(idx(Field::TabKey), 1, &mut cfg);
-        cfg.save().unwrap();
+        cfg.save_at(&path).unwrap();
 
         let text = std::fs::read_to_string(&path).unwrap();
         assert!(text.contains("# mi comentario"), "{text}");
         assert!(text.contains("program = \"/bin/zsh\""), "{text}");
-        let back = Config::load();
+        let back = Config::load_at(&path);
         assert_eq!(back.theme, Theme::NAMES[1]);
         assert_eq!(back.font.size, 11.5);
         assert!(!back.terminal.blocks);
@@ -970,7 +1245,6 @@ mod tests {
         assert_eq!(back.terminal.tab_key, TabKey::Accept);
         assert!(!back.terminal.complete_as_you_type);
         assert_eq!(back.shell.program.as_deref(), Some("/bin/zsh"));
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
@@ -1020,13 +1294,19 @@ mod tests {
         assert_eq!(set.selected, sel, "la rueda no mueve la selección");
         set.wheel(-100_000.0);
         let l = set.layout(w, h, top, s);
-        assert!(l.rows.iter().any(|r| set.field(r.0) == Field::Scrollback), "se llega a la última fila");
+        assert!(
+            l.rows.iter().any(|r| set.field(r.0) == Field::Scrollback),
+            "se llega a la última fila"
+        );
         set.wheel(100_000.0);
         set.layout(w, h, top, s);
         assert_eq!(set.first, 0);
         set.move_sel(10);
         let l = set.layout(w, h, top, s);
-        assert!(l.rows.iter().any(|r| r.0 == set.selected), "el teclado muestra la fila elegida");
+        assert!(
+            l.rows.iter().any(|r| r.0 == set.selected),
+            "el teclado muestra la fila elegida"
+        );
     }
 
     #[test]

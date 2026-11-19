@@ -16,7 +16,12 @@ pub fn gap(scale: f32) -> f32 {
 pub enum Layout {
     Leaf(u64),
     /// `side`: uno al lado del otro (si no, uno encima del otro). `ratio`: parte del primero.
-    Split { side: bool, ratio: f32, a: Box<Layout>, b: Box<Layout> },
+    Split {
+        side: bool,
+        ratio: f32,
+        a: Box<Layout>,
+        b: Box<Layout>,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -45,7 +50,10 @@ pub struct Group {
 
 impl Group {
     pub fn new(id: u64) -> Self {
-        Self { layout: Layout::Leaf(id), focus: id }
+        Self {
+            layout: Layout::Leaf(id),
+            focus: id,
+        }
     }
 }
 
@@ -53,10 +61,18 @@ fn split_rect(r: Rect, side: bool, ratio: f32, gap: f32) -> (Rect, Rect, Rect) {
     let [x, y, w, h] = r;
     if side {
         let wa = ((w - gap) * ratio).round();
-        ([x, y, wa, h], [x + wa + gap, y, w - wa - gap, h], [x + wa, y, gap, h])
+        (
+            [x, y, wa, h],
+            [x + wa + gap, y, w - wa - gap, h],
+            [x + wa, y, gap, h],
+        )
     } else {
         let ha = ((h - gap) * ratio).round();
-        ([x, y, w, ha], [x, y + ha + gap, w, h - ha - gap], [x, y + ha, w, gap])
+        (
+            [x, y, w, ha],
+            [x, y + ha + gap, w, h - ha - gap],
+            [x, y + ha, w, gap],
+        )
     }
 }
 
@@ -101,7 +117,12 @@ impl Layout {
     fn collect_dividers(&self, area: Rect, gap: f32, path: &mut Vec<bool>, out: &mut Vec<Divider>) {
         if let Layout::Split { side, ratio, a, b } = self {
             let (ra, rb, rd) = split_rect(area, *side, *ratio, gap);
-            out.push(Divider { rect: rd, area, side: *side, path: path.clone() });
+            out.push(Divider {
+                rect: rd,
+                area,
+                side: *side,
+                path: path.clone(),
+            });
             path.push(false);
             a.collect_dividers(ra, gap, path, out);
             path.pop();
@@ -115,7 +136,12 @@ impl Layout {
     pub fn split(&mut self, target: u64, new: u64, side: bool) -> bool {
         match self {
             Layout::Leaf(id) if *id == target => {
-                *self = Layout::Split { side, ratio: 0.5, a: Box::new(Layout::Leaf(target)), b: Box::new(Layout::Leaf(new)) };
+                *self = Layout::Split {
+                    side,
+                    ratio: 0.5,
+                    a: Box::new(Layout::Leaf(target)),
+                    b: Box::new(Layout::Leaf(new)),
+                };
                 true
             }
             Layout::Leaf(_) => false,
@@ -129,7 +155,12 @@ impl Layout {
             Layout::Leaf(l) if l == id => None,
             leaf @ Layout::Leaf(_) => Some(leaf),
             Layout::Split { side, ratio, a, b } => match (a.remove(id), b.remove(id)) {
-                (Some(a), Some(b)) => Some(Layout::Split { side, ratio, a: Box::new(a), b: Box::new(b) }),
+                (Some(a), Some(b)) => Some(Layout::Split {
+                    side,
+                    ratio,
+                    a: Box::new(a),
+                    b: Box::new(b),
+                }),
                 (Some(only), None) | (None, Some(only)) => Some(only),
                 (None, None) => None,
             },
@@ -141,7 +172,11 @@ impl Layout {
         match (self, path.split_first()) {
             (Layout::Split { ratio, .. }, None) => *ratio = value.clamp(0.1, 0.9),
             (Layout::Split { a, b, .. }, Some((first, rest))) => {
-                if *first { b.set_ratio(rest, value) } else { a.set_ratio(rest, value) }
+                if *first {
+                    b.set_ratio(rest, value)
+                } else {
+                    a.set_ratio(rest, value)
+                }
             }
             _ => {}
         }
@@ -172,7 +207,11 @@ pub fn neighbor(rects: &[(u64, Rect)], from: u64, dir: Dir) -> Option<u64> {
             };
             Some((dist, off, *id))
         })
-        .min_by(|a, b| (a.0, a.1).partial_cmp(&(b.0, b.1)).unwrap_or(std::cmp::Ordering::Equal))
+        .min_by(|a, b| {
+            (a.0, a.1)
+                .partial_cmp(&(b.0, b.1))
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
         .map(|(_, _, id)| id)
 }
 
@@ -193,10 +232,17 @@ mod tests {
         assert_eq!(r[2], (3, [509.0, 309.0, 500.0, 300.0]));
         let d = l.dividers([0.0, 0.0, 1009.0, 609.0], 9.0);
         assert_eq!(d.len(), 2);
-        assert_eq!((d[0].rect, d[0].side, d[0].path.clone()), ([500.0, 0.0, 9.0, 609.0], true, vec![]));
+        assert_eq!(
+            (d[0].rect, d[0].side, d[0].path.clone()),
+            ([500.0, 0.0, 9.0, 609.0], true, vec![])
+        );
         assert_eq!(d[1].path, vec![true]);
 
-        assert_eq!(neighbor(&r, 1, Dir::Right), Some(2), "a igual distancia, el más alto (empate: el primero)");
+        assert_eq!(
+            neighbor(&r, 1, Dir::Right),
+            Some(2),
+            "a igual distancia, el más alto (empate: el primero)"
+        );
         assert_eq!(neighbor(&r, 3, Dir::Left), Some(1));
         assert_eq!(neighbor(&r, 3, Dir::Up), Some(2));
         assert_eq!(neighbor(&r, 2, Dir::Down), Some(3));
@@ -208,7 +254,11 @@ mod tests {
 
         let l = l.remove(2).unwrap();
         assert_eq!(l.leaves(), vec![1, 3]);
-        assert_eq!(l.rects([0.0, 0.0, 1009.0, 609.0], 9.0)[1], (3, [509.0, 0.0, 500.0, 609.0]), "3 ocupa el sitio de su rama");
+        assert_eq!(
+            l.rects([0.0, 0.0, 1009.0, 609.0], 9.0)[1],
+            (3, [509.0, 0.0, 500.0, 609.0]),
+            "3 ocupa el sitio de su rama"
+        );
         let l = l.remove(1).unwrap();
         assert_eq!(l, Layout::Leaf(3));
         assert_eq!(l.remove(3), None);

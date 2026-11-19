@@ -74,7 +74,11 @@ impl MarkScanner {
                     0x18 | 0x1a => Scan::Ground, // CAN / SUB abortan la secuencia
                     _ => {
                         // Las marcas caben en 32 bytes; un informe OSC 7501, en `status::MAX_REPORT`.
-                        let cap = if self.buf.starts_with(b"7501;") { crate::status::MAX_REPORT + 5 } else { 32 };
+                        let cap = if self.buf.starts_with(b"7501;") {
+                            crate::status::MAX_REPORT + 5
+                        } else {
+                            32
+                        };
                         if self.buf.len() < cap {
                             self.buf.push(b);
                         } else {
@@ -99,12 +103,17 @@ impl MarkScanner {
 
     fn finish(&mut self, end: usize, out: &mut Vec<(usize, Mark)>, st: bool) {
         if let Some(payload) = self.buf.strip_prefix(b"7501;") {
-            if let Some(report) = (!self.overflow).then(|| crate::status::parse(payload)).flatten() {
+            if let Some(report) = (!self.overflow)
+                .then(|| crate::status::parse(payload))
+                .flatten()
+            {
                 self.status.push((report, st));
             }
             return;
         }
-        let Some(rest) = self.buf.strip_prefix(b"133;") else { return };
+        let Some(rest) = self.buf.strip_prefix(b"133;") else {
+            return;
+        };
         let mark = match rest.first() {
             Some(b'A') => Mark::PromptStart(rest[1..].split(|&b| b == b';').any(|p| p == b"garbo")),
             Some(b'B') => Mark::CommandStart,
@@ -176,12 +185,17 @@ pub struct BlockState {
 
 impl BlockState {
     pub fn new(shell_pid: u32) -> Self {
-        Self { shell_pid, ..Default::default() }
+        Self {
+            shell_pid,
+            ..Default::default()
+        }
     }
 
     /// Carpeta actual del shell (Linux: /proc/<pid>/cwd).
     fn shell_cwd(&self) -> Option<PathBuf> {
-        (self.shell_pid != 0).then(|| std::fs::read_link(format!("/proc/{}/cwd", self.shell_pid)).ok()).flatten()
+        (self.shell_pid != 0)
+            .then(|| std::fs::read_link(format!("/proc/{}/cwd", self.shell_pid)).ok())
+            .flatten()
     }
 
     pub fn info(&self, id: u32) -> Option<&BlockInfo> {
@@ -202,7 +216,11 @@ impl BlockState {
 
     /// Último bloque que llegó a ejecutar un comando.
     pub fn last_run(&self) -> Option<u32> {
-        self.infos.iter().rev().find(|b| b.started.is_some()).map(|b| b.id)
+        self.infos
+            .iter()
+            .rev()
+            .find(|b| b.started.is_some())
+            .map(|b| b.id)
     }
 
     fn current_mut(&mut self) -> Option<&mut BlockInfo> {
@@ -214,14 +232,23 @@ impl BlockState {
     /// Aplica una marca. Se llama con el terminal bloqueado y el parser justo en la marca.
     pub fn apply<T: EventListener>(&mut self, mark: Mark, term: &mut Term<T>) {
         self.active = true;
-        let link = |kind: char, id: u32| Hyperlink { id: Some(format!("garbo:{kind}:{id}")), uri: LINK_URI.into() };
+        let link = |kind: char, id: u32| Hyperlink {
+            id: Some(format!("garbo:{kind}:{id}")),
+            uri: LINK_URI.into(),
+        };
         match mark {
             Mark::PromptStart(styled) => {
                 // Vuelve el prompt: el programa que informaba ya no está en marcha.
                 self.program.drop_live();
                 self.next_id += 1;
                 let id = self.next_id;
-                self.infos.push_back(BlockInfo { id, styled, started: None, duration: None, exit: None });
+                self.infos.push_back(BlockInfo {
+                    id,
+                    styled,
+                    started: None,
+                    duration: None,
+                    exit: None,
+                });
                 if self.infos.len() > MAX_BLOCKS {
                     self.infos.pop_front();
                 }
@@ -241,8 +268,11 @@ impl BlockState {
                 term.set_hyperlink(None);
                 // El comando aceptado pasará al historial de sugerencias cuando termine.
                 let dir = self.input_cwd.take();
-                self.pending_cmd =
-                    self.input_start.take().and_then(|s| crate::suggest::executed_command(term, s)).map(|c| (c, dir));
+                self.pending_cmd = self
+                    .input_start
+                    .take()
+                    .and_then(|s| crate::suggest::executed_command(term, s))
+                    .map(|c| (c, dir));
                 if let Some(info) = self.current_mut() {
                     info.started = Some(Instant::now());
                 }
@@ -299,7 +329,7 @@ pub fn anchors<T>(term: &Term<T>, from: Line, to: Line) -> Vec<Anchor> {
     while l <= to {
         if let Some(id) = line_anchor(term, l) {
             // Un prompt de varias líneas repite el id: solo cuenta la primera.
-            if out.last().map_or(true, |a| a.id != id) {
+            if out.last().is_none_or(|a| a.id != id) {
                 out.push(Anchor { line: l, id });
             }
         }
@@ -359,7 +389,10 @@ impl BlockRange {
             let mut any = false;
             for c in 0..cols {
                 let cell = &row[Column(c)];
-                if cell.flags.intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER) {
+                if cell
+                    .flags
+                    .intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER)
+                {
                     continue;
                 }
                 if cell_link(cell) == Some((b'c', self.id)) {
@@ -396,12 +429,16 @@ impl BlockRange {
             return String::new();
         }
         let end = Point::new(self.end, Column(term.columns() - 1));
-        term.bounds_to_string(Point::new(start, Column(0)), end).trim_end().to_string()
+        term.bounds_to_string(Point::new(start, Column(0)), end)
+            .trim_end()
+            .to_string()
     }
 
     pub fn whole<T>(&self, term: &Term<T>) -> String {
         let end = Point::new(self.end, Column(term.columns() - 1));
-        term.bounds_to_string(Point::new(self.start, Column(0)), end).trim_end().to_string()
+        term.bounds_to_string(Point::new(self.start, Column(0)), end)
+            .trim_end()
+            .to_string()
     }
 }
 
@@ -438,8 +475,19 @@ mod tests {
     fn marcas_del_prompt() {
         let mut sc = MarkScanner::default();
         let mut out = Vec::new();
-        sc.scan(b"\x1b]133;A;garbo\x07  ~/x\n\x1b]133;B\x07ls\x1b]133;A\x07$ \x1b]133;D;1\x1b\\", &mut out);
+        sc.scan(
+            b"\x1b]133;A;garbo\x07  ~/x\n\x1b]133;B\x07ls\x1b]133;A\x07$ \x1b]133;D;1\x1b\\",
+            &mut out,
+        );
         let marks: Vec<Mark> = out.into_iter().map(|(_, m)| m).collect();
-        assert_eq!(marks, [Mark::PromptStart(true), Mark::CommandStart, Mark::PromptStart(false), Mark::CommandEnd(Some(1))]);
+        assert_eq!(
+            marks,
+            [
+                Mark::PromptStart(true),
+                Mark::CommandStart,
+                Mark::PromptStart(false),
+                Mark::CommandEnd(Some(1))
+            ]
+        );
     }
 }

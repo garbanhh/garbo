@@ -48,45 +48,169 @@ impl Action {
         use Action::*;
         let mut v = vec![
             (NewTab, "new_tab", "Nueva pestaña", "ctrl+shift+t"),
-            (CloseTab, "close_tab", "Cerrar panel o pestaña", "ctrl+shift+w"),
-            (NextTab, "next_tab", "Pestaña siguiente", "ctrl+tab, ctrl+pagedown"),
-            (PrevTab, "prev_tab", "Pestaña anterior", "ctrl+shift+tab, ctrl+pageup"),
-            (MoveTabLeft, "move_tab_left", "Mover pestaña a la izquierda", "ctrl+shift+pageup"),
-            (MoveTabRight, "move_tab_right", "Mover pestaña a la derecha", "ctrl+shift+pagedown"),
+            (
+                CloseTab,
+                "close_tab",
+                "Cerrar panel o pestaña",
+                "ctrl+shift+w",
+            ),
+            (
+                NextTab,
+                "next_tab",
+                "Pestaña siguiente",
+                "ctrl+tab, ctrl+pagedown",
+            ),
+            (
+                PrevTab,
+                "prev_tab",
+                "Pestaña anterior",
+                "ctrl+shift+tab, ctrl+pageup",
+            ),
+            (
+                MoveTabLeft,
+                "move_tab_left",
+                "Mover pestaña a la izquierda",
+                "ctrl+shift+pageup",
+            ),
+            (
+                MoveTabRight,
+                "move_tab_right",
+                "Mover pestaña a la derecha",
+                "ctrl+shift+pagedown",
+            ),
             (Copy, "copy", "Copiar selección", "ctrl+shift+c"),
             (Paste, "paste", "Pegar", "ctrl+shift+v, shift+insert"),
-            (FontBigger, "font_bigger", "Aumentar fuente", "ctrl+plus, ctrl+equal"),
+            (
+                FontBigger,
+                "font_bigger",
+                "Aumentar fuente",
+                "ctrl+plus, ctrl+equal",
+            ),
             (FontSmaller, "font_smaller", "Reducir fuente", "ctrl+minus"),
-            (FontReset, "font_reset", "Tamaño de fuente original", "ctrl+0"),
-            (ScrollPageUp, "scroll_page_up", "Subir una página", "shift+pageup"),
-            (ScrollPageDown, "scroll_page_down", "Bajar una página", "shift+pagedown"),
-            (ScrollTop, "scroll_top", "Ir al principio del historial", "shift+home"),
+            (
+                FontReset,
+                "font_reset",
+                "Tamaño de fuente original",
+                "ctrl+0",
+            ),
+            (
+                ScrollPageUp,
+                "scroll_page_up",
+                "Subir una página",
+                "shift+pageup",
+            ),
+            (
+                ScrollPageDown,
+                "scroll_page_down",
+                "Bajar una página",
+                "shift+pagedown",
+            ),
+            (
+                ScrollTop,
+                "scroll_top",
+                "Ir al principio del historial",
+                "shift+home",
+            ),
             (ScrollBottom, "scroll_bottom", "Ir al final", "shift+end"),
-            (ClearScrollback, "clear_scrollback", "Limpiar historial", "ctrl+shift+k"),
-            (ReloadConfig, "reload_config", "Recargar configuración", "ctrl+shift+r"),
-            (CommandPalette, "command_palette", "Paleta de comandos", "ctrl+shift+p"),
-            (NextTheme, "next_theme", "Cambiar al siguiente tema", "ctrl+shift+y"),
+            (
+                ClearScrollback,
+                "clear_scrollback",
+                "Limpiar historial",
+                "ctrl+shift+k",
+            ),
+            (
+                ReloadConfig,
+                "reload_config",
+                "Recargar configuración",
+                "ctrl+shift+r",
+            ),
+            (
+                CommandPalette,
+                "command_palette",
+                "Paleta de comandos",
+                "ctrl+shift+p",
+            ),
+            (
+                NextTheme,
+                "next_theme",
+                "Cambiar al siguiente tema",
+                "ctrl+shift+y",
+            ),
             (PrevBlock, "prev_block", "Bloque anterior", "ctrl+shift+up"),
-            (NextBlock, "next_block", "Bloque siguiente", "ctrl+shift+down"),
-            (CopyBlockOutput, "copy_block_output", "Copiar salida del bloque", "ctrl+shift+o"),
-            (CopyBlockCommand, "copy_block_command", "Copiar comando del bloque", ""),
+            (
+                NextBlock,
+                "next_block",
+                "Bloque siguiente",
+                "ctrl+shift+down",
+            ),
+            (
+                CopyBlockOutput,
+                "copy_block_output",
+                "Copiar salida del bloque",
+                "ctrl+shift+o",
+            ),
+            (
+                CopyBlockCommand,
+                "copy_block_command",
+                "Copiar comando del bloque",
+                "",
+            ),
             (CopyBlock, "copy_block", "Copiar bloque entero", ""),
             (Settings, "settings", "Ajustes", "ctrl+comma"),
-            (ToggleAgents, "toggle_agents", "Panel de agentes", "ctrl+shift+a"),
-            (TogglePorts, "toggle_ports", "Panel de puertos", "ctrl+shift+e"),
+            (
+                ToggleAgents,
+                "toggle_agents",
+                "Panel de agentes",
+                "ctrl+shift+a",
+            ),
+            (
+                TogglePorts,
+                "toggle_ports",
+                "Panel de puertos",
+                "ctrl+shift+e",
+            ),
             (Search, "search", "Buscar en el historial", "ctrl+shift+f"),
-            (SplitRight, "split_right", "Dividir: panel a la derecha", "ctrl+shift+d"),
-            (SplitDown, "split_down", "Dividir: panel debajo", "ctrl+shift+alt+d"),
-            (FocusLeft, "focus_pane_left", "Panel de la izquierda", "alt+left"),
-            (FocusRight, "focus_pane_right", "Panel de la derecha", "alt+right"),
+            (
+                SplitRight,
+                "split_right",
+                "Dividir: panel a la derecha",
+                "ctrl+shift+d",
+            ),
+            (
+                SplitDown,
+                "split_down",
+                "Dividir: panel debajo",
+                "ctrl+shift+alt+d",
+            ),
+            (
+                FocusLeft,
+                "focus_pane_left",
+                "Panel de la izquierda",
+                "alt+left",
+            ),
+            (
+                FocusRight,
+                "focus_pane_right",
+                "Panel de la derecha",
+                "alt+right",
+            ),
             (FocusUp, "focus_pane_up", "Panel de arriba", "alt+up"),
             (FocusDown, "focus_pane_down", "Panel de abajo", "alt+down"),
         ];
         const GOTO: [&str; 9] = [
-            "goto_tab_1", "goto_tab_2", "goto_tab_3", "goto_tab_4", "goto_tab_5",
-            "goto_tab_6", "goto_tab_7", "goto_tab_8", "goto_tab_9",
+            "goto_tab_1",
+            "goto_tab_2",
+            "goto_tab_3",
+            "goto_tab_4",
+            "goto_tab_5",
+            "goto_tab_6",
+            "goto_tab_7",
+            "goto_tab_8",
+            "goto_tab_9",
         ];
-        const GOTO_KEYS: [&str; 9] = ["alt+1", "alt+2", "alt+3", "alt+4", "alt+5", "alt+6", "alt+7", "alt+8", "alt+9"];
+        const GOTO_KEYS: [&str; 9] = [
+            "alt+1", "alt+2", "alt+3", "alt+4", "alt+5", "alt+6", "alt+7", "alt+8", "alt+9",
+        ];
         for i in 0..9 {
             v.push((GotoTab(i), GOTO[i], "Ir a pestaña", GOTO_KEYS[i]));
         }
@@ -187,7 +311,10 @@ impl Keybindings {
             if spec.trim().eq_ignore_ascii_case("none") {
                 continue;
             }
-            labels.insert(name.to_string(), spec.split(',').next().unwrap_or("").trim().to_string());
+            labels.insert(
+                name.to_string(),
+                spec.split(',').next().unwrap_or("").trim().to_string(),
+            );
             for combo in spec.split(',').filter_map(parse_combo) {
                 map.insert(combo, action);
             }
@@ -203,12 +330,21 @@ impl Keybindings {
     pub fn lookup(&self, key: &Key, mods: ModifiersState) -> Option<Action> {
         let name = key_name(key)?;
         let is_symbol = matches!(key, Key::Character(s) if !s.chars().all(char::is_alphabetic));
-        if let Some(a) = self.map.get(&Combo { mods, key: name.clone() }) {
+        if let Some(a) = self.map.get(&Combo {
+            mods,
+            key: name.clone(),
+        }) {
             return Some(*a);
         }
         // En muchos teclados '+' o '?' requieren Shift: "ctrl+plus" debe funcionar igual.
         if is_symbol && mods.shift_key() {
-            return self.map.get(&Combo { mods: mods - ModifiersState::SHIFT, key: name }).copied();
+            return self
+                .map
+                .get(&Combo {
+                    mods: mods - ModifiersState::SHIFT,
+                    key: name,
+                })
+                .copied();
         }
         None
     }

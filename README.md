@@ -24,7 +24,7 @@
 </p>
 
 <p align="center">
-  <img src="assets/captura.png" alt="Garbo: bloques de comandos con su carpeta y duración, un error en rojo y el menú de completado con las ramas de git" width="900">
+  <img src="assets/paneles.png" alt="Dos paneles en Garbo con una sesión de agente de ejemplo a la izquierda y las pruebas del proyecto a la derecha" width="900">
 </p>
 
 ## Características
@@ -39,10 +39,10 @@
   Mientras escribes, sugiere en gris comandos que ya usaste en esa carpeta.
 - **Edición cómoda de la línea.** `Shift+Intro` para escribir un comando en varias líneas, borrar
   palabras con `Ctrl+Retroceso`, deshacer con `Ctrl+Z` y colocar el cursor con un clic.
-- **Hecha para agentes de código.** Un panel muestra qué hace cada agente (Claude Code, Codex,
-  Gemini CLI, Aider…) y sus subagentes. Cuando un agente termina y no lo estás mirando, recibes un
-  aviso del escritorio. Al pulsarlo vuelves a su pestaña. Las capturas de pantalla se pegan como
-  imagen.
+- **Hecha para agentes de código.** El panel muestra el estado de Claude Code, Codex, Gemini CLI,
+  Aider y otros, con un árbol de subagentes para las sesiones compatibles. Cuando un agente
+  termina y no estás viendo su sesión, aparece un aviso del escritorio que permite volver a su
+  pestaña. Las capturas de pantalla se pegan como imagen.
 - **Pestañas y paneles divididos.** Las pestañas van en la barra de título y se titulan solas con
   lo que se está haciendo; cada una se puede dividir en paneles (un agente a la izquierda y las
   pruebas a la derecha, sin tmux).
@@ -54,7 +54,7 @@
   seleccionado, busca solo en él.
 - **Texto impecable.** Emoji a color (también COLRv1), CJK, *true color*, estilos de subrayado y
   caracteres de cajas dibujados al píxel.
-- **Se actualiza sola.** Avisa de las versiones nuevas y las instala con un clic.
+- **Actualizaciones.** Avisa de las versiones nuevas y permite instalar desde Garbo cuando el RPM está firmado.
 
 ## Instalación
 
@@ -65,8 +65,7 @@ e instálalo con:
 sudo dnf install ./garbo-*.x86_64.rpm
 ```
 
-Garbo aparece en el menú de aplicaciones. Las versiones siguientes se instalan desde la propia
-aplicación.
+Garbo aparece en el menú de aplicaciones. La aplicación avisa cuando hay una versión nueva.
 
 **Requisitos:** Linux con Wayland o X11 (desarrollada y probada en Fedora 45 con GNOME) y una GPU
 con Vulkan u OpenGL. Los bloques de comandos, las sugerencias y el completado usan bash.
@@ -140,6 +139,8 @@ nada empieza igual ni lo contiene, busca las letras en orden. `↑` `↓` (o `Ta
 candidato se escribe directamente; si no hay ninguno (por ejemplo, opciones `-x`), `Tab` llega al
 shell y funciona su autocompletado de siempre.
 
+![Bloques de comandos y menú de completado de ramas de Git](assets/captura.png)
+
 **Sugerencia en gris.** A partir de dos caracteres, Garbo muestra en gris el resto de un comando ya
 usado que empieza igual: primero lo ejecutado en la carpeta actual y, si no, lo más reciente. Si el
 historial no tiene nada, sugiere el único candidato del completado (`cd Doc` → `umentos/`).
@@ -210,10 +211,12 @@ Los botones de la barra de pestañas (o `Ctrl+Shift+A` y `Ctrl+Shift+E`) abren u
 - **Agentes**: pestañas con un agente de código (Claude Code, Codex, Gemini CLI, Aider, OpenCode,
   entre otros), con su estado (*Trabajando*, *Necesita tu permiso*, *Terminado*, *Esperando tu
   mensaje*) y el tiempo transcurrido. Un clic va a la pestaña; al pasar el ratón se ven las
-  últimas líneas de la conversación sin cambiar de pestaña.
-- **Subagentes**: bajo cada sesión de Claude Code, los subagentes que lanza, con su descripción, el
-  tiempo en marcha y la herramienta que usan. Se leen, sin modificarlos, de los archivos de sesión
-  de `~/.claude/projects`.
+  últimas líneas de la conversación sin cambiar de pestaña. Garbo omite el borrador y el pie
+  cuando reconoce el editor del agente.
+- **Subagentes**: Claude Code y Codex muestran sus subagentes en un árbol bajo la sesión principal,
+  con el estado, el tiempo en marcha y la herramienta que usan si está disponible. Gemini CLI
+  también muestra el árbol al reanudar una sesión por su ID (`gemini --resume <id>`) con registros
+  de subagentes. Garbo lee los archivos locales de sesión en solo lectura.
 - **Puertos**: servidores web locales con el programa que los ejecuta; un clic los abre en el
   navegador. El resto de puertos en escucha se agrupa aparte. Solo se consulta con el panel abierto.
 
@@ -238,7 +241,8 @@ adjuntan como imagen.
 Bloques, Avisos, Ventana y Actualizaciones. Los cambios se aplican al momento y se guardan en
 `~/.config/garbo/config.toml`, respetando el resto del archivo y sus comentarios. Se manejan con el
 ratón o con el teclado (`Tab` cambia de categoría, `↑` `↓` eligen, `←` `→` cambian el valor, `Esc`
-cierra).
+cierra). Si el archivo tiene errores, Ajustes muestra un aviso y conserva el archivo para que
+puedas corregirlo.
 
 ## Configuración
 
@@ -248,10 +252,11 @@ El archivo es `~/.config/garbo/config.toml`; todas las opciones están explicada
 
 ## Actualizaciones
 
-Garbo consulta las versiones publicadas en GitHub al iniciarse y cada 24 horas. Si hay una más
-reciente, la barra de pestañas muestra **Actualizar a X.Y.Z**: al pulsarlo descarga el paquete,
-comprueba su suma SHA-256 e instala con `pkexec dnf`, que pide la contraseña de administrador. Se
-puede desactivar en los ajustes.
+Garbo consulta las versiones publicadas en GitHub al iniciarse y cada 24 horas. En una compilación
+con la clave pública de Garbo, **Actualizar a X.Y.Z** descarga el RPM y comprueba su suma SHA-256
+y su firma antes de llamar a `pkexec dnf`. **Ver versión X.Y.Z** abre la página de GitHub para
+instalarla manualmente si faltan la clave, las herramientas o los archivos necesarios. La consulta
+automática se puede desactivar en Ajustes.
 
 ## Rendimiento
 
@@ -318,7 +323,7 @@ src/
   clipboard.rs    pegado de imágenes del portapapeles
   sessions.rs     detección de agentes en primer plano y su estado
   ports.rs        puertos en escucha y detección de servidores web
-  subagents.rs    subagentes de Claude Code a partir de sus archivos de sesión
+  subagents.rs    subagentes a partir de los archivos locales de sesión
   notify.rs       avisos del escritorio cuando un agente termina
   activation.rs   traer la ventana al frente al pulsar un aviso (Wayland)
   panel.rs        panel lateral de agentes y puertos, con vista previa al pasar el ratón

@@ -51,13 +51,13 @@ const MIN_PREFIX: usize = 2;
 
 /// Órdenes internas y palabras clave de bash.
 const BUILTINS: &[&str] = &[
-    ".", ":", "[", "[[", "alias", "bg", "bind", "break", "builtin", "case", "cd", "command", "compgen",
-    "complete", "continue", "declare", "dirs", "disown", "echo", "enable", "eval", "exec", "exit",
-    "export", "false", "fc", "fg", "for", "function", "getopts", "hash", "help", "history", "if",
-    "jobs", "kill", "let", "local", "logout", "mapfile", "popd", "printf", "pushd", "pwd", "read",
-    "readonly", "return", "select", "set", "shift", "shopt", "source", "suspend", "test", "time",
-    "times", "trap", "true", "type", "typeset", "ulimit", "umask", "unalias", "unset", "until",
-    "wait", "while",
+    ".", ":", "[", "[[", "alias", "bg", "bind", "break", "builtin", "case", "cd", "command",
+    "compgen", "complete", "continue", "declare", "dirs", "disown", "echo", "enable", "eval",
+    "exec", "exit", "export", "false", "fc", "fg", "for", "function", "getopts", "hash", "help",
+    "history", "if", "jobs", "kill", "let", "local", "logout", "mapfile", "popd", "printf",
+    "pushd", "pwd", "read", "readonly", "return", "select", "set", "shift", "shopt", "source",
+    "suspend", "test", "time", "times", "trap", "true", "type", "typeset", "ulimit", "umask",
+    "unalias", "unset", "until", "wait", "while",
 ];
 
 /// Un comando del historial y las carpetas donde se ejecutó en Garbo (la más reciente primero).
@@ -109,7 +109,9 @@ fn mtime(path: &Path) -> Option<SystemTime> {
 
 /// Línea del historial propio: `segundos \t código \t carpeta \t comando`.
 fn record_line(cmd: &str, code: Option<i32>, dir: Option<&Path>) -> String {
-    let secs = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map_or(0, |d| d.as_secs());
+    let secs = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
     let code = code.map(|c| c.to_string()).unwrap_or_default();
     let dir = dir.and_then(Path::to_str).unwrap_or("");
     format!("{secs}\t{code}\t{dir}\t{cmd}\n")
@@ -120,14 +122,19 @@ fn parse_records(text: &str) -> Vec<Record> {
         .filter_map(|l| {
             let mut f = l.splitn(4, '\t');
             let (_secs, _code, dir, cmd) = (f.next()?, f.next()?, f.next()?, f.next()?);
-            valid(cmd).then(|| Record { cmd: cmd.to_string(), dir: (!dir.is_empty()).then(|| PathBuf::from(dir)) })
+            valid(cmd).then(|| Record {
+                cmd: cmd.to_string(),
+                dir: (!dir.is_empty()).then(|| PathBuf::from(dir)),
+            })
         })
         .collect()
 }
 
 /// Lee el historial propio; si ha crecido demasiado, lo reescribe con la mitad más reciente.
 fn load_records(path: &Path) -> Vec<Record> {
-    let text = std::fs::read(path).map(|b| String::from_utf8_lossy(&b).into_owned()).unwrap_or_default();
+    let text = std::fs::read(path)
+        .map(|b| String::from_utf8_lossy(&b).into_owned())
+        .unwrap_or_default();
     let recs = parse_records(&text);
     if recs.len() <= MAX_RECORDS {
         return recs;
@@ -144,7 +151,10 @@ fn load_records(path: &Path) -> Vec<Record> {
 impl History {
     fn refresh(&mut self) {
         let now = Instant::now();
-        if self.checked.is_some_and(|t| now.duration_since(t) < RELOAD_EVERY) {
+        if self
+            .checked
+            .is_some_and(|t| now.duration_since(t) < RELOAD_EVERY)
+        {
             return;
         }
         self.checked = Some(now);
@@ -153,8 +163,14 @@ impl History {
             let m = mtime(&path);
             if m.is_some() && m != self.bash_mtime {
                 self.bash_mtime = m;
-                let text = std::fs::read(&path).map(|b| String::from_utf8_lossy(&b).into_owned()).unwrap_or_default();
-                self.bash = text.lines().filter(|l| !is_timestamp(l)).map(str::to_string).collect();
+                let text = std::fs::read(&path)
+                    .map(|b| String::from_utf8_lossy(&b).into_owned())
+                    .unwrap_or_default();
+                self.bash = text
+                    .lines()
+                    .filter(|l| !is_timestamp(l))
+                    .map(str::to_string)
+                    .collect();
                 changed = true;
             }
         }
@@ -184,7 +200,12 @@ impl History {
                 }
             }
         }
-        let cmds = dedup(self.bash.iter().cloned().chain(self.garbo.iter().map(|r| r.cmd.clone())));
+        let cmds = dedup(
+            self.bash
+                .iter()
+                .cloned()
+                .chain(self.garbo.iter().map(|r| r.cmd.clone())),
+        );
         self.entries = cmds
             .into_iter()
             .map(|cmd| {
@@ -205,24 +226,37 @@ impl History {
             dirs.insert(0, d.clone());
             dirs.truncate(MAX_DIRS);
         }
-        self.entries.push(Entry { cmd: cmd.to_string(), dirs });
+        self.entries.push(Entry {
+            cmd: cmd.to_string(),
+            dirs,
+        });
         if self.entries.len() > MAX_ENTRIES {
             self.entries.remove(0);
         }
-        self.garbo.push(Record { cmd: cmd.to_string(), dir });
+        self.garbo.push(Record {
+            cmd: cmd.to_string(),
+            dir,
+        });
         self.generation += 1;
     }
 
     /// Resto del comando más reciente que empieza por `prefix` y pasa el filtro `ok`: primero los
     /// ejecutados en `cwd`; después cualquiera salvo los `cd` relativos (se hicieron en otro sitio).
-    fn suggest(&self, prefix: &str, cwd: Option<&Path>, ok: impl Fn(&str) -> bool) -> Option<String> {
+    fn suggest(
+        &self,
+        prefix: &str,
+        cwd: Option<&Path>,
+        ok: impl Fn(&str) -> bool,
+    ) -> Option<String> {
         let candidates = || {
-            self.entries
-                .iter()
-                .rev()
-                .filter(|e| e.cmd.len() > prefix.len() && e.cmd.starts_with(prefix) && !e.cmd[prefix.len()..].trim().is_empty())
+            self.entries.iter().rev().filter(|e| {
+                e.cmd.len() > prefix.len()
+                    && e.cmd.starts_with(prefix)
+                    && !e.cmd[prefix.len()..].trim().is_empty()
+            })
         };
-        let here = cwd.and_then(|cwd| candidates().find(|e| e.dirs.iter().any(|d| d == cwd) && ok(&e.cmd)));
+        let here = cwd
+            .and_then(|cwd| candidates().find(|e| e.dirs.iter().any(|d| d == cwd) && ok(&e.cmd)));
         here.or_else(|| candidates().find(|e| !relative_cd(&e.cmd) && ok(&e.cmd)))
             .map(|e| e.cmd[prefix.len()..].to_string())
     }
@@ -252,18 +286,32 @@ static KNOWN: Mutex<Option<Known>> = Mutex::new(None);
 /// Programas del PATH (y carpetas habituales del usuario), órdenes internas, y alias y funciones de
 /// los archivos de arranque de bash.
 fn build_known() -> HashMap<String, Kind> {
-    let mut names: HashMap<String, Kind> = BUILTINS.iter().map(|s| (s.to_string(), Kind::Builtin)).collect();
+    let mut names: HashMap<String, Kind> = BUILTINS
+        .iter()
+        .map(|s| (s.to_string(), Kind::Builtin))
+        .collect();
     let home = dirs::home_dir().unwrap_or_default();
-    let mut dirs: Vec<PathBuf> = std::env::var_os("PATH").map(|p| std::env::split_paths(&p).collect()).unwrap_or_default();
-    dirs.extend([home.join(".local/bin"), home.join("bin"), home.join(".cargo/bin")]);
+    let mut dirs: Vec<PathBuf> = std::env::var_os("PATH")
+        .map(|p| std::env::split_paths(&p).collect())
+        .unwrap_or_default();
+    dirs.extend([
+        home.join(".local/bin"),
+        home.join("bin"),
+        home.join(".cargo/bin"),
+    ]);
     for d in dirs {
         if let Ok(rd) = std::fs::read_dir(d) {
             for e in rd.flatten() {
-                names.entry(e.file_name().to_string_lossy().into_owned()).or_insert(Kind::Command);
+                names
+                    .entry(e.file_name().to_string_lossy().into_owned())
+                    .or_insert(Kind::Command);
             }
         }
     }
-    let mut rc: Vec<PathBuf> = [".bashrc", ".bash_aliases", ".bash_profile", ".profile"].iter().map(|f| home.join(f)).collect();
+    let mut rc: Vec<PathBuf> = [".bashrc", ".bash_aliases", ".bash_profile", ".profile"]
+        .iter()
+        .map(|f| home.join(f))
+        .collect();
     rc.push(PathBuf::from("/etc/bashrc"));
     for dir in [home.join(".bashrc.d"), PathBuf::from("/etc/profile.d")] {
         if let Ok(rd) = std::fs::read_dir(dir) {
@@ -283,8 +331,14 @@ fn build_known() -> HashMap<String, Kind> {
 /// Órdenes que se pueden ejecutar (nombre -> tipo), rehechas como mucho cada minuto.
 pub fn with_known<R>(f: impl FnOnce(&HashMap<String, Kind>) -> R) -> R {
     let mut known = KNOWN.lock().unwrap_or_else(|e| e.into_inner());
-    if known.as_ref().is_none_or(|k| k.built.elapsed() >= KNOWN_EVERY) {
-        *known = Some(Known { names: build_known(), built: Instant::now() });
+    if known
+        .as_ref()
+        .is_none_or(|k| k.built.elapsed() >= KNOWN_EVERY)
+    {
+        *known = Some(Known {
+            names: build_known(),
+            built: Instant::now(),
+        });
     }
     f(&known.as_ref().unwrap().names)
 }
@@ -293,7 +347,10 @@ pub fn with_known<R>(f: impl FnOnce(&HashMap<String, Kind>) -> R) -> R {
 fn defined_name(line: &str) -> Option<String> {
     let l = line.trim();
     let ident = |s: &str| {
-        let n: String = s.chars().take_while(|c| c.is_alphanumeric() || "_-.:".contains(*c)).collect();
+        let n: String = s
+            .chars()
+            .take_while(|c| c.is_alphanumeric() || "_-.:".contains(*c))
+            .collect();
         (!n.is_empty()).then_some(n)
     };
     if let Some(rest) = l.strip_prefix("alias ") {
@@ -304,7 +361,10 @@ fn defined_name(line: &str) -> Option<String> {
         return ident(rest.trim());
     }
     let name = ident(l)?;
-    l[name.len()..].trim_start().starts_with("()").then_some(name)
+    l[name.len()..]
+        .trim_start()
+        .starts_with("()")
+        .then_some(name)
 }
 
 /// Primera palabra que se ejecuta (saltando asignaciones `VAR=valor` y `(`, `{`, `!`).
@@ -313,7 +373,9 @@ fn first_word(cmd: &str) -> Option<&str> {
         .map(|w| w.trim_start_matches(['(', '{', '!']))
         .find(|w| {
             let assign = w.split_once('=').is_some_and(|(n, _)| {
-                !n.is_empty() && n.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') && !n.starts_with(|c: char| c.is_ascii_digit())
+                !n.is_empty()
+                    && n.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+                    && !n.starts_with(|c: char| c.is_ascii_digit())
             });
             !w.is_empty() && !assign
         })
@@ -334,7 +396,9 @@ fn expand(p: &str, cwd: Option<&Path>) -> Option<PathBuf> {
 
 /// ¿Tiene sentido sugerir este comando?
 fn runnable(cmd: &str, known: &HashMap<String, Kind>, cwd: Option<&Path>) -> bool {
-    let Some(w) = first_word(cmd) else { return false };
+    let Some(w) = first_word(cmd) else {
+        return false;
+    };
     if w.contains('/') {
         return expand(w, cwd).is_none_or(|p| p.exists());
     }
@@ -365,7 +429,11 @@ fn valid(cmd: &str) -> bool {
 /// Quita repetidos conservando la aparición más reciente, y limita el tamaño.
 fn dedup(items: impl DoubleEndedIterator<Item = String>) -> Vec<String> {
     let mut seen = HashSet::new();
-    let mut out: Vec<String> = items.rev().filter(|e| valid(e) && seen.insert(e.clone())).take(MAX_ENTRIES).collect();
+    let mut out: Vec<String> = items
+        .rev()
+        .filter(|e| valid(e) && seen.insert(e.clone()))
+        .take(MAX_ENTRIES)
+        .collect();
     out.reverse();
     out
 }
@@ -375,7 +443,11 @@ fn dedup(items: impl DoubleEndedIterator<Item = String>) -> Vec<String> {
 /// pudieron ejecutar (126/127: no existe o no es ejecutable).
 pub fn record(cmd: &str, code: Option<i32>, dir: Option<&Path>) {
     let cmd = cmd.trim_end();
-    if cmd.starts_with(' ') || !valid(cmd) || cmd.chars().count() > 500 || matches!(code, Some(126 | 127)) {
+    if cmd.starts_with(' ')
+        || !valid(cmd)
+        || cmd.chars().count() > 500
+        || matches!(code, Some(126 | 127))
+    {
         return;
     }
     // Una carpeta con tabuladores o saltos de línea rompería el formato: se guarda sin ella.
@@ -385,7 +457,11 @@ pub fn record(cmd: &str, code: Option<i32>, dir: Option<&Path>) {
         if let Some(parent) = path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
-        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+        {
             let _ = f.write_all(record_line(cmd, code, dir).as_bytes());
         }
     }
@@ -421,18 +497,28 @@ pub fn suggest(input: &str, cwd: Option<&Path>) -> Option<String> {
         h.generation
     };
     if let Some(c) = CACHE.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
-        if c.input == input && c.cwd.as_deref() == cwd && c.generation == generation && c.at.elapsed() < CACHE_FOR {
+        if c.input == input
+            && c.cwd.as_deref() == cwd
+            && c.generation == generation
+            && c.at.elapsed() < CACHE_FOR
+        {
             return c.result.clone();
         }
     }
     // Orden de bloqueo: KNOWN y luego HISTORY (nunca al revés).
     let from_history = with_known(|names| {
         let h = HISTORY.lock().unwrap_or_else(|e| e.into_inner());
-        h.as_ref()?.suggest(input, cwd, |cmd| runnable(cmd, names, cwd))
+        h.as_ref()?
+            .suggest(input, cwd, |cmd| runnable(cmd, names, cwd))
     });
     let result = from_history.or_else(|| crate::complete::complete(input, cwd)?.ghost());
-    *CACHE.lock().unwrap_or_else(|e| e.into_inner()) =
-        Some(Cached { input: input.to_string(), cwd: cwd.map(Path::to_path_buf), generation, at: Instant::now(), result: result.clone() });
+    *CACHE.lock().unwrap_or_else(|e| e.into_inner()) = Some(Cached {
+        input: input.to_string(),
+        cwd: cwd.map(Path::to_path_buf),
+        generation,
+        at: Instant::now(),
+        result: result.clone(),
+    });
     result
 }
 
@@ -481,7 +567,10 @@ pub fn current_input<T>(term: &Term<T>, start: (i64, usize)) -> Option<String> {
         let to = if l == cur.line { cur.column.0 } else { cols };
         for c in from..to.min(cols) {
             let cell = &row[Column(c)];
-            if !cell.flags.intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER) {
+            if !cell
+                .flags
+                .intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER)
+            {
                 s.push(cell_char(cell.c));
             }
         }
@@ -506,7 +595,12 @@ pub fn current_input<T>(term: &Term<T>, start: (i64, usize)) -> Option<String> {
 /// empieza en la primera columna (prompt de Garbo, o un prompt que llena la línea), el prompt está
 /// en la línea de encima.
 pub(crate) fn prompt_before<T>(term: &Term<T>, line: Line, col: usize) -> bool {
-    let is_prompt = |l: Line, c: usize| matches!(crate::blocks::cell_link(&term.grid()[l][Column(c)]), Some((b'p', _)));
+    let is_prompt = |l: Line, c: usize| {
+        matches!(
+            crate::blocks::cell_link(&term.grid()[l][Column(c)]),
+            Some((b'p', _))
+        )
+    };
     if col > 0 {
         is_prompt(line, col - 1)
     } else if line > term.topmost_line() {
@@ -519,9 +613,15 @@ pub(crate) fn prompt_before<T>(term: &Term<T>, line: Line, col: usize) -> bool {
 /// Lo que readline muestra en lugar de la línea durante una búsqueda o un argumento numérico. Con
 /// el prompt de Garbo lo escribe desde la primera columna, sin tocar el prompt.
 pub(crate) fn readline_mode(text: &str) -> bool {
-    ["(reverse-i-search)", "(i-search)", "(failed reverse-i-search)", "(failed i-search)", "(arg: "]
-        .iter()
-        .any(|p| text.starts_with(p))
+    [
+        "(reverse-i-search)",
+        "(i-search)",
+        "(failed reverse-i-search)",
+        "(failed i-search)",
+        "(arg: ",
+    ]
+    .iter()
+    .any(|p| text.starts_with(p))
 }
 
 /// Comando completo recién aceptado (el cursor ya bajó de línea al pulsar Intro).
@@ -532,7 +632,11 @@ pub fn executed_command<T>(term: &Term<T>, start: (i64, usize)) -> Option<String
         return None;
     }
     let cols = term.columns();
-    let last = if cur.column.0 == 0 && cur.line > start_line { cur.line - 1 } else { cur.line };
+    let last = if cur.column.0 == 0 && cur.line > start_line {
+        cur.line - 1
+    } else {
+        cur.line
+    };
     let mut s = String::new();
     let mut l = start_line;
     loop {
@@ -541,7 +645,10 @@ pub fn executed_command<T>(term: &Term<T>, start: (i64, usize)) -> Option<String
         let mut line = String::new();
         for c in from..cols {
             let cell = &row[Column(c)];
-            if !cell.flags.intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER) {
+            if !cell
+                .flags
+                .intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER)
+            {
                 line.push(cell_char(cell.c));
             }
         }
@@ -568,8 +675,18 @@ mod tests {
 
     fn history(bash: &[&str], garbo: &[(&str, Option<&str>)]) -> History {
         let mut h = History {
-            bash: bash.iter().filter(|l| !is_timestamp(l)).map(|s| s.to_string()).collect(),
-            garbo: garbo.iter().map(|(c, d)| Record { cmd: c.to_string(), dir: d.map(PathBuf::from) }).collect(),
+            bash: bash
+                .iter()
+                .filter(|l| !is_timestamp(l))
+                .map(|s| s.to_string())
+                .collect(),
+            garbo: garbo
+                .iter()
+                .map(|(c, d)| Record {
+                    cmd: c.to_string(),
+                    dir: d.map(PathBuf::from),
+                })
+                .collect(),
             ..Default::default()
         };
         h.rebuild();
@@ -578,17 +695,38 @@ mod tests {
 
     #[test]
     fn historial_y_sugerencias() {
-        let mut h = history(&["git status", "cargo build", "git commit -m x", "cargo build", "#1700000000", "ls"], &[]);
+        let mut h = history(
+            &[
+                "git status",
+                "cargo build",
+                "git commit -m x",
+                "cargo build",
+                "#1700000000",
+                "ls",
+            ],
+            &[],
+        );
         let cmds: Vec<&str> = h.entries.iter().map(|e| e.cmd.as_str()).collect();
         assert_eq!(cmds, ["git status", "git commit -m x", "cargo build", "ls"]);
         let all = |_: &str| true;
-        assert_eq!(h.suggest("git", None, all).as_deref(), Some(" commit -m x"), "la más reciente gana");
+        assert_eq!(
+            h.suggest("git", None, all).as_deref(),
+            Some(" commit -m x"),
+            "la más reciente gana"
+        );
         assert_eq!(h.suggest("git s", None, all).as_deref(), Some("tatus"));
         assert_eq!(h.suggest("ls", None, all), None, "igual no es sugerencia");
         h.push("git status", None);
-        assert_eq!(h.suggest("git", None, all).as_deref(), Some(" status"), "ejecutarlo lo vuelve más reciente");
+        assert_eq!(
+            h.suggest("git", None, all).as_deref(),
+            Some(" status"),
+            "ejecutarlo lo vuelve más reciente"
+        );
         // Con filtro: se salta lo que no pasa y se ofrece el siguiente más reciente.
-        assert_eq!(h.suggest("git", None, |c| !c.contains("status")).as_deref(), Some(" commit -m x"));
+        assert_eq!(
+            h.suggest("git", None, |c| !c.contains("status")).as_deref(),
+            Some(" commit -m x")
+        );
         assert!(!valid("   "));
         assert!(!valid("a\u{1b}b"));
     }
@@ -599,19 +737,45 @@ mod tests {
         let docs = Path::new("/home/u/Documentos");
         let mut h = history(
             &["cd Documentos", "cd Proyectos", "cd ..", "claude --resume"],
-            &[("cd Documentos", Some("/home/u")), ("cargo test", Some("/home/u/p")), ("cargo build", Some("/home/u/q"))],
+            &[
+                ("cd Documentos", Some("/home/u")),
+                ("cargo test", Some("/home/u/p")),
+                ("cargo build", Some("/home/u/q")),
+            ],
         );
         let all = |_: &str| true;
         // El caso de la captura: en ~, "cd Proyectos" (hecho en ~/Documentos) no se sugiere.
-        assert_eq!(h.suggest("cd ", Some(home), all).as_deref(), Some("Documentos"), "lo hecho aquí");
-        assert_eq!(h.suggest("cd P", Some(home), all), None, "cd relativo hecho en otro sitio");
-        assert_eq!(h.suggest("cd ", Some(docs), all).as_deref(), Some(".."), "cd .. vale en cualquier sitio");
+        assert_eq!(
+            h.suggest("cd ", Some(home), all).as_deref(),
+            Some("Documentos"),
+            "lo hecho aquí"
+        );
+        assert_eq!(
+            h.suggest("cd P", Some(home), all),
+            None,
+            "cd relativo hecho en otro sitio"
+        );
+        assert_eq!(
+            h.suggest("cd ", Some(docs), all).as_deref(),
+            Some(".."),
+            "cd .. vale en cualquier sitio"
+        );
         h.push("cd Proyectos", Some(docs.to_path_buf()));
-        assert_eq!(h.suggest("cd ", Some(docs), all).as_deref(), Some("Proyectos"));
+        assert_eq!(
+            h.suggest("cd ", Some(docs), all).as_deref(),
+            Some("Proyectos")
+        );
         assert_eq!(h.suggest("cd P", Some(home), all), None);
         // Fuera de las carpetas conocidas gana el más reciente; dentro, el de esa carpeta.
-        assert_eq!(h.suggest("cargo ", Some(home), all).as_deref(), Some("build"));
-        assert_eq!(h.suggest("cargo ", Some(Path::new("/home/u/p")), all).as_deref(), Some("test"));
+        assert_eq!(
+            h.suggest("cargo ", Some(home), all).as_deref(),
+            Some("build")
+        );
+        assert_eq!(
+            h.suggest("cargo ", Some(Path::new("/home/u/p")), all)
+                .as_deref(),
+            Some("test")
+        );
         assert!(relative_cd("cd GRBTER && claude"));
         assert!(!relative_cd("cd ~/x"));
         assert!(!relative_cd("cd ../.."));
@@ -621,12 +785,25 @@ mod tests {
 
     #[test]
     fn historial_propio_en_archivo() {
-        let line = record_line("cd Proyectos", Some(0), Some(Path::new("/home/u/Documentos")));
-        assert!(line.ends_with("\t0\t/home/u/Documentos\tcd Proyectos\n"), "{line}");
+        let line = record_line(
+            "cd Proyectos",
+            Some(0),
+            Some(Path::new("/home/u/Documentos")),
+        );
+        assert!(
+            line.ends_with("\t0\t/home/u/Documentos\tcd Proyectos\n"),
+            "{line}"
+        );
         let recs = parse_records(&(line + "basura\n1\t\t\tls -la\n"));
         assert_eq!(recs.len(), 2);
-        assert_eq!(recs[0].dir.as_deref(), Some(Path::new("/home/u/Documentos")));
-        assert_eq!((recs[1].cmd.as_str(), recs[1].dir.as_deref()), ("ls -la", None));
+        assert_eq!(
+            recs[0].dir.as_deref(),
+            Some(Path::new("/home/u/Documentos"))
+        );
+        assert_eq!(
+            (recs[1].cmd.as_str(), recs[1].dir.as_deref()),
+            ("ls -la", None)
+        );
         assert_eq!(next_word(" --resume"), " --resume");
         assert_eq!(next_word("umentos/Proyectos"), "umentos/");
         assert_eq!(next_word("tatus --short"), "tatus");
@@ -634,22 +811,33 @@ mod tests {
 
     #[test]
     fn solo_comandos_que_se_pueden_ejecutar() {
-        let known: HashMap<String, Kind> =
-            ["ls", "git", "cd", "servidor", "sudo"].iter().map(|s| (s.to_string(), Kind::Command)).collect();
+        let known: HashMap<String, Kind> = ["ls", "git", "cd", "servidor", "sudo"]
+            .iter()
+            .map(|s| (s.to_string(), Kind::Command))
+            .collect();
         let tmp = std::env::temp_dir();
         let cwd = Some(tmp.as_path());
         assert!(runnable("git status", &known, cwd));
         assert!(runnable("servidor", &known, cwd), "alias del usuario");
-        assert!(runnable("FOO=1 git log", &known, cwd), "con asignaciones delante");
+        assert!(
+            runnable("FOO=1 git log", &known, cwd),
+            "con asignaciones delante"
+        );
         assert!(!runnable("calude", &known, cwd), "errata");
         assert!(!runnable("cd..", &known, cwd), "errata sin espacio");
         assert!(runnable("cd", &known, cwd));
         assert!(runnable("cd -", &known, cwd));
         assert!(runnable("cd /", &known, cwd));
-        assert!(!runnable("cd /no/existe/garbo", &known, cwd), "destino inexistente");
+        assert!(
+            !runnable("cd /no/existe/garbo", &known, cwd),
+            "destino inexistente"
+        );
         assert!(runnable("/bin/sh -c x", &known, cwd));
         assert!(!runnable("/no/existe/x", &known, cwd));
-        assert_eq!(defined_name("alias servidor='ssh x'").as_deref(), Some("servidor"));
+        assert_eq!(
+            defined_name("alias servidor='ssh x'").as_deref(),
+            Some("servidor")
+        );
         assert_eq!(defined_name("  function mkcd {").as_deref(), Some("mkcd"));
         assert_eq!(defined_name("mkcd() {").as_deref(), Some("mkcd"));
         assert_eq!(defined_name("export PATH=x"), None);

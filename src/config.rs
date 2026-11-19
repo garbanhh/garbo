@@ -3,7 +3,10 @@
 
 use serde::Deserialize;
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::fs;
+use std::io::{self, Write};
+use std::os::unix::fs::OpenOptionsExt;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
@@ -49,7 +52,12 @@ pub struct NotifyConfig {
 
 impl Default for NotifyConfig {
     fn default() -> Self {
-        Self { agents: NotifyWhen::Unfocused, min_work_secs: 5, sound: true, blocked: true }
+        Self {
+            agents: NotifyWhen::Unfocused,
+            min_work_secs: 5,
+            sound: true,
+            blocked: true,
+        }
     }
 }
 
@@ -108,10 +116,16 @@ impl Default for FontConfig {
 
 impl FontConfig {
     pub fn ui_fallback(&self) -> Vec<String> {
-        let mut v: Vec<String> = ["Cantarell", "Inter", "Noto Sans", "DejaVu Sans", "Liberation Sans"]
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
+        let mut v: Vec<String> = [
+            "Cantarell",
+            "Inter",
+            "Noto Sans",
+            "DejaVu Sans",
+            "Liberation Sans",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
         v.extend(self.fallback.iter().cloned());
         v
     }
@@ -235,8 +249,14 @@ impl Config {
 
     /// Carga la config. Si hay un error de sintaxis se informa y se usan los valores por defecto.
     pub fn load() -> Self {
-        let Some(path) = Self::path() else { return Self::default() };
-        match std::fs::read_to_string(&path) {
+        let Some(path) = Self::path() else {
+            return Self::default();
+        };
+        Self::load_at(&path)
+    }
+
+    pub(crate) fn load_at(path: &Path) -> Self {
+        match fs::read_to_string(path) {
             Ok(text) => match toml::from_str::<Config>(&text) {
                 Ok(cfg) => cfg,
                 Err(e) => {
@@ -251,10 +271,37 @@ impl Config {
     /// Guarda los valores que se pueden cambiar desde Ajustes. Edita el archivo existente
     /// en su sitio (toml_edit), así se conservan comentarios y el resto de claves.
     pub fn save(&self) -> std::io::Result<()> {
+        let path = Self::path().ok_or_else(|| {
+            io::Error::new(io::ErrorKind::NotFound, "Sin carpeta de configuración")
+        })?;
+        self.save_at(&path)
+    }
+
+    pub(crate) fn save_at(&self, path: &Path) -> io::Result<()> {
         use toml_edit::{value, DocumentMut};
-        let Some(path) = Self::path() else { return Ok(()) };
-        let text = std::fs::read_to_string(&path).unwrap_or_default();
-        let mut doc: DocumentMut = text.parse().unwrap_or_default();
+        let (path, permissions, mut doc) = match fs::canonicalize(path) {
+            Ok(path) => {
+                let text = fs::read_to_string(&path)?;
+                // Valida la estructura antes de editar secciones con toml_edit.
+                toml::from_str::<Self>(&text)
+                    .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+                let doc = text
+                    .parse::<DocumentMut>()
+                    .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+                let permissions = fs::metadata(&path)?.permissions();
+                (path, Some(permissions), doc)
+            }
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {
+                // Si queda un enlace sin destino, se conserva para que pueda repararse.
+                match fs::symlink_metadata(path) {
+                    Err(e) if e.kind() == io::ErrorKind::NotFound => {
+                        (path.to_owned(), None, DocumentMut::new())
+                    }
+                    _ => return Err(e),
+                }
+            }
+            Err(e) => return Err(e),
+        };
         let r2 = |v: f32| ((v as f64) * 100.0).round() / 100.0;
         doc["theme"] = value(self.theme.clone());
         doc["check_updates"] = value(self.check_updates);
@@ -290,10 +337,24 @@ impl Config {
         });
         doc["terminal"]["complete_as_you_type"] = value(self.terminal.complete_as_you_type);
         doc["terminal"]["garbo_prompt"] = value(self.terminal.garbo_prompt);
-        if let Some(dir) = path.parent() {
-            std::fs::create_dir_all(dir)?;
+        let parent = path
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
+        fs::create_dir_all(parent)?;
+        let dir = crate::temp_dir::TempDir::new_in(parent)?;
+        let staged = dir.path().join("config.toml");
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&staged)?;
+        file.write_all(doc.to_string().as_bytes())?;
+        if let Some(permissions) = permissions {
+            file.set_permissions(permissions)?;
         }
-        std::fs::write(&path, doc.to_string())
+        file.sync_all()?;
+        fs::rename(staged, path)
     }
 
     pub fn theme(&self) -> Theme {
@@ -322,6 +383,45 @@ impl Config {
             }
         }
         t
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn guardar_rechaza_toml_invalido_sin_tocar_el_archivo() {
+        let dir = crate::temp_dir::TempDir::new_in(&std::env::temp_dir()).unwrap();
+        let path = dir.path().join("config.toml");
+        for original in [
+            "# comentario\n[shell]\nprogram = \"/bin/zsh\"\n[colors]\nbackground =\n",
+            "# comentario\nfont = 12\n[shell]\nprogram = \"/bin/zsh\"\n",
+        ] {
+            fs::write(&path, original).unwrap();
+            let cfg = Config::load_at(&path);
+            assert_eq!(
+                cfg.save_at(&path).unwrap_err().kind(),
+                io::ErrorKind::InvalidData
+            );
+            assert_eq!(fs::read_to_string(&path).unwrap(), original);
+        }
+    }
+
+    #[test]
+    fn guardar_conserva_el_enlace_al_archivo() {
+        let dir = crate::temp_dir::TempDir::new_in(&std::env::temp_dir()).unwrap();
+        let path = dir.path().join("config.toml");
+        let target = dir.path().join("dotfiles.toml");
+        std::os::unix::fs::symlink(&target, &path).unwrap();
+        Config::default().save_at(&target).unwrap();
+        let cfg = Config {
+            theme: "garbo-light".into(),
+            ..Config::default()
+        };
+        cfg.save_at(&path).unwrap();
+        assert_eq!(fs::read_link(&path).unwrap(), target);
+        assert_eq!(Config::load_at(&target).theme, "garbo-light");
     }
 }
 
@@ -387,66 +487,118 @@ impl Theme {
             .filter(|w| !w.is_empty())
             .map(|w| {
                 let mut c = w.chars();
-                c.next().map_or(String::new(), |f| f.to_uppercase().collect::<String>() + c.as_str())
+                c.next().map_or(String::new(), |f| {
+                    f.to_uppercase().collect::<String>() + c.as_str()
+                })
             })
             .collect::<Vec<_>>()
             .join(" ")
     }
 
     pub fn builtin(name: &str) -> Option<Theme> {
-        let (fg, bg, cursor, sel, bar, active, accent, pal): (u32, u32, u32, u32, u32, u32, u32, [u32; 16]) =
-            match name {
-                "garbo-black" => (
-                    0xD4D4D4, 0x000000, 0xD4D4D4, 0x264F78, 0x0A0A0A, 0x1C1C1C, 0x7AA2F7,
-                    [
-                        0x1E1E1E, 0xF14C4C, 0x23D18B, 0xE5C07B, 0x3B8EEA, 0xC586C0, 0x29B8DB, 0xCCCCCC,
-                        0x5C5C5C, 0xF48771, 0x4EE6A5, 0xF5DA82, 0x6FB3FF, 0xD7A3D1, 0x56D4EC, 0xFFFFFF,
-                    ],
-                ),
-                "garbo-dark" => (
-                    0xD7DAE0, 0x16181D, 0x7AA2F7, 0x2E3A55, 0x0F1115, 0x1F232B, 0x7AA2F7,
-                    [
-                        0x1D2027, 0xF26D78, 0x8FD18B, 0xE6C07B, 0x6FA8FF, 0xC792EA, 0x56C8D8, 0xC8CCD4,
-                        0x4B5263, 0xFF8A94, 0xA7E3A1, 0xF2D49B, 0x8FBFFF, 0xDDB0F6, 0x7FE0EC, 0xFFFFFF,
-                    ],
-                ),
-                "garbo-light" => (
-                    0x2A2E36, 0xFAFAFA, 0x3B6FE0, 0xCFDDF7, 0xE9EAEE, 0xFAFAFA, 0x3B6FE0,
-                    [
-                        0x2A2E36, 0xD1393E, 0x3E9A3A, 0xB27A00, 0x3B6FE0, 0x9B4FC8, 0x1C8C9C, 0xD5D7DC,
-                        0x6B717D, 0xE5484D, 0x4CB648, 0xC99400, 0x5A88F0, 0xB06ADB, 0x2BA6B8, 0xFFFFFF,
-                    ],
-                ),
-                "tokyo-night" => (
-                    0xC0CAF5, 0x1A1B26, 0xC0CAF5, 0x33467C, 0x16161E, 0x24283B, 0x7AA2F7,
-                    [
-                        0x15161E, 0xF7768E, 0x9ECE6A, 0xE0AF68, 0x7AA2F7, 0xBB9AF7, 0x7DCFFF, 0xA9B1D6,
-                        0x414868, 0xF7768E, 0x9ECE6A, 0xE0AF68, 0x7AA2F7, 0xBB9AF7, 0x7DCFFF, 0xC0CAF5,
-                    ],
-                ),
-                "catppuccin-mocha" => (
-                    0xCDD6F4, 0x1E1E2E, 0xF5E0DC, 0x45475A, 0x181825, 0x313244, 0xCBA6F7,
-                    [
-                        0x45475A, 0xF38BA8, 0xA6E3A1, 0xF9E2AF, 0x89B4FA, 0xF5C2E7, 0x94E2D5, 0xBAC2DE,
-                        0x585B70, 0xF38BA8, 0xA6E3A1, 0xF9E2AF, 0x89B4FA, 0xF5C2E7, 0x94E2D5, 0xA6ADC8,
-                    ],
-                ),
-                "gruvbox-dark" => (
-                    0xEBDBB2, 0x282828, 0xEBDBB2, 0x504945, 0x1D2021, 0x3C3836, 0xFABD2F,
-                    [
-                        0x282828, 0xCC241D, 0x98971A, 0xD79921, 0x458588, 0xB16286, 0x689D6A, 0xA89984,
-                        0x928374, 0xFB4934, 0xB8BB26, 0xFABD2F, 0x83A598, 0xD3869B, 0x8EC07C, 0xEBDBB2,
-                    ],
-                ),
-                "nord" => (
-                    0xD8DEE9, 0x2E3440, 0xD8DEE9, 0x434C5E, 0x272C36, 0x3B4252, 0x88C0D0,
-                    [
-                        0x3B4252, 0xBF616A, 0xA3BE8C, 0xEBCB8B, 0x81A1C1, 0xB48EAD, 0x88C0D0, 0xE5E9F0,
-                        0x4C566A, 0xBF616A, 0xA3BE8C, 0xEBCB8B, 0x81A1C1, 0xB48EAD, 0x8FBCBB, 0xECEFF4,
-                    ],
-                ),
-                _ => return None,
-            };
+        let (fg, bg, cursor, sel, bar, active, accent, pal): (
+            u32,
+            u32,
+            u32,
+            u32,
+            u32,
+            u32,
+            u32,
+            [u32; 16],
+        ) = match name {
+            "garbo-black" => (
+                0xD4D4D4,
+                0x000000,
+                0xD4D4D4,
+                0x264F78,
+                0x0A0A0A,
+                0x1C1C1C,
+                0x7AA2F7,
+                [
+                    0x1E1E1E, 0xF14C4C, 0x23D18B, 0xE5C07B, 0x3B8EEA, 0xC586C0, 0x29B8DB, 0xCCCCCC,
+                    0x5C5C5C, 0xF48771, 0x4EE6A5, 0xF5DA82, 0x6FB3FF, 0xD7A3D1, 0x56D4EC, 0xFFFFFF,
+                ],
+            ),
+            "garbo-dark" => (
+                0xD7DAE0,
+                0x16181D,
+                0x7AA2F7,
+                0x2E3A55,
+                0x0F1115,
+                0x1F232B,
+                0x7AA2F7,
+                [
+                    0x1D2027, 0xF26D78, 0x8FD18B, 0xE6C07B, 0x6FA8FF, 0xC792EA, 0x56C8D8, 0xC8CCD4,
+                    0x4B5263, 0xFF8A94, 0xA7E3A1, 0xF2D49B, 0x8FBFFF, 0xDDB0F6, 0x7FE0EC, 0xFFFFFF,
+                ],
+            ),
+            "garbo-light" => (
+                0x2A2E36,
+                0xFAFAFA,
+                0x3B6FE0,
+                0xCFDDF7,
+                0xE9EAEE,
+                0xFAFAFA,
+                0x3B6FE0,
+                [
+                    0x2A2E36, 0xD1393E, 0x3E9A3A, 0xB27A00, 0x3B6FE0, 0x9B4FC8, 0x1C8C9C, 0xD5D7DC,
+                    0x6B717D, 0xE5484D, 0x4CB648, 0xC99400, 0x5A88F0, 0xB06ADB, 0x2BA6B8, 0xFFFFFF,
+                ],
+            ),
+            "tokyo-night" => (
+                0xC0CAF5,
+                0x1A1B26,
+                0xC0CAF5,
+                0x33467C,
+                0x16161E,
+                0x24283B,
+                0x7AA2F7,
+                [
+                    0x15161E, 0xF7768E, 0x9ECE6A, 0xE0AF68, 0x7AA2F7, 0xBB9AF7, 0x7DCFFF, 0xA9B1D6,
+                    0x414868, 0xF7768E, 0x9ECE6A, 0xE0AF68, 0x7AA2F7, 0xBB9AF7, 0x7DCFFF, 0xC0CAF5,
+                ],
+            ),
+            "catppuccin-mocha" => (
+                0xCDD6F4,
+                0x1E1E2E,
+                0xF5E0DC,
+                0x45475A,
+                0x181825,
+                0x313244,
+                0xCBA6F7,
+                [
+                    0x45475A, 0xF38BA8, 0xA6E3A1, 0xF9E2AF, 0x89B4FA, 0xF5C2E7, 0x94E2D5, 0xBAC2DE,
+                    0x585B70, 0xF38BA8, 0xA6E3A1, 0xF9E2AF, 0x89B4FA, 0xF5C2E7, 0x94E2D5, 0xA6ADC8,
+                ],
+            ),
+            "gruvbox-dark" => (
+                0xEBDBB2,
+                0x282828,
+                0xEBDBB2,
+                0x504945,
+                0x1D2021,
+                0x3C3836,
+                0xFABD2F,
+                [
+                    0x282828, 0xCC241D, 0x98971A, 0xD79921, 0x458588, 0xB16286, 0x689D6A, 0xA89984,
+                    0x928374, 0xFB4934, 0xB8BB26, 0xFABD2F, 0x83A598, 0xD3869B, 0x8EC07C, 0xEBDBB2,
+                ],
+            ),
+            "nord" => (
+                0xD8DEE9,
+                0x2E3440,
+                0xD8DEE9,
+                0x434C5E,
+                0x272C36,
+                0x3B4252,
+                0x88C0D0,
+                [
+                    0x3B4252, 0xBF616A, 0xA3BE8C, 0xEBCB8B, 0x81A1C1, 0xB48EAD, 0x88C0D0, 0xE5E9F0,
+                    0x4C566A, 0xBF616A, 0xA3BE8C, 0xEBCB8B, 0x81A1C1, 0xB48EAD, 0x8FBCBB, 0xECEFF4,
+                ],
+            ),
+            _ => return None,
+        };
         Some(Theme {
             foreground: Rgb::hex(fg),
             background: Rgb::hex(bg),

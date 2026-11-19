@@ -33,15 +33,29 @@ impl Painter<'_> {
         self.out.push(Instance::rect(x, y, w, h, c.to_f32(a)));
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn rounded(&mut self, x: f32, y: f32, w: f32, h: f32, c: Rgb, a: f32, r: f32) {
         self.out.push(Instance::rounded(x, y, w, h, c.to_f32(a), r));
     }
 
     /// Dibuja un glifo cuya celda empieza en (x, y).
     #[allow(clippy::too_many_arguments)]
-    pub fn glyph(&mut self, ch: char, style: Style, wide: bool, emoji: bool, x: f32, y: f32, color: Rgb, alpha: f32) {
+    pub fn glyph(
+        &mut self,
+        ch: char,
+        style: Style,
+        wide: bool,
+        emoji: bool,
+        x: f32,
+        y: f32,
+        color: Rgb,
+        alpha: f32,
+    ) {
         let m = self.metrics();
-        if let Some(g) = self.glyphs.get(self.queue, self.atlas, ch, style, wide, emoji) {
+        if let Some(g) = self
+            .glyphs
+            .get(self.queue, self.atlas, ch, style, wide, emoji)
+        {
             let gx = if g.is_color {
                 x + ((if wide { 2.0 } else { 1.0 }) * m.width - g.width) / 2.0
             } else {
@@ -103,11 +117,23 @@ impl Painter<'_> {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub fn ui_text_v(&mut self, x: f32, y: f32, s: &str, color: Rgb, max_w: f32, v: UiVariant) -> f32 {
+    pub fn ui_text_v(
+        &mut self,
+        x: f32,
+        y: f32,
+        s: &str,
+        color: Rgb,
+        max_w: f32,
+        v: UiVariant,
+    ) -> f32 {
         let baseline = y + (self.glyphs.ui.metrics.baseline * v.scale()).round();
         let total = self.ui_measure_v(s, v);
         let ell = self.glyphs.ui_advance('…', v);
-        let limit = if total > max_w { (max_w - ell).max(0.0) } else { f32::MAX };
+        let limit = if total > max_w {
+            (max_w - ell).max(0.0)
+        } else {
+            f32::MAX
+        };
         let mut cx = x;
         let mut cut = false;
         for ch in s.chars() {
@@ -184,14 +210,40 @@ impl Painter<'_> {
 
     /// Panel flotante moderno: sombra suave, borde fino y esquinas redondeadas.
     #[allow(clippy::too_many_arguments)]
-    pub fn card(&mut self, x: f32, y: f32, w: f32, h: f32, fill: Rgb, border: Rgb, r: f32, scale: f32) {
+    pub fn card(
+        &mut self,
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        fill: Rgb,
+        border: Rgb,
+        r: f32,
+        scale: f32,
+    ) {
         for (i, a) in [(3.0, 0.10), (8.0, 0.08), (16.0, 0.06)] {
             let o = i * scale;
-            self.rounded(x - o * 0.5, y - o * 0.25, w + o, h + o, Rgb(0, 0, 0), a, r + o * 0.5);
+            self.rounded(
+                x - o * 0.5,
+                y - o * 0.25,
+                w + o,
+                h + o,
+                Rgb(0, 0, 0),
+                a,
+                r + o * 0.5,
+            );
         }
         self.rounded(x, y, w, h, border, 0.14, r);
         let b = scale.round().max(1.0);
-        self.rounded(x + b, y + b, w - 2.0 * b, h - 2.0 * b, fill, 1.0, (r - b).max(0.0));
+        self.rounded(
+            x + b,
+            y + b,
+            w - 2.0 * b,
+            h - 2.0 * b,
+            fill,
+            1.0,
+            (r - b).max(0.0),
+        );
     }
 
     pub fn finish(self) {
@@ -210,12 +262,16 @@ pub fn resolve(color: AnsiColor, theme: &Theme, colors: &Colors) -> Rgb {
     }
     match idx {
         0..=255 => theme.color256(idx as u8),
-        _ if idx == NamedColor::Foreground as usize || idx == NamedColor::BrightForeground as usize => {
+        _ if idx == NamedColor::Foreground as usize
+            || idx == NamedColor::BrightForeground as usize =>
+        {
             theme.foreground
         }
         _ if idx == NamedColor::Background as usize => theme.background,
         _ if idx == NamedColor::Cursor as usize => theme.cursor,
-        _ if idx == NamedColor::DimForeground as usize => theme.foreground.lerp(theme.background, 0.35),
+        _ if idx == NamedColor::DimForeground as usize => {
+            theme.foreground.lerp(theme.background, 0.35)
+        }
         // DimBlack..DimWhite
         _ if (NamedColor::DimBlack as usize..=NamedColor::DimWhite as usize).contains(&idx) => {
             let base = idx - NamedColor::DimBlack as usize;
@@ -228,11 +284,14 @@ pub fn resolve(color: AnsiColor, theme: &Theme, colors: &Colors) -> Rgb {
 /// Últimas líneas con contenido de la pantalla de un terminal, en tramos de color, para la
 /// vista previa del panel lateral.
 ///
-/// Los agentes dibujan abajo su zona de entrada entre dos líneas horizontales (o en una caja) y,
-/// debajo, su barra de estado. Eso no dice nada de lo que está haciendo, así que se corta por
-/// encima de esa zona. Además se quitan los marcos y los espacios de los extremos, y se saltan
-/// las líneas que solo tienen eso.
-pub fn preview_lines<T: EventListener>(term: &Term<T>, theme: &Theme, max: usize) -> Vec<Vec<(String, Rgb)>> {
+/// Omite el editor de entrada y su pie cuando se reconocen en la pantalla. También quita los
+/// marcos y los espacios de los extremos y se salta las líneas que solo tienen eso.
+pub fn preview_lines<T: EventListener>(
+    term: &Term<T>,
+    theme: &Theme,
+    max: usize,
+    provider: Option<crate::subagents::Provider>,
+) -> Vec<Vec<(String, Rgb)>> {
     let grid = term.grid();
     let colors = term.colors();
     let cols = term.columns();
@@ -243,11 +302,21 @@ pub fn preview_lines<T: EventListener>(term: &Term<T>, theme: &Theme, max: usize
             (0..cols)
                 .filter_map(|c| {
                     let cell = &line[Column(c)];
-                    if cell.flags.intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER) {
+                    if cell
+                        .flags
+                        .intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER)
+                    {
                         return None;
                     }
-                    let mut fg =
-                        resolve(if cell.flags.contains(Flags::INVERSE) { cell.bg } else { cell.fg }, theme, colors);
+                    let mut fg = resolve(
+                        if cell.flags.contains(Flags::INVERSE) {
+                            cell.bg
+                        } else {
+                            cell.fg
+                        },
+                        theme,
+                        colors,
+                    );
                     if cell.flags.contains(Flags::DIM) {
                         fg = fg.lerp(theme.background, 0.35);
                     }
@@ -259,11 +328,17 @@ pub fn preview_lines<T: EventListener>(term: &Term<T>, theme: &Theme, max: usize
                 .collect()
         })
         .collect();
-    let cut = input_area_top(&rows).unwrap_or(n);
+    let cursor = term.grid().cursor.point.line.0;
+    let cut = preview_end(&rows, cursor, provider).unwrap_or(n);
     let mut out = Vec::new();
     for cells in rows[..cut].iter().rev() {
-        let Some(start) = cells.iter().position(|(c, _)| !is_frame(*c)) else { continue };
-        let end = cells.iter().rposition(|(c, _)| !is_frame(*c)).unwrap_or(start);
+        let Some(start) = cells.iter().position(|(c, _)| !is_frame(*c)) else {
+            continue;
+        };
+        let end = cells
+            .iter()
+            .rposition(|(c, _)| !is_frame(*c))
+            .unwrap_or(start);
         let mut runs: Vec<(String, Rgb)> = Vec::new();
         for &(c, fg) in &cells[start..=end] {
             match runs.last_mut() {
@@ -284,9 +359,52 @@ fn is_frame(c: char) -> bool {
     c == ' ' || ('\u{2500}'..='\u{259F}').contains(&c)
 }
 
+fn preview_end(
+    rows: &[Vec<(char, Rgb)>],
+    cursor: i32,
+    provider: Option<crate::subagents::Provider>,
+) -> Option<usize> {
+    use crate::subagents::Provider;
+    if provider == Some(Provider::Claude) {
+        return input_area_top(rows);
+    }
+
+    let cursor = usize::try_from(cursor).ok().filter(|&row| row < rows.len());
+    let prompt = cursor.and_then(|cursor| {
+        (cursor.saturating_sub(12)..=cursor).rev().find(|&row| {
+            let mut text = rows[row]
+                .iter()
+                .map(|&(ch, _)| ch)
+                .skip_while(|ch| is_frame(*ch));
+            let marker = match provider {
+                Some(Provider::Codex) => text.next() == Some('›'),
+                Some(Provider::Gemini) | None => matches!(text.next(), Some('>' | '❯' | '›')),
+                Some(Provider::Claude) => false,
+            };
+            marker
+                && text.next().is_none_or(char::is_whitespace)
+                && rows[row + 1..=cursor]
+                    .iter()
+                    .all(|line| line.first().is_none_or(|&(ch, _)| is_frame(ch)) && !is_rule(line))
+        })
+    });
+    if let Some(prompt) = prompt {
+        let border = prompt.checked_sub(1).filter(|&row| is_rule(&rows[row]));
+        return Some(border.unwrap_or(prompt));
+    }
+    // Evita confundir un separador de la conversación con el editor de un agente distinto.
+    let cursor = cursor?;
+    let upper = (cursor.saturating_sub(15)..cursor).rfind(|&row| is_rule(&rows[row]))?;
+    let lower = (cursor + 1..rows.len().min(upper + 16)).any(|row| is_rule(&rows[row]));
+    lower.then_some(upper)
+}
+
 /// Línea horizontal de lado a lado (o borde de caja): solo marcos y al menos 8 trazos.
 fn is_rule(cells: &[(char, Rgb)]) -> bool {
-    let strokes = cells.iter().filter(|(c, _)| ('\u{2500}'..='\u{257F}').contains(c)).count();
+    let strokes = cells
+        .iter()
+        .filter(|(c, _)| ('\u{2500}'..='\u{257F}').contains(c))
+        .count();
     strokes >= 8 && cells.iter().all(|(c, _)| is_frame(*c))
 }
 
@@ -312,12 +430,20 @@ pub fn input_area_top(rows: &[Vec<(char, Rgb)>]) -> Option<usize> {
         }
     }
     let lower = lower?;
-    let upper = (lower.saturating_sub(15)..lower).rev().find(|&r| is_rule(&rows[r]));
+    let upper = (lower.saturating_sub(15)..lower)
+        .rev()
+        .find(|&r| is_rule(&rows[r]));
     Some(upper.unwrap_or(lower))
 }
 
 /// Texto sugerido (en gris) a continuación del cursor, sin pasar del borde derecho.
-pub fn draw_ghost<T: EventListener>(p: &mut Painter, term: &Term<T>, theme: &Theme, v: &TermView, text: &str) {
+pub fn draw_ghost<T: EventListener>(
+    p: &mut Painter,
+    term: &Term<T>,
+    theme: &Theme,
+    v: &TermView,
+    text: &str,
+) {
     let m = p.metrics();
     let cur = term.grid().cursor.point;
     let row = cur.line.0;
@@ -333,7 +459,16 @@ pub fn draw_ghost<T: EventListener>(p: &mut Painter, term: &Term<T>, theme: &The
             break;
         }
         if ch != ' ' {
-            p.glyph(ch, Style::Regular, false, false, v.x + col as f32 * m.width, y, color, 1.0);
+            p.glyph(
+                ch,
+                Style::Regular,
+                false,
+                false,
+                v.x + col as f32 * m.width,
+                y,
+                color,
+                1.0,
+            );
         }
     }
 }
@@ -369,11 +504,19 @@ pub fn draw_prompts<T: EventListener>(
     let r = (6.0 * s).round();
     let hair = s.round().max(1.0);
     for a in blocks::anchors(term, top, bottom) {
-        let Some(info) = bs.info(a.id).filter(|i| i.styled) else { continue };
+        let Some(info) = bs.info(a.id).filter(|i| i.styled) else {
+            continue;
+        };
         let row = &term.grid()[a.line];
-        let mine = |c: usize| matches!(blocks::cell_link(&row[Column(c)]), Some((b'p', id)) if id == a.id);
+        let mine =
+            |c: usize| matches!(blocks::cell_link(&row[Column(c)]), Some((b'p', id)) if id == a.id);
         // Última celda con texto de la línea de la carpeta.
-        let Some(end) = (0..cols).rev().find(|&c| mine(c) && !matches!(row[Column(c)].c, ' ' | '\0')) else { continue };
+        let Some(end) = (0..cols)
+            .rev()
+            .find(|&c| mine(c) && !matches!(row[Column(c)].c, ' ' | '\0'))
+        else {
+            continue;
+        };
         let y = v.y + (a.line.0 + offset) as f32 * ch;
         let (iw, ih) = ((cw * 1.05).round(), (ch * 0.40).round());
         let (ix, iy) = ((v.x + 0.5 * cw).round(), (y + (ch - ih) / 2.0).round());
@@ -382,7 +525,15 @@ pub fn draw_prompts<T: EventListener>(
             let x1 = v.x + (end + 1) as f32 * cw + 0.6 * cw;
             let (cy, chh) = (y + pad, ch - 2.0 * pad);
             p.rounded(x0, cy, x1 - x0, chh, theme.foreground, 0.26, r);
-            p.rounded(x0 + hair, cy + hair, x1 - x0 - 2.0 * hair, chh - 2.0 * hair, crate::ui::surface(theme, 0.08), 1.0, r - hair);
+            p.rounded(
+                x0 + hair,
+                cy + hair,
+                x1 - x0 - 2.0 * hair,
+                chh - 2.0 * hair,
+                crate::ui::surface(theme, 0.08),
+                1.0,
+                r - hair,
+            );
             crate::ui::folder(p, ix, iy, iw, ih, t, theme.accent);
             // Rama de git, si cabe.
             if let Some(b) = branch {
@@ -392,13 +543,33 @@ pub fn draw_prompts<T: EventListener>(
                     let bx1 = bx0 + (n as f32 + 2.6) * cw;
                     p.rounded(bx0, cy, bx1 - bx0, chh, theme.foreground, 0.06, r);
                     let (bw, bh) = ((cw * 0.85).round(), (ch * 0.42).round());
-                    crate::ui::branch(p, (bx0 + 0.5 * cw).round(), (y + (ch - bh) / 2.0).round(), bw, bh, t, theme.palette[5]);
-                    p.text(bx0 + 1.8 * cw, y, b, theme.foreground.lerp(theme.background, 0.2), n as f32 * cw + 1.0);
+                    crate::ui::branch(
+                        p,
+                        (bx0 + 0.5 * cw).round(),
+                        (y + (ch - bh) / 2.0).round(),
+                        bw,
+                        bh,
+                        t,
+                        theme.palette[5],
+                    );
+                    p.text(
+                        bx0 + 1.8 * cw,
+                        y,
+                        b,
+                        theme.foreground.lerp(theme.background, 0.2),
+                        n as f32 * cw + 1.0,
+                    );
                 }
             }
         } else {
             crate::ui::folder(p, ix, iy, iw, ih, t, dim);
-            let dur = info.duration.map(|d| if d.as_millis() == 0 { "< 1 ms".into() } else { blocks::format_duration(d) });
+            let dur = info.duration.map(|d| {
+                if d.as_millis() == 0 {
+                    "< 1 ms".into()
+                } else {
+                    blocks::format_duration(d)
+                }
+            });
             let (text, color) = match (info.status(), dur) {
                 (Status::Ok, Some(d)) => (d, dim),
                 (Status::Failed(code), Some(d)) => (format!("✗ {code} · {d}"), theme.palette[1]),
@@ -407,7 +578,13 @@ pub fn draw_prompts<T: EventListener>(
             };
             let n = text.chars().count();
             if end + 3 + n < cols {
-                p.text(v.x + (end + 3) as f32 * cw, y, &text, color, n as f32 * cw + 1.0);
+                p.text(
+                    v.x + (end + 3) as f32 * cw,
+                    y,
+                    &text,
+                    color,
+                    n as f32 * cw + 1.0,
+                );
             }
         }
     }
@@ -415,7 +592,14 @@ pub fn draw_prompts<T: EventListener>(
 
 /// Menú de completado bajo la palabra que se completa (encima si no cabe debajo). Guarda en
 /// `menu.rect` dónde quedó, para el ratón.
-pub fn draw_menu<T: EventListener>(p: &mut Painter, term: &Term<T>, theme: &Theme, v: &TermView, menu: &mut Menu, scale: f32) {
+pub fn draw_menu<T: EventListener>(
+    p: &mut Painter,
+    term: &Term<T>,
+    theme: &Theme,
+    v: &TermView,
+    menu: &mut Menu,
+    scale: f32,
+) {
     let items = &menu.comp.items;
     menu.rect = None;
     if items.is_empty() {
@@ -434,40 +618,82 @@ pub fn draw_menu<T: EventListener>(p: &mut Painter, term: &Term<T>, theme: &Them
     let bar_w = if n > vis { (8.0 * s).round() } else { 0.0 };
     let gap = (18.0 * s).round();
 
-    let longest = items.iter().map(|i| i.label.chars().count()).max().unwrap_or(0).clamp(6, 48);
+    let longest = items
+        .iter()
+        .map(|i| i.label.chars().count())
+        .max()
+        .unwrap_or(0)
+        .clamp(6, 48);
     // La descripción solo si aporta algo (si todas dicen "carpeta", sobra).
     let same = items.iter().all(|i| i.detail == items[0].detail);
     let detail_w = if same {
         0.0
     } else {
-        items.iter().take(64).map(|i| p.ui_measure_v(&i.detail, UiVariant::Small)).fold(0.0, f32::max).min(260.0 * s)
+        items
+            .iter()
+            .take(64)
+            .map(|i| p.ui_measure_v(&i.detail, UiVariant::Small))
+            .fold(0.0, f32::max)
+            .min(260.0 * s)
     };
     let want = 2.0 * pad + mark_w + longest as f32 * m.width + gap + detail_w + 2.0 * pad + bar_w;
     let w = want.min(area_w).max((160.0 * s).min(area_w)).round();
     let h = (vis as f32 * row_h + 2.0 * pad).round();
     // La lista empieza bajo el principio de la palabra.
     let col = cur.column.0.saturating_sub(menu.comp.word.chars().count()) as f32;
-    let x = (v.x + col * m.width - pad - mark_w).clamp(v.x, (v.x + area_w - w).max(v.x)).round();
+    let x = (v.x + col * m.width - pad - mark_w)
+        .clamp(v.x, (v.x + area_w - w).max(v.x))
+        .round();
     let bottom = v.y + v.lines as f32 * m.height;
     let below = v.y + (row + 1.0) * m.height + 2.0 * s;
     let above = v.y + row * m.height - h - 2.0 * s;
-    let y = if below + h <= bottom || above < v.y { below } else { above }.round();
+    let y = if below + h <= bottom || above < v.y {
+        below
+    } else {
+        above
+    }
+    .round();
 
-    p.card(x, y, w, h, crate::ui::surface(theme, 0.06), theme.foreground, (9.0 * s).round(), s);
+    p.card(
+        x,
+        y,
+        w,
+        h,
+        crate::ui::surface(theme, 0.06),
+        theme.foreground,
+        (9.0 * s).round(),
+        s,
+    );
     let dimc = crate::ui::dim(theme);
     let label_x = x + pad + mark_w;
     let detail_room = if detail_w > 0.0 { detail_w + gap } else { 0.0 };
-    let fit = (((w - 2.0 * pad - mark_w - pad - bar_w - detail_room) / m.width).floor().max(4.0)) as usize;
+    let fit = (((w - 2.0 * pad - mark_w - pad - bar_w - detail_room) / m.width)
+        .floor()
+        .max(4.0)) as usize;
     let small_h = p.ui_line_h(UiVariant::Small);
     for r in 0..vis {
         let idx = menu.top + r;
         let Some(it) = items.get(idx) else { break };
         let ry = y + pad + r as f32 * row_h;
         if idx == menu.selected {
-            p.rounded(x + pad / 2.0, ry, w - pad - bar_w, row_h, theme.accent, 0.20, (6.0 * s).round());
+            p.rounded(
+                x + pad / 2.0,
+                ry,
+                w - pad - bar_w,
+                row_h,
+                theme.accent,
+                0.20,
+                (6.0 * s).round(),
+            );
         }
         let kc = theme.palette[it.kind.ansi()];
-        p.circle(x + pad + mark_w / 2.0 - 1.0 * s, ry + row_h / 2.0, (3.0 * s).max(2.0), kc, 0.9);
+        p.circle(
+            x + pad + mark_w / 2.0 - 1.0 * s,
+            ry + row_h / 2.0,
+            (3.0 * s).max(2.0),
+            kc,
+            0.9,
+        );
         let ty = (ry + (row_h - m.height) / 2.0).round();
         let len = it.label.chars().count();
         for (k, ch) in it.label.chars().enumerate().take(fit) {
@@ -482,13 +708,29 @@ pub fn draw_menu<T: EventListener>(p: &mut Painter, term: &Term<T>, theme: &Them
             };
             if ch != ' ' {
                 let style = if hit { Style::Bold } else { Style::Regular };
-                p.glyph(ch, style, false, false, label_x + k as f32 * m.width, ty, color, 1.0);
+                p.glyph(
+                    ch,
+                    style,
+                    false,
+                    false,
+                    label_x + k as f32 * m.width,
+                    ty,
+                    color,
+                    1.0,
+                );
             }
         }
         if detail_w > 0.0 && !it.detail.is_empty() {
             let dw = p.ui_measure_v(&it.detail, UiVariant::Small).min(detail_w);
             let dx = x + w - 2.0 * pad - bar_w - dw;
-            p.ui_text_v(dx.round(), (ry + (row_h - small_h) / 2.0).round(), &it.detail, dimc, detail_w + 1.0, UiVariant::Small);
+            p.ui_text_v(
+                dx.round(),
+                (ry + (row_h - small_h) / 2.0).round(),
+                &it.detail,
+                dimc,
+                detail_w + 1.0,
+                UiVariant::Small,
+            );
         }
     }
     // Barra de desplazamiento cuando hay más de los que caben.
@@ -497,7 +739,15 @@ pub fn draw_menu<T: EventListener>(p: &mut Painter, term: &Term<T>, theme: &Them
         let th = (track * vis as f32 / n as f32).max(14.0 * s);
         let ty = y + pad + (track - th) * menu.top as f32 / (n - vis) as f32;
         let bw = (3.0 * s).max(2.0);
-        p.rounded(x + w - pad - bw, ty.round(), bw, th.round(), theme.foreground, 0.28, bw / 2.0);
+        p.rounded(
+            x + w - pad - bw,
+            ty.round(),
+            bw,
+            th.round(),
+            theme.foreground,
+            0.28,
+            bw / 2.0,
+        );
     }
     menu.rect = Some([x, y, w, h, row_h, pad]);
 }
@@ -513,7 +763,15 @@ pub struct TermView {
 /// `bs`: bloques de la pestaña, para dar estilo al prompt de Garbo (ver `draw_prompts`).
 /// Subraya las celdas de `start` a `end` (enlace bajo el ratón con Ctrl).
 #[allow(clippy::too_many_arguments)]
-pub fn draw_underline<T: EventListener>(p: &mut Painter, term: &Term<T>, theme: &Theme, v: &TermView, start: alacritty_terminal::index::Point, end: alacritty_terminal::index::Point, scale: f32) {
+pub fn draw_underline<T: EventListener>(
+    p: &mut Painter,
+    term: &Term<T>,
+    theme: &Theme,
+    v: &TermView,
+    start: alacritty_terminal::index::Point,
+    end: alacritty_terminal::index::Point,
+    scale: f32,
+) {
     let m = p.metrics();
     let off = term.grid().display_offset() as i32;
     let cols = term.columns();
@@ -524,9 +782,20 @@ pub fn draw_underline<T: EventListener>(p: &mut Painter, term: &Term<T>, theme: 
             continue;
         }
         let a = if l == start.line.0 { start.column.0 } else { 0 };
-        let b = if l == end.line.0 { end.column.0 + 1 } else { cols };
+        let b = if l == end.line.0 {
+            end.column.0 + 1
+        } else {
+            cols
+        };
         let y = v.y + row as f32 * m.height + m.underline_pos.min(m.height - t);
-        p.rect(v.x + a as f32 * m.width, y.round(), (b - a) as f32 * m.width, t, theme.accent, 1.0);
+        p.rect(
+            v.x + a as f32 * m.width,
+            y.round(),
+            (b - a) as f32 * m.width,
+            t,
+            theme.accent,
+            1.0,
+        );
     }
 }
 
@@ -549,7 +818,9 @@ pub fn draw_terminal<T: EventListener>(
 
     let cursor = content.cursor;
     let cursor_row = cursor.point.line.0 + offset;
-    let show_cursor = v.cursor_on && cursor.shape != CursorShape::Hidden && (0..v.lines as i32).contains(&cursor_row);
+    let show_cursor = v.cursor_on
+        && cursor.shape != CursorShape::Hidden
+        && (0..v.lines as i32).contains(&cursor_row);
     let block_cursor = show_cursor && v.focused && cursor.shape == CursorShape::Block;
 
     // Búsqueda: coincidencias en amarillo suave; la actual, en amarillo.
@@ -616,7 +887,9 @@ pub fn draw_terminal<T: EventListener>(
         // Fondo
         if bg != theme.background || selected || is_cursor || found_here {
             match &mut run {
-                Some((r, _, x1, c)) if *r == row && (*x1 - x).abs() < 0.5 && *c == bg => *x1 = x + w,
+                Some((r, _, x1, c)) if *r == row && (*x1 - x).abs() < 0.5 && *c == bg => {
+                    *x1 = x + w
+                }
                 _ => {
                     flush(p, &mut run);
                     run = Some((row, x, x + w, bg));
@@ -632,7 +905,9 @@ pub fn draw_terminal<T: EventListener>(
         // Prompt de Garbo: la ruta en negrita en el prompt actual y en gris en los ya ejecutados;
         // lo escrito, en negrita.
         let mut bold = flags.contains(Flags::BOLD);
-        if let Some((kind, id)) = bs.and_then(|bs| blocks::cell_link(cell).filter(|(_, id)| bs.styled(*id))) {
+        if let Some((kind, id)) =
+            bs.and_then(|bs| blocks::cell_link(cell).filter(|(_, id)| bs.styled(*id)))
+        {
             match kind {
                 b'p' if current_prompt == Some(id) => {
                     fg = theme.foreground;
@@ -672,14 +947,30 @@ pub fn draw_terminal<T: EventListener>(
             if flags.contains(Flags::DOUBLE_UNDERLINE) {
                 p.fg.push(Instance::rect(x, uy - s, w, s, uc.to_f32(1.0)));
                 p.fg.push(Instance::rect(x, uy + s, w, s, uc.to_f32(1.0)));
-            } else if flags.intersects(Flags::UNDERCURL | Flags::DOTTED_UNDERLINE | Flags::DASHED_UNDERLINE) {
+            } else if flags
+                .intersects(Flags::UNDERCURL | Flags::DOTTED_UNDERLINE | Flags::DASHED_UNDERLINE)
+            {
                 let step = (cw / 4.0).max(2.0);
                 let mut sx = x;
                 let mut up = true;
                 while sx < x + w {
-                    let dy = if flags.contains(Flags::UNDERCURL) && up { -s } else { 0.0 };
-                    let seg = if flags.contains(Flags::DASHED_UNDERLINE) { step * 1.5 } else { step / 2.0 };
-                    p.fg.push(Instance::rect(sx, uy + dy, seg.min(x + w - sx), s, uc.to_f32(1.0)));
+                    let dy = if flags.contains(Flags::UNDERCURL) && up {
+                        -s
+                    } else {
+                        0.0
+                    };
+                    let seg = if flags.contains(Flags::DASHED_UNDERLINE) {
+                        step * 1.5
+                    } else {
+                        step / 2.0
+                    };
+                    p.fg.push(Instance::rect(
+                        sx,
+                        uy + dy,
+                        seg.min(x + w - sx),
+                        s,
+                        uc.to_f32(1.0),
+                    ));
                     sx += step;
                     up = !up;
                 }
@@ -688,7 +979,13 @@ pub fn draw_terminal<T: EventListener>(
             }
         }
         if flags.contains(Flags::STRIKEOUT) {
-            p.fg.push(Instance::rect(x, y + (m.baseline * 0.62).round(), w, s, fg.to_f32(1.0)));
+            p.fg.push(Instance::rect(
+                x,
+                y + (m.baseline * 0.62).round(),
+                w,
+                s,
+                fg.to_f32(1.0),
+            ));
         }
     }
     flush(p, &mut run);
@@ -701,7 +998,11 @@ pub fn draw_terminal<T: EventListener>(
         let w = if wide { 2.0 * cw } else { cw };
         let t = (m.stroke * 2.0).max(2.0);
         let c = theme.cursor.to_f32(1.0);
-        let shape = if v.focused { cursor.shape } else { CursorShape::HollowBlock };
+        let shape = if v.focused {
+            cursor.shape
+        } else {
+            CursorShape::HollowBlock
+        };
         match shape {
             CursorShape::Beam => p.fg.push(Instance::rect(x, y, t, chh, c)),
             CursorShape::Underline => p.fg.push(Instance::rect(x, y + chh - t, w, t, c)),
@@ -752,7 +1053,9 @@ pub fn draw_blocks<T: EventListener>(
     let (ok, err) = (theme.palette[2], theme.palette[1]);
     let bar_w = (3.0 * scale).round().max(2.0);
     // La barra de estado va en el margen izquierdo del panel (de `span.0` a `v.x`).
-    let bar_x = (span.0 + (v.x - span.0) * 0.55 - bar_w / 2.0).round().max(span.0);
+    let bar_x = (span.0 + (v.x - span.0) * 0.55 - bar_w / 2.0)
+        .round()
+        .max(span.0);
     let width = span.1 - span.0;
     let line_w = scale.round().max(1.0);
 
@@ -778,7 +1081,14 @@ pub fn draw_blocks<T: EventListener>(
             p.rect(span.0, y0, width, y1 - y0, theme.accent, 0.10);
         }
         if starts_here && start_row > 0 {
-            p.rect(v.x, y0, width - 2.0 * (v.x - span.0), line_w, theme.foreground, 0.10);
+            p.rect(
+                v.x,
+                y0,
+                width - 2.0 * (v.x - span.0),
+                line_w,
+                theme.foreground,
+                0.10,
+            );
         }
         let bar = match status {
             _ if is_sel => Some((theme.accent, 1.0)),
@@ -789,14 +1099,27 @@ pub fn draw_blocks<T: EventListener>(
         };
         if let Some((c, a)) = bar {
             let pad = (3.0 * scale).round();
-            p.rounded(bar_x, y0 + pad, bar_w, (y1 - y0 - 2.0 * pad).max(bar_w), c, a, bar_w / 2.0);
+            p.rounded(
+                bar_x,
+                y0 + pad,
+                bar_w,
+                (y1 - y0 - 2.0 * pad).max(bar_w),
+                c,
+                a,
+                bar_w / 2.0,
+            );
         }
 
         // Estado y duración a la derecha de la línea del prompt, si ese hueco está libre (con el
         // prompt de Garbo van tras la ruta: ver `draw_prompts`).
-        let (Some(info), true) = (info.filter(|i| !i.styled), starts_here) else { continue };
+        let (Some(info), true) = (info.filter(|i| !i.styled), starts_here) else {
+            continue;
+        };
         // Sin ruido: en los correctos solo la duración si fue apreciable; los fallos siempre.
-        let slow = info.duration.filter(|d| d.as_secs_f32() >= 1.0).map(blocks::format_duration);
+        let slow = info
+            .duration
+            .filter(|d| d.as_secs_f32() >= 1.0)
+            .map(blocks::format_duration);
         let (icon, icon_color, text) = match (status, slow) {
             (Status::Ok, Some(d)) => ("✓", ok, d),
             (Status::Failed(code), Some(d)) => ("✗", err, format!("{code} · {d}")),
@@ -812,7 +1135,17 @@ pub fn draw_blocks<T: EventListener>(
         if free {
             let x = v.x + (cols - n) as f32 * m.width;
             p.text(x, y0, icon, icon_color, m.width * 2.0);
-            p.text(x + 2.0 * m.width, y0, &text, if matches!(status, Status::Failed(_)) { err } else { dim }, n as f32 * m.width);
+            p.text(
+                x + 2.0 * m.width,
+                y0,
+                &text,
+                if matches!(status, Status::Failed(_)) {
+                    err
+                } else {
+                    dim
+                },
+                n as f32 * m.width,
+            );
         }
     }
 }
@@ -839,7 +1172,13 @@ fn draw_special(p: &mut Painter, c: char, x: f32, y: f32, w: f32, h: f32, fg: Rg
         let (l, r) = (l.min(r).round(), l.max(r).round());
         let (t, b) = (t.min(b).round(), t.max(b).round());
         if r > l && b > t {
-            out.push(Instance::rect(l, t, r - l, b - t, [col[0], col[1], col[2], a]));
+            out.push(Instance::rect(
+                l,
+                t,
+                r - l,
+                b - t,
+                [col[0], col[1], col[2], a],
+            ));
         }
     };
     let cp = c as u32;
@@ -860,22 +1199,36 @@ fn draw_special(p: &mut Painter, c: char, x: f32, y: f32, w: f32, h: f32, fg: Rg
             // Cuadrantes: bits 1=sup-izq 2=sup-der 4=inf-izq 8=inf-der
             const Q: [u8; 10] = [4, 8, 1, 13, 9, 7, 11, 2, 6, 14];
             let q = Q[(cp - 0x2596) as usize];
-            if q & 1 != 0 { fill(x, y, mx, my, 1.0) }
-            if q & 2 != 0 { fill(mx, y, x1, my, 1.0) }
-            if q & 4 != 0 { fill(x, my, mx, y1, 1.0) }
-            if q & 8 != 0 { fill(mx, my, x1, y1, 1.0) }
+            if q & 1 != 0 {
+                fill(x, y, mx, my, 1.0)
+            }
+            if q & 2 != 0 {
+                fill(mx, y, x1, my, 1.0)
+            }
+            if q & 4 != 0 {
+                fill(x, my, mx, y1, 1.0)
+            }
+            if q & 8 != 0 {
+                fill(mx, my, x1, y1, 1.0)
+            }
         }
         _ => {
             let base = (w / 8.0).round().max(1.0);
             let t = |k: u8| if k == 2 { base * 2.0 } else { base };
             // Líneas discontinuas: (horizontal, nº de trazos, grosor)
             let dashed = match c {
-                '╌' => Some((true, 2, 1)), '╍' => Some((true, 2, 2)),
-                '┄' => Some((true, 3, 1)), '┅' => Some((true, 3, 2)),
-                '┈' => Some((true, 4, 1)), '┉' => Some((true, 4, 2)),
-                '╎' => Some((false, 2, 1)), '╏' => Some((false, 2, 2)),
-                '┆' => Some((false, 3, 1)), '┇' => Some((false, 3, 2)),
-                '┊' => Some((false, 4, 1)), '┋' => Some((false, 4, 2)),
+                '╌' => Some((true, 2, 1)),
+                '╍' => Some((true, 2, 2)),
+                '┄' => Some((true, 3, 1)),
+                '┅' => Some((true, 3, 2)),
+                '┈' => Some((true, 4, 1)),
+                '┉' => Some((true, 4, 2)),
+                '╎' => Some((false, 2, 1)),
+                '╏' => Some((false, 2, 2)),
+                '┆' => Some((false, 3, 1)),
+                '┇' => Some((false, 3, 2)),
+                '┊' => Some((false, 4, 1)),
+                '┋' => Some((false, 4, 2)),
                 _ => None,
             };
             if let Some((horiz, n, k)) = dashed {
@@ -893,8 +1246,10 @@ fn draw_special(p: &mut Painter, c: char, x: f32, y: f32, w: f32, h: f32, fg: Rg
             }
             // Esquinas redondeadas: arco + tramos rectos hasta los bordes.
             let round = match c {
-                '╭' => Some((1.0, 1.0)), '╮' => Some((-1.0, 1.0)),
-                '╰' => Some((1.0, -1.0)), '╯' => Some((-1.0, -1.0)),
+                '╭' => Some((1.0, 1.0)),
+                '╮' => Some((-1.0, 1.0)),
+                '╰' => Some((1.0, -1.0)),
+                '╯' => Some((-1.0, -1.0)),
                 _ => None,
             };
             if let Some((dx, dy)) = round {
@@ -928,9 +1283,12 @@ fn draw_special(p: &mut Painter, c: char, x: f32, y: f32, w: f32, h: f32, fg: Rg
             }
             // Líneas dobles (rectas y esquinas): (dx, dy) hacia donde salen los brazos; 0 = recta
             let double = match c {
-                '═' => Some((2, 0)), '║' => Some((0, 2)),
-                '╔' => Some((1, 1)), '╗' => Some((-1, 1)),
-                '╚' => Some((1, -1)), '╝' => Some((-1, -1)),
+                '═' => Some((2, 0)),
+                '║' => Some((0, 2)),
+                '╔' => Some((1, 1)),
+                '╗' => Some((-1, 1)),
+                '╚' => Some((1, -1)),
+                '╝' => Some((-1, -1)),
                 _ => None,
             };
             if let Some((dx, dy)) = double {
@@ -1040,17 +1398,38 @@ mod tests {
     use super::*;
 
     fn rows(lines: &[&str]) -> Vec<Vec<(char, Rgb)>> {
-        lines.iter().map(|l| l.chars().map(|c| (c, Rgb(0, 0, 0))).collect()).collect()
+        lines
+            .iter()
+            .map(|l| l.chars().map(|c| (c, Rgb(0, 0, 0))).collect())
+            .collect()
     }
 
     #[test]
     fn corta_la_zona_de_entrada_del_agente() {
         let rule = "────────────────────────────────";
         // Contenido, línea, entrada en dos líneas, línea, barra de estado en tres líneas.
-        let r = rows(&["⏺ Hecho", "", "✻ Pensando…", rule, "❯ escribo algo", "  que sigue", rule, "Opus 5.5", "ctx 29%", "auto mode"]);
+        let r = rows(&[
+            "⏺ Hecho",
+            "",
+            "✻ Pensando…",
+            rule,
+            "❯ escribo algo",
+            "  que sigue",
+            rule,
+            "Opus 5.5",
+            "ctx 29%",
+            "auto mode",
+        ]);
         assert_eq!(input_area_top(&r), Some(3));
         // Con caja (╭ ╮ ╰ ╯) también.
-        let r = rows(&["salida", "otra", "╭──────────────╮", "│ > hola       │", "╰──────────────╯", "? atajos"]);
+        let r = rows(&[
+            "salida",
+            "otra",
+            "╭──────────────╮",
+            "│ > hola       │",
+            "╰──────────────╯",
+            "? atajos",
+        ]);
         assert_eq!(input_area_top(&r), Some(2));
         // Sin zona de entrada: no se corta nada.
         let r = rows(&["uno", "dos", "tres", "cuatro"]);
@@ -1062,5 +1441,38 @@ mod tests {
         let mut v = vec!["a", rule];
         v.extend(["texto"; 13]);
         assert_eq!(input_area_top(&rows(&v)), None);
+    }
+
+    #[test]
+    fn recorta_el_editor_de_codex_y_conserva_sus_mensajes() {
+        use crate::subagents::Provider;
+        let r = rows(&[
+            "› Revisa el repositorio",
+            "• Preparé el resumen",
+            "",
+            "› borrador sin enviar",
+            "  segunda línea",
+            "  / for commands",
+        ]);
+        assert_eq!(preview_end(&r, 4, Some(Provider::Codex)), Some(3));
+        assert_eq!(preview_end(&r, 3, Some(Provider::Codex)), Some(3));
+        assert_eq!(preview_end(&r[..3], 2, Some(Provider::Codex)), None);
+    }
+
+    #[test]
+    fn recorta_el_editor_de_gemini_y_no_un_separador_aislado() {
+        use crate::subagents::Provider;
+        let r = rows(&[
+            "✦ Revisé las pruebas",
+            "╭──────────────────╮",
+            "│ > borrador       │",
+            "╰──────────────────╯",
+            "  gemini",
+        ]);
+        assert_eq!(preview_end(&r, 2, Some(Provider::Gemini)), Some(1));
+        assert_eq!(
+            preview_end(&rows(&["historial", "────────", "resultado"]), 2, None),
+            None
+        );
     }
 }

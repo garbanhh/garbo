@@ -1,32 +1,33 @@
 //! Garbo — terminal GPU ligera con pestañas.
 
+mod activation;
 mod app;
 mod atlas;
 mod blocks;
+mod clipboard;
 mod colr;
+mod complete;
 mod config;
+mod edit;
 mod events;
 mod font;
 mod input;
 mod keybindings;
+mod links;
+mod notify;
 mod palette;
 mod panel;
+mod panes;
 mod ports;
 mod pty_loop;
 mod renderer;
+mod search;
 mod sessions;
 mod settings;
-mod subagents;
-mod complete;
-mod notify;
-mod panes;
-mod links;
-mod search;
 mod status;
-mod activation;
-mod edit;
+mod subagents;
 mod suggest;
-mod clipboard;
+mod temp_dir;
 mod terminal;
 mod ui;
 mod update;
@@ -38,7 +39,8 @@ use winit::event_loop::EventLoop;
 pub const APP_ID: &str = "io.github.garbanhh.Garbo";
 
 fn main() {
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn,garbo=info")).init();
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn,garbo=info"))
+        .init();
 
     if std::env::args().any(|a| a == "--version" || a == "-V") {
         println!("garbo {}", env!("CARGO_PKG_VERSION"));

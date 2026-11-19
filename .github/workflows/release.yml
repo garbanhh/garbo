@@ -24,9 +24,10 @@ jobs:
     container: fedora:45
     env:
       TAG: ${{ inputs.tag || github.ref_name }}
+      GARBO_RPM_PUBLIC_KEY: ${{ vars.GARBO_RPM_PUBLIC_KEY }}
     steps:
       - name: Dependencias
-        run: dnf install -y gcc git gh rust cargo rpm-build
+        run: dnf install -y gcc git gh rust cargo rpm-build rpm-sign gnupg2
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ inputs.tag || github.ref }}
@@ -39,8 +40,34 @@ jobs:
       - name: Compilar
         run: cargo build --release --locked
       - name: Generar RPM
+        run: ~/.cargo/bin/cargo-generate-rpm
+      - name: Firmar RPM
+        env:
+          GARBO_RPM_SIGNING_KEY: ${{ secrets.GARBO_RPM_SIGNING_KEY }}
         run: |
-          ~/.cargo/bin/cargo-generate-rpm
+          if [ -z "$GARBO_RPM_PUBLIC_KEY" ] && [ -z "$GARBO_RPM_SIGNING_KEY" ]; then
+            echo 'Publicación para instalación manual. La firma de RPM aún no está configurada.'
+            exit 0
+          fi
+          test -n "$GARBO_RPM_PUBLIC_KEY" && test -n "$GARBO_RPM_SIGNING_KEY" || {
+            echo 'Configura GARBO_RPM_PUBLIC_KEY y GARBO_RPM_SIGNING_KEY juntas.'
+            exit 1
+          }
+          umask 077
+          work=$(mktemp -d)
+          trap 'rm -rf -- "$work"' EXIT
+          export GNUPGHOME="$work/gnupg"
+          mkdir "$GNUPGHOME" "$work/rpmdb"
+          printf '%s\n' "$GARBO_RPM_PUBLIC_KEY" > "$work/garbo.asc"
+          printf '%s\n' "$GARBO_RPM_SIGNING_KEY" | gpg --batch --import
+          key=$(gpg --batch --show-keys --with-colons "$work/garbo.asc" | awk -F: '$1 == "fpr" && !seen++ { print $10 }')
+          test -n "$key"
+          rpmsign --define "_openpgp_sign_id $key" --addsign target/generate-rpm/*.rpm
+          rpmkeys --noplugins --define '_keyring rpmdb' --dbpath "$work/rpmdb" --import "$work/garbo.asc"
+          rpmkeys --noplugins --define '_keyring rpmdb' --dbpath "$work/rpmdb" \
+            --define '_pkgverify_level all' --checksig target/generate-rpm/*.rpm
+      - name: Calcular SHA-256
+        run: |
           cd target/generate-rpm
           for f in *.rpm; do sha256sum "$f" > "$f.sha256"; done
           ls -la

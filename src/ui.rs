@@ -75,7 +75,11 @@ impl TabBar {
 
         let controls = integrated.then(|| {
             let x0 = width - margin - 3.0 * ctl - 2.0 * ctl_gap;
-            [(x0, ctl), (x0 + ctl + ctl_gap, ctl), (x0 + 2.0 * (ctl + ctl_gap), ctl)]
+            [
+                (x0, ctl),
+                (x0 + ctl + ctl_gap, ctl),
+                (x0 + 2.0 * (ctl + ctl_gap), ctl),
+            ]
         });
         let right = controls.map_or(width - margin, |c| c[0].0 - (12.0 * s).round());
         let settings = (right - btn, btn);
@@ -90,7 +94,19 @@ impl TabBar {
         let tab_w = (avail / n.max(1) as f32).min(260.0 * s).floor();
         let tabs = (0..n).map(|i| (margin + i as f32 * tab_w, tab_w)).collect();
         let plus = (margin + n as f32 * tab_w + gap, btn);
-        Self { height, tabs, tab_y, tab_h, plus, agents_btn, ports_btn, settings, update, controls, close_w: tab_h }
+        Self {
+            height,
+            tabs,
+            tab_y,
+            tab_h,
+            plus,
+            agents_btn,
+            ports_btn,
+            settings,
+            update,
+            controls,
+            close_w: tab_h,
+        }
     }
 
     pub fn hit(&self, x: f32, y: f32) -> Option<TabHit> {
@@ -105,7 +121,11 @@ impl TabBar {
             }
         }
         let in_row = y >= self.tab_y && y < self.tab_y + self.tab_h;
-        for (r, hit) in [(self.settings, TabHit::Settings), (self.ports_btn, TabHit::Ports), (self.agents_btn, TabHit::Agents)] {
+        for (r, hit) in [
+            (self.settings, TabHit::Settings),
+            (self.ports_btn, TabHit::Ports),
+            (self.agents_btn, TabHit::Agents),
+        ] {
             if in_row && x >= r.0 && x < r.0 + r.1 {
                 return Some(hit);
             }
@@ -167,7 +187,14 @@ impl TabBar {
                 p.rect(tx, 0.0, tw, self.height - hair, pill, 0.5);
             }
             if i + 1 < self.tabs.len() && !is_active && i + 1 != active {
-                p.rect(tx + tw - hair, 10.0 * s, hair, self.height - 20.0 * s, theme.foreground, 0.10);
+                p.rect(
+                    tx + tw - hair,
+                    10.0 * s,
+                    hair,
+                    self.height - 20.0 * s,
+                    theme.foreground,
+                    0.10,
+                );
             }
 
             let tab = &tabs[i];
@@ -182,7 +209,14 @@ impl TabBar {
                 if over {
                     p.circle(cx, cy, 9.0 * s, theme.foreground, 0.12);
                 }
-                cross(p, cx, cy, 3.5 * s, 1.4 * s, if over { theme.foreground } else { dimc });
+                cross(
+                    p,
+                    cx,
+                    cy,
+                    3.5 * s,
+                    1.4 * s,
+                    if over { theme.foreground } else { dimc },
+                );
                 right = tx + tw - self.close_w;
             }
             // Estado del agente: animación mientras trabaja, punto amarillo si te espera y verde si
@@ -196,7 +230,11 @@ impl TabBar {
                         right -= 8.0 * s;
                     }
                     Status::Done | Status::Blocked(_) => {
-                        let c = if tab.status == Status::Done { theme.palette[2] } else { theme.palette[3] };
+                        let c = if tab.status == Status::Done {
+                            theme.palette[2]
+                        } else {
+                            theme.palette[3]
+                        };
                         right -= 8.0 * s;
                         p.circle(right, cy, 3.5 * s, c, 1.0);
                         right -= 8.0 * s;
@@ -204,8 +242,19 @@ impl TabBar {
                     _ => {}
                 }
             }
-            let label = if tab.exited { format!("{} (terminado)", tab.label) } else { tab.label.clone() };
-            p.ui_text_in(tx + pad, 0.0, self.height, &label, color, (right - tx - pad).max(0.0));
+            let label = if tab.exited {
+                format!("{} (terminado)", tab.label)
+            } else {
+                tab.label.clone()
+            };
+            p.ui_text_in(
+                tx + pad,
+                0.0,
+                self.height,
+                &label,
+                color,
+                (right - tx - pad).max(0.0),
+            );
         }
 
         let cy = (self.tab_y + self.tab_h / 2.0).round();
@@ -225,16 +274,42 @@ impl TabBar {
         let button = |p: &mut Painter, rect: (f32, f32), hit: TabHit, on: bool| -> Rgb {
             let over = hover == Some(hit);
             if on {
-                p.rounded(rect.0, self.tab_y, rect.1, self.tab_h, theme.accent, if over { 0.30 } else { 0.20 }, r);
+                p.rounded(
+                    rect.0,
+                    self.tab_y,
+                    rect.1,
+                    self.tab_h,
+                    theme.accent,
+                    if over { 0.30 } else { 0.20 },
+                    r,
+                );
             } else if over {
                 p.rounded(rect.0, self.tab_y, rect.1, self.tab_h, pill, 0.8, r);
             }
-            if on { theme.accent } else if over { theme.foreground } else { dimc }
+            if on {
+                theme.accent
+            } else if over {
+                theme.foreground
+            } else {
+                dimc
+            }
         };
         let c = button(p, self.agents_btn, TabHit::Agents, toggles.agents);
         let bx = (self.agents_btn.0 + self.agents_btn.1 / 2.0).round();
-        p.rounded(bx - 6.0 * s, cy - 3.0 * s, 12.0 * s, 9.0 * s, c, 1.0, 2.5 * s);
-        let bg = if toggles.agents { theme.tab_bar.lerp(theme.accent, 0.2) } else { theme.tab_bar };
+        p.rounded(
+            bx - 6.0 * s,
+            cy - 3.0 * s,
+            12.0 * s,
+            9.0 * s,
+            c,
+            1.0,
+            2.5 * s,
+        );
+        let bg = if toggles.agents {
+            theme.tab_bar.lerp(theme.accent, 0.2)
+        } else {
+            theme.tab_bar
+        };
         p.circle(bx - 2.6 * s, cy + 1.5 * s, 1.4 * s, bg, 1.0);
         p.circle(bx + 2.6 * s, cy + 1.5 * s, 1.4 * s, bg, 1.0);
         p.line(bx, cy - 3.0 * s, bx, cy - 6.0 * s, 1.3 * s, c, 1.0);
@@ -248,7 +323,15 @@ impl TabBar {
         let c = button(p, self.settings, TabHit::Settings, false);
         let mx = (self.settings.0 + self.settings.1 / 2.0).round();
         for dy in [-4.0, 0.0, 4.0] {
-            p.line(mx - 6.0 * s, cy + dy * s, mx + 6.0 * s, cy + dy * s, 1.5 * s, c, 1.0);
+            p.line(
+                mx - 6.0 * s,
+                cy + dy * s,
+                mx + 6.0 * s,
+                cy + dy * s,
+                1.5 * s,
+                c,
+                1.0,
+            );
         }
 
         // Aviso de actualización
@@ -256,17 +339,50 @@ impl TabBar {
             use crate::update::UpdateState as U;
             let over = hover == Some(TabHit::Update);
             let (label, bg, bg_a, fg) = match state {
-                U::Available(rel) => (format!("Actualizar a {}", rel.version), theme.accent, if over { 1.0 } else { 0.85 }, theme.background),
-                U::Downloading(v) => (format!("Descargando {v}…"), theme.accent, 0.25, theme.foreground),
-                U::Installing(v) => (format!("Instalando {v}…"), theme.accent, 0.25, theme.foreground),
-                U::Installed(v) => (format!("Reiniciar para usar {v}"), theme.palette[2], if over { 1.0 } else { 0.85 }, theme.background),
-                U::Failed(_) => ("No se pudo actualizar".to_string(), theme.palette[1], 0.22, theme.palette[1]),
+                U::Available(rel) => (
+                    rel.button_label(),
+                    theme.accent,
+                    if over { 1.0 } else { 0.85 },
+                    theme.background,
+                ),
+                U::Downloading(v) => (
+                    format!("Descargando {v}…"),
+                    theme.accent,
+                    0.25,
+                    theme.foreground,
+                ),
+                U::Installing(v) => (
+                    format!("Instalando {v}…"),
+                    theme.accent,
+                    0.25,
+                    theme.foreground,
+                ),
+                U::Installed(v) => (
+                    format!("Reiniciar para usar {v}"),
+                    theme.palette[2],
+                    if over { 1.0 } else { 0.85 },
+                    theme.background,
+                ),
+                U::Failed(_) => (
+                    "No se pudo actualizar".to_string(),
+                    theme.palette[1],
+                    0.22,
+                    theme.palette[1],
+                ),
             };
             let pad = (12.0 * s).round();
             let tw = p.ui_measure(&label).min(uw - 2.0 * pad);
             let w = (tw + 2.0 * pad).round();
             let x = ux + uw - w;
-            p.rounded(x, self.tab_y, w, self.tab_h, bg, bg_a, (self.tab_h / 2.0).round());
+            p.rounded(
+                x,
+                self.tab_y,
+                w,
+                self.tab_h,
+                bg,
+                bg_a,
+                (self.tab_h / 2.0).round(),
+            );
             p.ui_text_in(x + pad, self.tab_y, self.tab_h, &label, fg, tw + 1.0);
         }
 
@@ -277,11 +393,25 @@ impl TabBar {
                 let over = hover == Some(kinds[i]);
                 let cx = (bx + bw / 2.0).round();
                 let cy = (self.height / 2.0).round();
-                p.circle(cx, cy, 12.0 * s, theme.foreground, if over { 0.18 } else { 0.08 });
+                p.circle(
+                    cx,
+                    cy,
+                    12.0 * s,
+                    theme.foreground,
+                    if over { 0.18 } else { 0.08 },
+                );
                 let c = theme.foreground;
                 let t = 1.4 * s;
                 match kinds[i] {
-                    TabHit::Minimize => p.line(cx - 4.0 * s, cy + 0.5 * s, cx + 4.0 * s, cy + 0.5 * s, t, c, 1.0),
+                    TabHit::Minimize => p.line(
+                        cx - 4.0 * s,
+                        cy + 0.5 * s,
+                        cx + 4.0 * s,
+                        cy + 0.5 * s,
+                        t,
+                        c,
+                        1.0,
+                    ),
                     TabHit::Maximize => {
                         let k = 3.6 * s;
                         p.line(cx - k, cy - k, cx + k, cy - k, t, c, 1.0);
@@ -331,7 +461,15 @@ pub fn branch(p: &mut Painter, x: f32, y: f32, w: f32, h: f32, t: f32, c: Rgb) {
 
 pub fn magnifier(p: &mut Painter, cx: f32, cy: f32, s: f32, c: Rgb) {
     p.ring(cx - 1.0 * s, cy - 1.0 * s, 5.0 * s, 1.5 * s, c, 1.0);
-    p.line(cx + 2.8 * s, cy + 2.8 * s, cx + 6.0 * s, cy + 6.0 * s, 1.6 * s, c, 1.0);
+    p.line(
+        cx + 2.8 * s,
+        cy + 2.8 * s,
+        cx + 6.0 * s,
+        cy + 6.0 * s,
+        1.6 * s,
+        c,
+        1.0,
+    );
 }
 
 /// Nombre bonito de una tecla para mostrarla en un "keycap".
@@ -369,7 +507,15 @@ fn key_label(k: &str) -> String {
 /// Dibuja un atajo como teclas ("Ctrl" "Shift" "P") alineado a la derecha en `right`.
 /// Devuelve el ancho ocupado.
 #[allow(clippy::too_many_arguments)]
-pub fn keycaps(p: &mut Painter, right: f32, y: f32, h: f32, combo: &str, theme: &Theme, s: f32) -> f32 {
+pub fn keycaps(
+    p: &mut Painter,
+    right: f32,
+    y: f32,
+    h: f32,
+    combo: &str,
+    theme: &Theme,
+    s: f32,
+) -> f32 {
     if combo.is_empty() {
         return 0.0;
     }
@@ -390,7 +536,15 @@ pub fn keycaps(p: &mut Painter, right: f32, y: f32, h: f32, combo: &str, theme: 
     right - x - gap
 }
 
-pub fn draw_palette(p: &mut Painter, theme: &Theme, pal: &Palette, width: f32, height: f32, top: f32, scale: f32) {
+pub fn draw_palette(
+    p: &mut Painter,
+    theme: &Theme,
+    pal: &Palette,
+    width: f32,
+    height: f32,
+    top: f32,
+    scale: f32,
+) {
     let s = scale;
     p.rect(0.0, 0.0, width, height, Rgb(0, 0, 0), 0.35);
 
@@ -401,10 +555,23 @@ pub fn draw_palette(p: &mut Painter, theme: &Theme, pal: &Palette, width: f32, h
     let row_h = (36.0 * s).round();
     let input_h = (50.0 * s).round();
     let visible = pal.filtered.len().min(MAX_VISIBLE);
-    let list_h = if visible > 0 { visible as f32 * row_h + pad * 2.0 } else { 0.0 };
+    let list_h = if visible > 0 {
+        visible as f32 * row_h + pad * 2.0
+    } else {
+        0.0
+    };
     let box_h = input_h + list_h;
     let panel = surface(theme, 0.05);
-    p.card(x, y, box_w, box_h, panel, theme.foreground, (12.0 * s).round(), s);
+    p.card(
+        x,
+        y,
+        box_w,
+        box_h,
+        panel,
+        theme.foreground,
+        (12.0 * s).round(),
+        s,
+    );
 
     // Campo de búsqueda
     let dimc = dim(theme);
@@ -412,14 +579,42 @@ pub fn draw_palette(p: &mut Painter, theme: &Theme, pal: &Palette, width: f32, h
     let tx = x + 42.0 * s;
     let lh = p.ui_metrics().height;
     let tw = if pal.query.is_empty() {
-        p.ui_text_in(tx, y, input_h, "Buscar acciones y temas…", dimc, box_w - 60.0 * s);
+        p.ui_text_in(
+            tx,
+            y,
+            input_h,
+            "Buscar acciones y temas…",
+            dimc,
+            box_w - 60.0 * s,
+        );
         0.0
     } else {
-        p.ui_text_in(tx, y, input_h, &pal.query, theme.foreground, box_w - 60.0 * s)
+        p.ui_text_in(
+            tx,
+            y,
+            input_h,
+            &pal.query,
+            theme.foreground,
+            box_w - 60.0 * s,
+        )
     };
-    p.rect((tx + tw + 1.0).round(), (y + (input_h - lh) / 2.0).round(), (1.5 * s).round(), lh, theme.accent, 1.0);
+    p.rect(
+        (tx + tw + 1.0).round(),
+        (y + (input_h - lh) / 2.0).round(),
+        (1.5 * s).round(),
+        lh,
+        theme.accent,
+        1.0,
+    );
     if visible > 0 {
-        p.rect(x, y + input_h, box_w, s.round().max(1.0), theme.foreground, 0.08);
+        p.rect(
+            x,
+            y + input_h,
+            box_w,
+            s.round().max(1.0),
+            theme.foreground,
+            0.08,
+        );
     }
 
     // Resultados
@@ -429,9 +624,24 @@ pub fn draw_palette(p: &mut Painter, theme: &Theme, pal: &Palette, width: f32, h
         let Some(e) = pal.entry(idx) else { break };
         let ry = y + input_h + pad + row as f32 * row_h;
         if idx == pal.selected {
-            p.rounded(x + pad, ry, box_w - 2.0 * pad, row_h, theme.accent, 0.18, (8.0 * s).round());
+            p.rounded(
+                x + pad,
+                ry,
+                box_w - 2.0 * pad,
+                row_h,
+                theme.accent,
+                0.18,
+                (8.0 * s).round(),
+            );
         }
         let kw = keycaps(p, x + box_w - pad * 2.0, ry, row_h, &e.hint, theme, s);
-        p.ui_text_in(x + pad * 2.0, ry, row_h, &e.label, theme.foreground, box_w - pad * 5.0 - kw);
+        p.ui_text_in(
+            x + pad * 2.0,
+            ry,
+            row_h,
+            &e.label,
+            theme.foreground,
+            box_w - pad * 5.0 - kw,
+        );
     }
 }

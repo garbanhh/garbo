@@ -6,11 +6,13 @@
 //!   - Terminado: dejó de trabajar mientras no se miraba esa pestaña (pendiente de ver).
 //!   - Esperando: inactivo y ya visto, esperando un mensaje.
 //!   - Cerrado: el agente salió y la pestaña volvió al shell.
+//!
 //! Todo se recalcula solo cuando hay salida o mientras algún agente trabaja: en reposo, nada.
 
+use crate::status::{Kind, State, Summary};
+use crate::subagents::Provider;
 use std::os::fd::RawFd;
 use std::path::PathBuf;
-use crate::status::{Kind, State, Summary};
 use std::time::{Duration, Instant};
 
 /// Sin salida durante este tiempo, el agente se considera parado.
@@ -22,27 +24,22 @@ const IDENTIFY_EVERY: Duration = Duration::from_millis(700);
 pub struct Agent {
     /// Nombre que se muestra ("Claude Code").
     pub name: &'static str,
-    /// Lanza subagentes que se pueden seguir desde el panel (ver `subagents.rs`).
-    pub subagents: bool,
-}
-
-const fn agent(name: &'static str) -> Agent {
-    Agent { name, subagents: false }
+    pub subagents: Option<Provider>,
 }
 
 /// Nombre del proceso (o de su script) -> agente.
-const AGENTS: &[(&str, Agent)] = &[
-    ("claude", Agent { name: "Claude Code", subagents: true }),
-    ("codex", agent("Codex")),
-    ("gemini", agent("Gemini CLI")),
-    ("aider", agent("Aider")),
-    ("opencode", agent("OpenCode")),
-    ("cursor-agent", agent("Cursor Agent")),
-    ("copilot", agent("Copilot CLI")),
-    ("qwen", agent("Qwen Code")),
-    ("goose", agent("Goose")),
-    ("amp", agent("Amp")),
-    ("crush", agent("Crush")),
+const AGENTS: &[(&str, &str, Option<Provider>)] = &[
+    ("claude", "Claude Code", Some(Provider::Claude)),
+    ("codex", "Codex", Some(Provider::Codex)),
+    ("gemini", "Gemini CLI", Some(Provider::Gemini)),
+    ("aider", "Aider", None),
+    ("opencode", "OpenCode", None),
+    ("cursor-agent", "Cursor Agent", None),
+    ("copilot", "Copilot CLI", None),
+    ("qwen", "Qwen Code", None),
+    ("goose", "Goose", None),
+    ("amp", "Amp", None),
+    ("crush", "Crush", None),
 ];
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -88,7 +85,15 @@ pub struct Session {
 
 impl Default for Session {
     fn default() -> Self {
-        Self { agent: None, status: Status::Waiting, since: Instant::now(), pid: None, detail: None, reported: None, checked: None }
+        Self {
+            agent: None,
+            status: Status::Waiting,
+            since: Instant::now(),
+            pid: None,
+            detail: None,
+            reported: None,
+            checked: None,
+        }
     }
 }
 
@@ -96,8 +101,17 @@ impl Session {
     /// Recalcula el estado. `viewing` = la pestaña está a la vista del usuario. `report`: lo que
     /// informa el propio programa (OSC 7501), que manda sobre la heurística de salida reciente.
     /// Devuelve `true` si cambió algo visible.
-    pub fn refresh(&mut self, fd: Option<RawFd>, last_output: Instant, viewing: bool, now: Instant, report: Option<Summary>) -> bool {
-        let identify = self.checked.is_none_or(|t| now.duration_since(t) >= IDENTIFY_EVERY);
+    pub fn refresh(
+        &mut self,
+        fd: Option<RawFd>,
+        last_output: Instant,
+        viewing: bool,
+        now: Instant,
+        report: Option<Summary>,
+    ) -> bool {
+        let identify = self
+            .checked
+            .is_none_or(|t| now.duration_since(t) >= IDENTIFY_EVERY);
         let mut present = self.agent.is_some() && self.status != Status::Exited;
         let mut changed = false;
         if identify {
@@ -127,13 +141,18 @@ impl Session {
             return changed;
         }
         self.reported = report.as_ref().map(|r| r.state);
-        let detail = report.as_ref().filter(|r| matches!(r.state, State::Working | State::Blocked)).and_then(|r| r.msg.clone());
+        let detail = report
+            .as_ref()
+            .filter(|r| matches!(r.state, State::Working | State::Blocked))
+            .and_then(|r| r.msg.clone());
         if detail != self.detail {
             self.detail = detail;
             changed = true;
         }
         // "Terminado" queda hasta que se ve la pestaña; al verla, "Esperando tu mensaje".
-        let unseen = |s: Status| !viewing && matches!(s, Status::Working | Status::Blocked(_) | Status::Done);
+        let unseen = |s: Status| {
+            !viewing && matches!(s, Status::Working | Status::Blocked(_) | Status::Done)
+        };
         let next = match report {
             Some(r) => match r.state {
                 State::Working => Status::Working,
@@ -159,7 +178,10 @@ impl Session {
 
     /// El agente avisó con la campana (p. ej. al terminar): se marca pendiente de ver.
     pub fn bell(&mut self, viewing: bool, now: Instant) -> bool {
-        let settled = matches!(self.status, Status::Exited | Status::Done | Status::Blocked(_));
+        let settled = matches!(
+            self.status,
+            Status::Exited | Status::Done | Status::Blocked(_)
+        );
         if self.agent.is_some() && !settled && !viewing && self.reported.is_none() {
             self.set(Status::Done, now);
             return true;
@@ -193,11 +215,22 @@ pub fn identify_agent(pid: i32) -> Option<Agent> {
             .split(|&b| b == 0)
             .take(3)
             .filter(|a| !a.is_empty() && a[0] != b'-')
-            .map(|a| String::from_utf8_lossy(a).rsplit('/').next().unwrap_or_default().to_string()),
+            .map(|a| {
+                String::from_utf8_lossy(a)
+                    .rsplit('/')
+                    .next()
+                    .unwrap_or_default()
+                    .to_string()
+            }),
     );
     names.iter().find_map(|n| {
-        let n = n.trim_end_matches(".js").trim_end_matches(".mjs").to_lowercase();
-        AGENTS.iter().find(|(key, _)| n == *key).map(|(_, a)| *a)
+        let n = n
+            .trim_end_matches(".js")
+            .trim_end_matches(".mjs")
+            .to_lowercase();
+        AGENTS
+            .iter()
+            .find_map(|&(key, name, subagents)| (n == key).then_some(Agent { name, subagents }))
     })
 }
 
@@ -214,7 +247,9 @@ pub fn command_label(pid: i32) -> Option<String> {
         return None;
     }
     let base = |s: &str| s.rsplit('/').next().unwrap_or(s).to_string();
-    let interp = ["python", "python3", "node", "bun", "deno", "perl", "ruby", "sh", "bash"];
+    let interp = [
+        "python", "python3", "node", "bun", "deno", "perl", "ruby", "sh", "bash",
+    ];
     if args.len() > 1 && interp.contains(&base(&args[0]).as_str()) && !args[1].starts_with('-') {
         args.remove(0);
     }
@@ -232,7 +267,9 @@ pub fn cwd_label(pid: u32) -> Option<String> {
     let s = path.to_string_lossy().to_string();
     let home = std::env::var("HOME").unwrap_or_default();
     Some(match s.strip_prefix(&home) {
-        Some(rest) if !home.is_empty() && (rest.is_empty() || rest.starts_with('/')) => format!("~{rest}"),
+        Some(rest) if !home.is_empty() && (rest.is_empty() || rest.starts_with('/')) => {
+            format!("~{rest}")
+        }
         _ => s,
     })
 }
@@ -254,7 +291,14 @@ mod tests {
 
     #[test]
     fn transiciones_de_estado() {
-        let mut s = Session { agent: Some(AGENTS[0].1), pid: None, ..Default::default() };
+        let mut s = Session {
+            agent: Some(Agent {
+                name: "Claude Code",
+                subagents: Some(Provider::Claude),
+            }),
+            pid: None,
+            ..Default::default()
+        };
         let t0 = Instant::now();
         // Evita re-identificar (no hay PTY en el test): se marca como recién comprobado.
         s.checked = Some(t0);

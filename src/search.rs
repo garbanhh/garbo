@@ -94,10 +94,17 @@ impl Search {
     /// Cambió lo buscado o el ámbito: busca de nuevo y va a la coincidencia más cercana por encima
     /// del final de lo que se ve (la más reciente, si no se ha desplazado).
     pub fn update<T: EventListener>(&mut self, term: &mut Term<T>) {
-        self.regex = (!self.query.is_empty()).then(|| RegexSearch::new(&escape(&self.query)).ok()).flatten();
+        self.regex = (!self.query.is_empty())
+            .then(|| RegexSearch::new(&escape(&self.query)).ok())
+            .flatten();
         self.refresh(term);
-        let bottom = term.screen_lines() as i64 - 1 - term.grid().display_offset() as i64 + term.history_size() as i64;
-        self.index = self.matches.iter().rposition(|m| m.0 .0 <= bottom).or((!self.matches.is_empty()).then_some(0));
+        let bottom = term.screen_lines() as i64 - 1 - term.grid().display_offset() as i64
+            + term.history_size() as i64;
+        self.index = self
+            .matches
+            .iter()
+            .rposition(|m| m.0 .0 <= bottom)
+            .or((!self.matches.is_empty()).then_some(0));
         self.reveal(term);
     }
 
@@ -105,17 +112,24 @@ impl Search {
     fn refresh<T>(&mut self, term: &Term<T>) {
         self.matches.clear();
         self.range = None;
-        let Some(regex) = self.regex.as_mut() else { return };
+        let Some(regex) = self.regex.as_mut() else {
+            return;
+        };
         let last_col = Column(term.columns() - 1);
         let mut start = Point::new(term.topmost_line(), Column(0));
         let mut end = Point::new(term.bottommost_line(), last_col);
-        if let Some(r) = self.block.filter(|_| self.block_only).and_then(|id| crate::blocks::find_block(term, id)) {
+        if let Some(r) = self
+            .block
+            .filter(|_| self.block_only)
+            .and_then(|id| crate::blocks::find_block(term, id))
+        {
             start = Point::new(r.start, Column(0));
             end = Point::new(r.end, last_col);
             self.range = Some((abs(term, start).0, abs(term, end).0));
         }
         for m in RegexIter::new(start, end, Direction::Right, term, regex).take(MAX_MATCHES) {
-            self.matches.push((abs(term, *m.start()), abs(term, *m.end())));
+            self.matches
+                .push((abs(term, *m.start()), abs(term, *m.end())));
         }
     }
 
@@ -164,7 +178,9 @@ impl Search {
     pub fn highlights<T>(&mut self, term: &Term<T>) -> Highlights {
         let mut h = Highlights::default();
         let current = self.current();
-        let Some(regex) = self.regex.as_mut() else { return h };
+        let Some(regex) = self.regex.as_mut() else {
+            return h;
+        };
         let off = term.grid().display_offset() as i32;
         let hs = term.history_size() as i64;
         let mut top = Line(-off);
@@ -174,21 +190,43 @@ impl Search {
             bottom = bottom.min(Line((b - hs) as i32));
         }
         if top <= bottom {
-            let (start, end) = (Point::new(top, Column(0)), Point::new(bottom, Column(term.columns() - 1)));
-            h.all = RegexIter::new(start, end, Direction::Right, term, regex).take(MAX_VISIBLE).collect();
+            let (start, end) = (
+                Point::new(top, Column(0)),
+                Point::new(bottom, Column(term.columns() - 1)),
+            );
+            h.all = RegexIter::new(start, end, Direction::Right, term, regex)
+                .take(MAX_VISIBLE)
+                .collect();
         }
         h.current = current.map(|(a, b)| point(term, a)..=point(term, b));
         h
     }
 
     /// Barra de búsqueda arriba a la derecha de la zona del terminal (`x`, `y`, ancho `area_w`).
-    pub fn draw(&mut self, p: &mut Painter, theme: &Theme, x: f32, y: f32, area_w: f32, scale: f32) {
+    pub fn draw(
+        &mut self,
+        p: &mut Painter,
+        theme: &Theme,
+        x: f32,
+        y: f32,
+        area_w: f32,
+        scale: f32,
+    ) {
         let s = scale;
         let w = (460.0 * s).min(area_w - 16.0 * s).round();
         let h = (p.ui_metrics().height + 16.0 * s).round();
         let bx = (x + area_w - w - 12.0 * s).round();
         let by = (y + 8.0 * s).round();
-        p.card(bx, by, w, h, crate::ui::surface(theme, 0.06), theme.foreground, (9.0 * s).round(), s);
+        p.card(
+            bx,
+            by,
+            w,
+            h,
+            crate::ui::surface(theme, 0.06),
+            theme.foreground,
+            (9.0 * s).round(),
+            s,
+        );
         let dimc = crate::ui::dim(theme);
         let cy = by + h / 2.0;
         self.hits.clear();
@@ -196,22 +234,55 @@ impl Search {
         // Derecha a izquierda: cerrar, siguiente, anterior, "Bloque" y el contador.
         let btn = (28.0 * s).round();
         let mut right = bx + w - 6.0 * s;
-        let button = |p: &mut Painter, hits: &mut Vec<(Hit, [f32; 4])>, hit: Hit, right: &mut f32| {
-            *right -= btn;
-            let (cx, k, t) = (*right + btn / 2.0, 4.0 * s, 1.5 * s);
-            match hit {
-                Hit::Close => crate::ui::cross(p, cx, cy, k * 0.85, t, theme.foreground),
-                Hit::Prev => {
-                    p.line(cx - k, cy + k * 0.5, cx, cy - k * 0.5, t, theme.foreground, 1.0);
-                    p.line(cx, cy - k * 0.5, cx + k, cy + k * 0.5, t, theme.foreground, 1.0);
+        let button =
+            |p: &mut Painter, hits: &mut Vec<(Hit, [f32; 4])>, hit: Hit, right: &mut f32| {
+                *right -= btn;
+                let (cx, k, t) = (*right + btn / 2.0, 4.0 * s, 1.5 * s);
+                match hit {
+                    Hit::Close => crate::ui::cross(p, cx, cy, k * 0.85, t, theme.foreground),
+                    Hit::Prev => {
+                        p.line(
+                            cx - k,
+                            cy + k * 0.5,
+                            cx,
+                            cy - k * 0.5,
+                            t,
+                            theme.foreground,
+                            1.0,
+                        );
+                        p.line(
+                            cx,
+                            cy - k * 0.5,
+                            cx + k,
+                            cy + k * 0.5,
+                            t,
+                            theme.foreground,
+                            1.0,
+                        );
+                    }
+                    _ => {
+                        p.line(
+                            cx - k,
+                            cy - k * 0.5,
+                            cx,
+                            cy + k * 0.5,
+                            t,
+                            theme.foreground,
+                            1.0,
+                        );
+                        p.line(
+                            cx,
+                            cy + k * 0.5,
+                            cx + k,
+                            cy - k * 0.5,
+                            t,
+                            theme.foreground,
+                            1.0,
+                        );
+                    }
                 }
-                _ => {
-                    p.line(cx - k, cy - k * 0.5, cx, cy + k * 0.5, t, theme.foreground, 1.0);
-                    p.line(cx, cy + k * 0.5, cx + k, cy - k * 0.5, t, theme.foreground, 1.0);
-                }
-            }
-            hits.push((hit, [*right, by, btn, h]));
-        };
+                hits.push((hit, [*right, by, btn, h]));
+            };
         button(p, &mut self.hits, Hit::Close, &mut right);
         button(p, &mut self.hits, Hit::Next, &mut right);
         button(p, &mut self.hits, Hit::Prev, &mut right);
@@ -221,7 +292,11 @@ impl Search {
             let tw = p.ui_measure(label);
             let (pw, ph) = (tw + 16.0 * s, h - 12.0 * s);
             right -= pw;
-            let (fill, alpha, color) = if self.block_only { (theme.accent, 0.25, theme.foreground) } else { (theme.foreground, 0.06, dimc) };
+            let (fill, alpha, color) = if self.block_only {
+                (theme.accent, 0.25, theme.foreground)
+            } else {
+                (theme.foreground, 0.06, dimc)
+            };
             p.rounded(right, by + 6.0 * s, pw, ph, fill, alpha, (ph / 2.0).round());
             p.ui_text_in(right + 8.0 * s, by, h, label, color, tw + 2.0);
             self.hits.push((Hit::Block, [right, by, pw, h]));
@@ -231,7 +306,11 @@ impl Search {
         if !counter.is_empty() {
             let cw = p.ui_measure(&counter);
             right -= cw;
-            let color = if self.matches.is_empty() { theme.palette[1] } else { dimc };
+            let color = if self.matches.is_empty() {
+                theme.palette[1]
+            } else {
+                dimc
+            };
             p.ui_text_in(right, by, h, &counter, color, cw + 2.0);
             right -= 10.0 * s;
         }
@@ -240,7 +319,8 @@ impl Search {
         crate::ui::magnifier(p, bx + 18.0 * s, cy, s, dimc);
         let fx = bx + 32.0 * s;
         let room = (right - fx).max(0.0);
-        self.hits.push((Hit::Field, [bx, by, (right - bx).max(0.0), h]));
+        self.hits
+            .push((Hit::Field, [bx, by, (right - bx).max(0.0), h]));
         let drawn = if self.query.is_empty() {
             p.ui_text_in(fx, by, h, "Buscar", dimc, room);
             0.0
@@ -248,11 +328,21 @@ impl Search {
             p.ui_text_in(fx, by, h, &self.query, theme.foreground, room)
         };
         let lh = p.ui_metrics().height;
-        p.rect((fx + drawn + 1.0).min(fx + room), (cy - lh / 2.0).round(), (1.5 * s).max(1.0), lh.round(), theme.cursor, 1.0);
+        p.rect(
+            (fx + drawn + 1.0).min(fx + room),
+            (cy - lh / 2.0).round(),
+            (1.5 * s).max(1.0),
+            lh.round(),
+            theme.cursor,
+            1.0,
+        );
     }
 
     pub fn hit(&self, x: f32, y: f32) -> Option<Hit> {
-        self.hits.iter().find(|(_, [hx, hy, hw, hh])| x >= *hx && x < hx + hw && y >= *hy && y < hy + hh).map(|(h, _)| *h)
+        self.hits
+            .iter()
+            .find(|(_, [hx, hy, hw, hh])| x >= *hx && x < hx + hw && y >= *hy && y < hy + hh)
+            .map(|(h, _)| *h)
     }
 }
 
@@ -278,7 +368,11 @@ mod tests {
         let mut s = Search::new(1, None);
         s.query = "error".into();
         s.update(&mut t);
-        assert_eq!(s.counter(), "3/3", "sin mayúsculas no distingue; empieza por la última");
+        assert_eq!(
+            s.counter(),
+            "3/3",
+            "sin mayúsculas no distingue; empieza por la última"
+        );
         s.step(&mut t, true);
         assert_eq!(s.counter(), "2/3");
         s.step(&mut t, true);
@@ -291,7 +385,11 @@ mod tests {
         assert!(t.grid().display_offset() > 0);
         s.query = "(a+b)".into();
         s.update(&mut t);
-        assert_eq!(s.counter(), "1/1", "se busca literal, no como expresión regular");
+        assert_eq!(
+            s.counter(),
+            "1/1",
+            "se busca literal, no como expresión regular"
+        );
         s.query = "nada".into();
         s.update(&mut t);
         assert_eq!(s.counter(), "Sin resultados");
@@ -308,6 +406,10 @@ mod tests {
         s.update(&mut t);
         let h = s.highlights(&t);
         assert_eq!(h.all.len(), 3);
-        assert_eq!(h.current.as_ref().map(|m| *m.start()), Some(Point::new(Line(1), Column(3))), "la última");
+        assert_eq!(
+            h.current.as_ref().map(|m| *m.start()),
+            Some(Point::new(Line(1), Column(3))),
+            "la última"
+        );
     }
 }

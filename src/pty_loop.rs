@@ -67,11 +67,23 @@ impl<U: EventListener + Send + 'static> PtyLoop<U> {
         blocks: Arc<Mutex<BlockState>>,
     ) -> io::Result<Self> {
         let (tx, rx) = mpsc::channel();
-        Ok(Self { poll: Poller::new()?.into(), pty, rx, peeked: None, tx, terminal, event_proxy, blocks })
+        Ok(Self {
+            poll: Poller::new()?.into(),
+            pty,
+            rx,
+            peeked: None,
+            tx,
+            terminal,
+            event_proxy,
+            blocks,
+        })
     }
 
     pub fn sender(&self) -> PtySender {
-        PtySender { tx: self.tx.clone(), poller: self.poll.clone() }
+        PtySender {
+            tx: self.tx.clone(),
+            poller: self.poll.clone(),
+        }
     }
 
     fn has_pending(&mut self) -> bool {
@@ -95,7 +107,13 @@ impl<U: EventListener + Send + 'static> PtyLoop<U> {
 
     /// Pasa los bytes al parser deteniéndose en cada marca de shell para aplicarla. Los informes
     /// de estado (OSC 7501) van a `BlockState::program` y su consulta se contesta.
-    fn feed(state: &mut State, term: &mut Term<U>, bytes: &[u8], blocks: &Mutex<BlockState>, proxy: &U) {
+    fn feed(
+        state: &mut State,
+        term: &mut Term<U>,
+        bytes: &[u8],
+        blocks: &Mutex<BlockState>,
+        proxy: &U,
+    ) {
         let mut marks = std::mem::take(&mut state.marks);
         marks.clear();
         state.scanner.scan(bytes, &mut marks);
@@ -118,7 +136,10 @@ impl<U: EventListener + Send + 'static> PtyLoop<U> {
                 match report {
                     crate::status::Report::Query => {
                         let end = if st { "\x1b\\" } else { "\x07" };
-                        proxy.send_event(Event::PtyWrite(format!("\x1b]7501;{}{end}", crate::status::REPLY)));
+                        proxy.send_event(Event::PtyWrite(format!(
+                            "\x1b]7501;{}{end}",
+                            crate::status::REPLY
+                        )));
                     }
                     other => bs.program.apply(other),
                 }
@@ -156,7 +177,13 @@ impl<U: EventListener + Send + 'static> PtyLoop<U> {
                 }),
             };
 
-            Self::feed(state, terminal, &buf[..unprocessed], &self.blocks, &self.event_proxy);
+            Self::feed(
+                state,
+                terminal,
+                &buf[..unprocessed],
+                &self.blocks,
+                &self.event_proxy,
+            );
             processed += unprocessed;
             unprocessed = 0;
 
@@ -177,7 +204,9 @@ impl<U: EventListener + Send + 'static> PtyLoop<U> {
             if state.writing.is_none() {
                 state.writing = state.write_list.pop_front().map(|b| (b, 0));
             }
-            let Some((bytes, written)) = state.writing.as_mut() else { return Ok(()) };
+            let Some((bytes, written)) = state.writing.as_mut() else {
+                return Ok(());
+            };
             match self.pty.writer().write(&bytes[*written..]) {
                 Ok(0) => return Ok(()),
                 Ok(n) => {
@@ -244,7 +273,9 @@ impl<U: EventListener + Send + 'static> PtyLoop<U> {
                     for event in events.iter() {
                         match event.key {
                             PTY_CHILD_EVENT_TOKEN => {
-                                if let Some(tty::ChildEvent::Exited(status)) = self.pty.next_child_event() {
+                                if let Some(tty::ChildEvent::Exited(status)) =
+                                    self.pty.next_child_event()
+                                {
                                     if let Some(status) = status {
                                         self.event_proxy.send_event(Event::ChildExit(status));
                                     }

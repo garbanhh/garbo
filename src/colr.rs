@@ -2,7 +2,9 @@
 //! skrifa recorre el grafo de pintura del glifo y tiny-skia lo rasteriza en CPU.
 //! Solo se ejecuta la primera vez que aparece cada emoji: el resultado queda en el atlas.
 
-use skrifa::color::{Brush, ColorGlyphFormat, ColorPainter, ColorStop, CompositeMode, Extend, Transform};
+use skrifa::color::{
+    Brush, ColorGlyphFormat, ColorPainter, ColorStop, CompositeMode, Extend, Transform,
+};
 use skrifa::instance::{LocationRef, Size};
 use skrifa::outline::{DrawSettings, OutlinePen};
 use skrifa::raw::types::BoundingBox;
@@ -17,7 +19,9 @@ pub struct ColorBitmap {
 }
 
 pub fn has_colrv1(font: &FontRef, gid: u16) -> bool {
-    font.color_glyphs().get_with_format(GlyphId::new(gid as u32), ColorGlyphFormat::ColrV1).is_some()
+    font.color_glyphs()
+        .get_with_format(GlyphId::new(gid as u32), ColorGlyphFormat::ColrV1)
+        .is_some()
 }
 
 /// Rasteriza el glifo para que quepa en `max_w` x `max_h` píxeles.
@@ -25,26 +29,38 @@ pub fn render(font: &FontRef, gid: u16, max_w: f32, max_h: f32) -> Option<ColorB
     let glyph = font
         .color_glyphs()
         .get_with_format(GlyphId::new(gid as u32), ColorGlyphFormat::ColrV1)?;
-    let upem = font.metrics(Size::unscaled(), LocationRef::default()).units_per_em as f32;
-    let bbox = glyph.bounding_box(LocationRef::default(), Size::unscaled()).unwrap_or(BoundingBox {
-        x_min: 0.0,
-        y_min: -0.2 * upem,
-        x_max: upem,
-        y_max: 0.8 * upem,
-    });
+    let upem = font
+        .metrics(Size::unscaled(), LocationRef::default())
+        .units_per_em as f32;
+    let bbox = glyph
+        .bounding_box(LocationRef::default(), Size::unscaled())
+        .unwrap_or(BoundingBox {
+            x_min: 0.0,
+            y_min: -0.2 * upem,
+            x_max: upem,
+            y_max: 0.8 * upem,
+        });
     let (bw, bh) = (bbox.x_max - bbox.x_min, bbox.y_max - bbox.y_min);
     if bw <= 0.0 || bh <= 0.0 {
         return None;
     }
     let s = (max_w / bw).min(max_h / bh);
-    let (w, h) = ((bw * s).ceil().max(1.0) as u32, (bh * s).ceil().max(1.0) as u32);
+    let (w, h) = (
+        (bw * s).ceil().max(1.0) as u32,
+        (bh * s).ceil().max(1.0) as u32,
+    );
 
     // Unidades de fuente (Y hacia arriba) -> píxeles (Y hacia abajo).
     let base = sk::Transform::from_row(s, 0.0, 0.0, -s, -bbox.x_min * s, bbox.y_max * s);
     let palette: Vec<sk::Color> = font
         .color_palettes()
         .get(0)
-        .map(|p| p.colors().iter().map(|c| sk::Color::from_rgba8(c.red, c.green, c.blue, c.alpha)).collect())
+        .map(|p| {
+            p.colors()
+                .iter()
+                .map(|c| sk::Color::from_rgba8(c.red, c.green, c.blue, c.alpha))
+                .collect()
+        })
         .unwrap_or_default();
 
     let mut p = Painter {
@@ -65,7 +81,11 @@ pub fn render(font: &FontRef, gid: u16, max_w: f32, max_h: f32) -> Option<ColorB
         let c = px.demultiply();
         rgba.extend_from_slice(&[c.red(), c.green(), c.blue(), c.alpha()]);
     }
-    Some(ColorBitmap { width: w, height: h, rgba })
+    Some(ColorBitmap {
+        width: w,
+        height: h,
+        rgba,
+    })
 }
 
 struct Painter<'a> {
@@ -108,13 +128,20 @@ impl Painter<'_> {
 
     fn color(&self, palette_index: u16, alpha: f32) -> sk::Color {
         // 0xFFFF = "color del texto": en emoji casi no se usa.
-        let mut c = self.palette.get(palette_index as usize).copied().unwrap_or(sk::Color::BLACK);
+        let mut c = self
+            .palette
+            .get(palette_index as usize)
+            .copied()
+            .unwrap_or(sk::Color::BLACK);
         c.apply_opacity(alpha);
         c
     }
 
     fn stops(&self, stops: &[ColorStop]) -> Vec<sk::GradientStop> {
-        stops.iter().map(|s| sk::GradientStop::new(s.offset, self.color(s.palette_index, s.alpha))).collect()
+        stops
+            .iter()
+            .map(|s| sk::GradientStop::new(s.offset, self.color(s.palette_index, s.alpha)))
+            .collect()
     }
 
     fn push_mask(&mut self, path: Option<sk::Path>) {
@@ -196,14 +223,18 @@ impl ColorPainter for Painter<'_> {
     fn push_clip_glyph(&mut self, glyph_id: GlyphId) {
         let mut pen = PathPen(sk::PathBuilder::new());
         if let Some(outline) = self.font.outline_glyphs().get(glyph_id) {
-            let _ = outline.draw(DrawSettings::unhinted(Size::unscaled(), LocationRef::default()), &mut pen);
+            let _ = outline.draw(
+                DrawSettings::unhinted(Size::unscaled(), LocationRef::default()),
+                &mut pen,
+            );
         }
         let path = pen.0.finish();
         self.push_mask(path);
     }
 
     fn push_clip_box(&mut self, b: BoundingBox<f32>) {
-        let path = sk::Rect::from_ltrb(b.x_min, b.y_min, b.x_max, b.y_max).map(sk::PathBuilder::from_rect);
+        let path =
+            sk::Rect::from_ltrb(b.x_min, b.y_min, b.x_max, b.y_max).map(sk::PathBuilder::from_rect);
         self.push_mask(path);
     }
 
@@ -214,10 +245,20 @@ impl ColorPainter for Painter<'_> {
     fn fill(&mut self, brush: Brush<'_>) {
         let t = self.transform();
         let shader = match brush {
-            Brush::Solid { palette_index, alpha } => sk::Shader::SolidColor(self.color(palette_index, alpha)),
-            Brush::LinearGradient { p0, p1, color_stops, extend } => {
+            Brush::Solid {
+                palette_index,
+                alpha,
+            } => sk::Shader::SolidColor(self.color(palette_index, alpha)),
+            Brush::LinearGradient {
+                p0,
+                p1,
+                color_stops,
+                extend,
+            } => {
                 if color_stops.len() == 1 {
-                    sk::Shader::SolidColor(self.color(color_stops[0].palette_index, color_stops[0].alpha))
+                    sk::Shader::SolidColor(
+                        self.color(color_stops[0].palette_index, color_stops[0].alpha),
+                    )
                 } else {
                     match sk::LinearGradient::new(
                         sk::Point::from_xy(p0.x, p0.y),
@@ -231,7 +272,14 @@ impl ColorPainter for Painter<'_> {
                     }
                 }
             }
-            Brush::RadialGradient { c0, r0, c1, r1, color_stops, extend } => {
+            Brush::RadialGradient {
+                c0,
+                r0,
+                c1,
+                r1,
+                color_stops,
+                extend,
+            } => {
                 // tiny-skia solo admite radio inicial 0: con círculos concéntricos se reajustan las paradas.
                 let mut stops = self.stops(color_stops);
                 let (start, end, radius) = if r0.abs() < 1e-3 {
@@ -240,7 +288,12 @@ impl ColorPainter for Painter<'_> {
                     let k = (r0 / r1).clamp(0.0, 1.0);
                     stops = color_stops
                         .iter()
-                        .map(|s| sk::GradientStop::new(k + s.offset * (1.0 - k), self.color(s.palette_index, s.alpha)))
+                        .map(|s| {
+                            sk::GradientStop::new(
+                                k + s.offset * (1.0 - k),
+                                self.color(s.palette_index, s.alpha),
+                            )
+                        })
                         .collect();
                     (c1, c1, r1)
                 } else {
@@ -255,7 +308,9 @@ impl ColorPainter for Painter<'_> {
                     t,
                 ) {
                     Some(s) => s,
-                    None => sk::Shader::SolidColor(self.color(color_stops[0].palette_index, color_stops[0].alpha)),
+                    None => sk::Shader::SolidColor(
+                        self.color(color_stops[0].palette_index, color_stops[0].alpha),
+                    ),
                 }
             }
             Brush::SweepGradient { color_stops, .. } => {
@@ -264,7 +319,11 @@ impl ColorPainter for Painter<'_> {
                 sk::Shader::SolidColor(self.color(s.palette_index, s.alpha))
             }
         };
-        let paint = sk::Paint { shader, anti_alias: true, ..Default::default() };
+        let paint = sk::Paint {
+            shader,
+            anti_alias: true,
+            ..Default::default()
+        };
         let rect = sk::Rect::from_xywh(0.0, 0.0, self.w as f32, self.h as f32).unwrap();
         let mask = self.clips.last();
         if let Some(layer) = self.layers.last_mut() {
@@ -285,7 +344,10 @@ impl ColorPainter for Painter<'_> {
         }
         let top = self.layers.pop().unwrap();
         let mode = self.modes.pop().unwrap_or(CompositeMode::SrcOver);
-        let paint = sk::PixmapPaint { blend_mode: blend(mode), ..Default::default() };
+        let paint = sk::PixmapPaint {
+            blend_mode: blend(mode),
+            ..Default::default()
+        };
         if let Some(below) = self.layers.last_mut() {
             below.draw_pixmap(0, 0, top.as_ref(), &paint, sk::Transform::identity(), None);
         }

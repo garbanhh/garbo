@@ -173,7 +173,10 @@ impl Completions {
 
 /// Longitud en bytes (en límite de carácter) del prefijo común.
 fn common_prefix(a: &str, b: &str) -> usize {
-    a.char_indices().zip(b.chars()).find(|((_, x), y)| x != y).map_or(a.len().min(b.len()), |((i, _), _)| i)
+    a.char_indices()
+        .zip(b.chars())
+        .find(|((_, x), y)| x != y)
+        .map_or(a.len().min(b.len()), |((i, _), _)| i)
 }
 
 /// ¿Tiene caracteres de control? Escritos en el PTY, un salto de línea equivale a Intro y un ESC
@@ -253,7 +256,12 @@ impl Lexer {
 
 fn lex(input: &str) -> Lexed {
     let chars: Vec<char> = input.chars().collect();
-    let mut lx = Lexer { out: Lexed::default(), in_word: false, word_redirect: false, redirect: false };
+    let mut lx = Lexer {
+        out: Lexed::default(),
+        in_word: false,
+        word_redirect: false,
+        redirect: false,
+    };
     let (mut sq, mut dq, mut esc) = (false, false, false);
     let mut i = 0;
     while i < chars.len() {
@@ -324,14 +332,16 @@ fn lex(input: &str) -> Lexed {
 
 fn is_assignment(w: &str) -> bool {
     w.split_once('=').is_some_and(|(n, _)| {
-        !n.is_empty() && n.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') && !n.starts_with(|c: char| c.is_ascii_digit())
+        !n.is_empty()
+            && n.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+            && !n.starts_with(|c: char| c.is_ascii_digit())
     })
 }
 
 /// Órdenes que ejecutan la palabra siguiente.
 const WRAPPERS: &[&str] = &[
-    "sudo", "doas", "pkexec", "time", "nohup", "exec", "command", "builtin", "nice", "env", "watch", "xargs",
-    "strace", "ltrace", "stdbuf", "timeout", "unbuffer",
+    "sudo", "doas", "pkexec", "time", "nohup", "exec", "command", "builtin", "nice", "env",
+    "watch", "xargs", "strace", "ltrace", "stdbuf", "timeout", "unbuffer",
 ];
 
 /// La orden de la línea y sus argumentos ya escritos, saltando asignaciones y envoltorios
@@ -347,7 +357,12 @@ fn split_command(words: &[String]) -> Option<(&str, &[String])> {
         if WRAPPERS.contains(&w) {
             i += 1;
             while let Some(a) = words.get(i) {
-                if matches!(w, "sudo" | "doas") && matches!(a.as_str(), "-u" | "-g" | "-C" | "-D" | "-h" | "-p" | "-r" | "-t" | "-U") {
+                if matches!(w, "sudo" | "doas")
+                    && matches!(
+                        a.as_str(),
+                        "-u" | "-g" | "-C" | "-D" | "-h" | "-p" | "-r" | "-t" | "-U"
+                    )
+                {
                     i += 2;
                 } else if a.starts_with('-') || (w == "env" && is_assignment(a)) {
                     i += 1;
@@ -380,14 +395,20 @@ pub fn complete(input: &str, cwd: Option<&Path>) -> Option<Completions> {
         paths(q, cwd, Filter::All, &mut cands);
     } else {
         match split_command(&lx.words) {
-            None if q.contains('/') || q.starts_with('.') || q.starts_with('~') => paths(q, cwd, Filter::Exec, &mut cands),
+            None if q.contains('/') || q.starts_with('.') || q.starts_with('~') => {
+                paths(q, cwd, Filter::Exec, &mut cands)
+            }
             None if q.is_empty() => return None,
             None => commands(&mut cands),
             Some(_) if q.starts_with('-') => {}
             Some((cmd, args)) => arguments(cmd, args, q, cwd, &mut cands),
         }
     }
-    Some(Completions { start: lx.start, word: lx.raw, items: rank(q, cands) })
+    Some(Completions {
+        start: lx.start,
+        word: lx.raw,
+        items: rank(q, cands),
+    })
 }
 
 fn arguments(cmd: &str, args: &[String], q: &str, cwd: Option<&Path>, out: &mut Vec<Cand>) {
@@ -449,25 +470,44 @@ fn paths(q: &str, cwd: Option<&Path>, filter: Filter, out: &mut Vec<Cand>) {
     use std::os::unix::fs::PermissionsExt;
     if q.starts_with('~') && !q.contains('/') {
         let label = "~/".to_string();
-        out.push(Cand { key: "~".into(), insert: label.clone(), label, kind: Kind::Dir, detail: "carpeta personal".into(), skip: 0 });
+        out.push(Cand {
+            key: "~".into(),
+            insert: label.clone(),
+            label,
+            kind: Kind::Dir,
+            detail: "carpeta personal".into(),
+            skip: 0,
+        });
         return;
     }
     let cut = q.rfind('/').map_or(0, |i| i + 1);
     let (dir_part, base) = q.split_at(cut);
-    let Some(dir) = (if dir_part.is_empty() { cwd.map(Path::to_path_buf) } else { expand(dir_part, cwd) }) else { return };
-    let Ok(rd) = std::fs::read_dir(&dir) else { return };
+    let Some(dir) = (if dir_part.is_empty() {
+        cwd.map(Path::to_path_buf)
+    } else {
+        expand(dir_part, cwd)
+    }) else {
+        return;
+    };
+    let Ok(rd) = std::fs::read_dir(&dir) else {
+        return;
+    };
     let prefix = match dir_part.strip_prefix("~/") {
         Some(rest) => format!("~/{}", escape(rest)),
         None => escape(dir_part),
     };
     let hidden = base.starts_with('.');
     for e in rd.flatten().take(MAX_DIR_ENTRIES) {
-        let Ok(name) = e.file_name().into_string() else { continue };
+        let Ok(name) = e.file_name().into_string() else {
+            continue;
+        };
         if name.starts_with('.') && !hidden {
             continue;
         }
         // Los enlaces cuentan como aquello a lo que apuntan.
-        let Ok(meta) = std::fs::metadata(e.path()) else { continue };
+        let Ok(meta) = std::fs::metadata(e.path()) else {
+            continue;
+        };
         let is_dir = meta.is_dir();
         let exec = !is_dir && meta.permissions().mode() & 0o111 != 0;
         match filter {
@@ -482,7 +522,11 @@ fn paths(q: &str, cwd: Option<&Path>, filter: Filter, out: &mut Vec<Cand>) {
         } else {
             Kind::File
         };
-        let (label, end) = if is_dir { (format!("{name}/"), "/") } else { (name.clone(), " ") };
+        let (label, end) = if is_dir {
+            (format!("{name}/"), "/")
+        } else {
+            (name.clone(), " ")
+        };
         out.push(Cand {
             insert: format!("{prefix}{}{end}", escape(&name)),
             key: name,
@@ -519,7 +563,14 @@ fn list(items: &[(&'static str, &'static str)], out: &mut Vec<Cand>) {
 }
 
 fn simple(name: &str, kind: Kind, detail: Cow<'static, str>) -> Cand {
-    Cand { key: name.into(), label: name.into(), insert: format!("{} ", escape(name)), kind, detail, skip: 0 }
+    Cand {
+        key: name.into(),
+        label: name.into(),
+        insert: format!("{} ", escape(name)),
+        kind,
+        detail,
+        skip: 0,
+    }
 }
 
 // ---------- git ----------
@@ -580,7 +631,10 @@ fn git(args: &[String], q: &str, cwd: Option<&Path>, out: &mut Vec<Cand>) {
     let mut i = 0;
     let mut dir = cwd.map(Path::to_path_buf);
     while let Some(a) = args.get(i).filter(|a| a.starts_with('-')) {
-        if matches!(a.as_str(), "-C" | "-c" | "--git-dir" | "--work-tree" | "--namespace") {
+        if matches!(
+            a.as_str(),
+            "-C" | "-c" | "--git-dir" | "--work-tree" | "--namespace"
+        ) {
             if a == "-C" {
                 dir = args.get(i + 1).and_then(|d| expand(d, cwd));
             }
@@ -590,7 +644,11 @@ fn git(args: &[String], q: &str, cwd: Option<&Path>, out: &mut Vec<Cand>) {
     }
     let Some(sub) = args.get(i) else {
         list(GIT, out);
-        out.extend(git_aliases().into_iter().map(|(n, v)| simple(&n, Kind::Alias, v.into())));
+        out.extend(
+            git_aliases()
+                .into_iter()
+                .map(|(n, v)| simple(&n, Kind::Alias, v.into())),
+        );
         return;
     };
     let positional = args[i + 1..].iter().filter(|a| !a.starts_with('-')).count();
@@ -668,10 +726,18 @@ fn common_dir(git: &Path) -> PathBuf {
 /// Referencias bajo `refs/<kind>/` (archivos sueltos y `packed-refs`), sin el prefijo.
 fn refs(common: &Path, kind: &str) -> Vec<String> {
     fn walk(dir: &Path, prefix: &str, depth: usize, out: &mut Vec<String>) {
-        let Ok(rd) = std::fs::read_dir(dir) else { return };
+        let Ok(rd) = std::fs::read_dir(dir) else {
+            return;
+        };
         for e in rd.flatten() {
-            let Ok(name) = e.file_name().into_string() else { continue };
-            let full = if prefix.is_empty() { name.clone() } else { format!("{prefix}/{name}") };
+            let Ok(name) = e.file_name().into_string() else {
+                continue;
+            };
+            let full = if prefix.is_empty() {
+                name.clone()
+            } else {
+                format!("{prefix}/{name}")
+            };
             if e.file_type().is_ok_and(|t| t.is_dir()) {
                 if depth < 8 {
                     walk(&e.path(), &full, depth + 1, out);
@@ -685,7 +751,11 @@ fn refs(common: &Path, kind: &str) -> Vec<String> {
     walk(&common.join("refs").join(kind), "", 0, &mut out);
     let packed = format!("refs/{kind}/");
     if let Ok(text) = std::fs::read_to_string(common.join("packed-refs")) {
-        out.extend(text.lines().filter_map(|l| l.split_once(' ')?.1.strip_prefix(&packed)).map(str::to_string));
+        out.extend(
+            text.lines()
+                .filter_map(|l| l.split_once(' ')?.1.strip_prefix(&packed))
+                .map(str::to_string),
+        );
     }
     out.sort();
     out.dedup();
@@ -698,26 +768,47 @@ fn branches(repo: Option<&Path>, dwim: bool, out: &mut Vec<Cand>) {
     let Some(git) = repo else { return };
     let common = common_dir(git);
     let local = refs(&common, "heads");
-    let remote: Vec<String> = refs(&common, "remotes").into_iter().filter(|r| !r.ends_with("/HEAD")).collect();
-    out.extend(local.iter().map(|b| simple(b, Kind::Branch, Kind::Branch.name().into())));
+    let remote: Vec<String> = refs(&common, "remotes")
+        .into_iter()
+        .filter(|r| !r.ends_with("/HEAD"))
+        .collect();
+    out.extend(
+        local
+            .iter()
+            .map(|b| simple(b, Kind::Branch, Kind::Branch.name().into())),
+    );
     let mut seen: HashSet<String> = local.iter().cloned().collect();
     for r in remote {
         match r.split_once('/') {
             Some((origin, short)) if dwim => {
                 if seen.insert(short.to_string()) {
-                    out.push(simple(short, Kind::RemoteBranch, format!("rama de {origin}").into()));
+                    out.push(simple(
+                        short,
+                        Kind::RemoteBranch,
+                        format!("rama de {origin}").into(),
+                    ));
                 }
             }
-            _ => out.push(simple(&r, Kind::RemoteBranch, Kind::RemoteBranch.name().into())),
+            _ => out.push(simple(
+                &r,
+                Kind::RemoteBranch,
+                Kind::RemoteBranch.name().into(),
+            )),
         }
     }
 }
 
 fn remotes(repo: Option<&Path>, out: &mut Vec<Cand>) {
     let Some(git) = repo else { return };
-    let Ok(text) = std::fs::read_to_string(common_dir(git).join("config")) else { return };
+    let Ok(text) = std::fs::read_to_string(common_dir(git).join("config")) else {
+        return;
+    };
     for l in text.lines() {
-        if let Some(name) = l.trim().strip_prefix("[remote \"").and_then(|r| r.strip_suffix("\"]")) {
+        if let Some(name) = l
+            .trim()
+            .strip_prefix("[remote \"")
+            .and_then(|r| r.strip_suffix("\"]"))
+        {
             out.push(simple(name, Kind::Remote, Kind::Remote.name().into()));
         }
     }
@@ -734,7 +825,9 @@ fn git_aliases() -> Vec<(String, String)> {
     }
     let mut out = Vec::new();
     for f in files {
-        let Ok(text) = std::fs::read_to_string(f) else { continue };
+        let Ok(text) = std::fs::read_to_string(f) else {
+            continue;
+        };
         let mut in_alias = false;
         for l in text.lines().map(str::trim) {
             if l.starts_with('[') {
@@ -780,7 +873,10 @@ fn cargo(out: &mut Vec<Cand>) {
     // Complementos instalados (`cargo-generate-rpm` -> `cargo generate-rpm`).
     crate::suggest::with_known(|known| {
         for name in known.keys() {
-            if let Some(sub) = name.strip_prefix("cargo-").filter(|s| !s.is_empty() && !CARGO.iter().any(|c| c.0 == *s)) {
+            if let Some(sub) = name
+                .strip_prefix("cargo-")
+                .filter(|s| !s.is_empty() && !CARGO.iter().any(|c| c.0 == *s))
+            {
                 out.push(simple(sub, Kind::Sub, "complemento".into()));
             }
         }
@@ -801,7 +897,11 @@ const JS: &[(&str, &str)] = &[
 ];
 
 fn js(name: &str, args: &[String], cwd: Option<&Path>, out: &mut Vec<Cand>) {
-    let pos: Vec<&str> = args.iter().map(String::as_str).filter(|a| !a.starts_with('-')).collect();
+    let pos: Vec<&str> = args
+        .iter()
+        .map(String::as_str)
+        .filter(|a| !a.starts_with('-'))
+        .collect();
     let scripts = |out: &mut Vec<Cand>| {
         for (n, cmd) in package_scripts(cwd) {
             out.push(simple(&n, Kind::Script, cmd.into()));
@@ -824,17 +924,29 @@ fn js(name: &str, args: &[String], cwd: Option<&Path>, out: &mut Vec<Cand>) {
 fn package_scripts(cwd: Option<&Path>) -> Vec<(String, String)> {
     let Some(cwd) = cwd else { return vec![] };
     for d in cwd.ancestors().take(8) {
-        let Ok(text) = std::fs::read_to_string(d.join("package.json")) else { continue };
-        let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) else { return vec![] };
-        let Some(obj) = v.get("scripts").and_then(|s| s.as_object()) else { return vec![] };
-        return obj.iter().map(|(k, v)| (k.clone(), v.as_str().unwrap_or("").to_string())).collect();
+        let Ok(text) = std::fs::read_to_string(d.join("package.json")) else {
+            continue;
+        };
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) else {
+            return vec![];
+        };
+        let Some(obj) = v.get("scripts").and_then(|s| s.as_object()) else {
+            return vec![];
+        };
+        return obj
+            .iter()
+            .map(|(k, v)| (k.clone(), v.as_str().unwrap_or("").to_string()))
+            .collect();
     }
     vec![]
 }
 
 fn make_targets(cwd: Option<&Path>, out: &mut Vec<Cand>) {
     let Some(cwd) = cwd else { return };
-    let Some(text) = ["GNUmakefile", "makefile", "Makefile"].iter().find_map(|f| std::fs::read_to_string(cwd.join(f)).ok()) else {
+    let Some(text) = ["GNUmakefile", "makefile", "Makefile"]
+        .iter()
+        .find_map(|f| std::fs::read_to_string(cwd.join(f)).ok())
+    else {
         return;
     };
     let mut seen = HashSet::new();
@@ -842,7 +954,9 @@ fn make_targets(cwd: Option<&Path>, out: &mut Vec<Cand>) {
         if l.starts_with([' ', '\t', '#', '.']) {
             continue;
         }
-        let Some((head, rest)) = l.split_once(':') else { continue };
+        let Some((head, rest)) = l.split_once(':') else {
+            continue;
+        };
         if rest.starts_with('=') || head.contains(['=', '$', '%']) {
             continue;
         }
@@ -856,16 +970,25 @@ fn make_targets(cwd: Option<&Path>, out: &mut Vec<Cand>) {
 
 /// Equipos de `~/.ssh/config` (sin comodines). Admite `usuario@equipo`.
 fn hosts(q: &str, end: &str, out: &mut Vec<Cand>) {
-    let Some(text) = dirs::home_dir().and_then(|h| std::fs::read_to_string(h.join(".ssh/config")).ok()) else { return };
+    let Some(text) =
+        dirs::home_dir().and_then(|h| std::fs::read_to_string(h.join(".ssh/config")).ok())
+    else {
+        return;
+    };
     let at = q.rfind('@').map_or(0, |i| i + 1);
     let user = &q[..at];
     for l in text.lines() {
         let l = l.trim();
-        let Some((k, v)) = l.split_once(char::is_whitespace) else { continue };
+        let Some((k, v)) = l.split_once(char::is_whitespace) else {
+            continue;
+        };
         if !k.eq_ignore_ascii_case("host") {
             continue;
         }
-        for h in v.split_whitespace().filter(|h| !h.contains(['*', '?', '!'])) {
+        for h in v
+            .split_whitespace()
+            .filter(|h| !h.contains(['*', '?', '!']))
+        {
             out.push(Cand {
                 key: h.into(),
                 label: h.into(),
@@ -1012,8 +1135,20 @@ fn rank(q: &str, cands: Vec<Cand>) -> Vec<Item> {
                 score -= c.key.chars().count() as i32;
             }
             // La descripción solo se dibuja, pero sin controles (p. ej. un script de package.json).
-            let detail = if has_control(&c.detail) { c.detail.replace(char::is_control, " ").into() } else { c.detail };
-            Some(Item { label: c.label, insert: c.insert, kind: c.kind, detail, hits, tier, score })
+            let detail = if has_control(&c.detail) {
+                c.detail.replace(char::is_control, " ").into()
+            } else {
+                c.detail
+            };
+            Some(Item {
+                label: c.label,
+                insert: c.insert,
+                kind: c.kind,
+                detail,
+                hits,
+                tier,
+                score,
+            })
         })
         .collect();
     items.sort_by(|a, b| {
@@ -1052,7 +1187,16 @@ pub struct Menu {
 
 impl Menu {
     pub fn new(tab: u64, input: String, comp: Completions) -> Self {
-        Self { tab, input, comp, selected: 0, top: 0, auto: false, rect: None, wheel: 0.0 }
+        Self {
+            tab,
+            input,
+            comp,
+            selected: 0,
+            top: 0,
+            auto: false,
+            rect: None,
+            wheel: 0.0,
+        }
     }
 
     /// Marca el menú como abierto solo al escribir (ver `auto`).
@@ -1072,7 +1216,8 @@ impl Menu {
     pub fn page(&mut self, d: i32) {
         let n = self.comp.items.len();
         if n > 0 {
-            self.selected = (self.selected as i32 + d * MENU_ROWS as i32).clamp(0, n as i32 - 1) as usize;
+            self.selected =
+                (self.selected as i32 + d * MENU_ROWS as i32).clamp(0, n as i32 - 1) as usize;
             self.keep_visible();
         }
     }
@@ -1131,7 +1276,8 @@ impl Menu {
     }
 
     pub fn contains(&self, x: f32, y: f32) -> bool {
-        self.rect.is_some_and(|[rx, ry, w, h, ..]| x >= rx && x < rx + w && y >= ry && y < ry + h)
+        self.rect
+            .is_some_and(|[rx, ry, w, h, ..]| x >= rx && x < rx + w && y >= ry && y < ry + h)
     }
 }
 
@@ -1143,7 +1289,10 @@ mod tests {
     fn lectura_de_la_linea() {
         let l = lex("git checkout ma");
         assert_eq!(l.words, ["git", "checkout"]);
-        assert_eq!((l.start, l.raw.as_str(), l.value.as_str()), (13, "ma", "ma"));
+        assert_eq!(
+            (l.start, l.raw.as_str(), l.value.as_str()),
+            (13, "ma", "ma")
+        );
         let l = lex("cd ");
         assert_eq!(l.words, ["cd"]);
         assert_eq!((l.start, l.raw.as_str()), (3, ""));
@@ -1167,7 +1316,10 @@ mod tests {
         assert_eq!(split_command(&w(&[])), None);
         assert_eq!(split_command(&w(&["sudo"])), None, "tras sudo va una orden");
         assert_eq!(split_command(&w(&["sudo", "-u", "pepe"])), None);
-        assert_eq!(split_command(&w(&["FOO=1", "env", "A=2", "git"])).map(|c| c.0), Some("git"));
+        assert_eq!(
+            split_command(&w(&["FOO=1", "env", "A=2", "git"])).map(|c| c.0),
+            Some("git")
+        );
         let wo = w(&["sudo", "dnf", "install"]);
         let (cmd, args) = split_command(&wo).unwrap();
         assert_eq!((cmd, args.len()), ("dnf", 1));
@@ -1176,17 +1328,41 @@ mod tests {
     #[test]
     fn busqueda_difusa() {
         assert_eq!(fuzzy("Doc", "Documentos").map(|f| f.0), Some(3));
-        assert_eq!(fuzzy("doc", "Documentos").map(|f| f.0), Some(2), "sin distinguir mayúsculas");
+        assert_eq!(
+            fuzzy("doc", "Documentos").map(|f| f.0),
+            Some(2),
+            "sin distinguir mayúsculas"
+        );
         assert_eq!(fuzzy("vid", "Vídeos").map(|f| f.0), Some(2), "sin tildes");
         assert_eq!(fuzzy("ter", "GRBTER").map(|f| f.0), Some(1), "lo contiene");
-        assert_eq!(fuzzy("dent", "dashboard_entrenamiento").map(|f| f.0), Some(0), "letras en orden");
+        assert_eq!(
+            fuzzy("dent", "dashboard_entrenamiento").map(|f| f.0),
+            Some(0),
+            "letras en orden"
+        );
         assert_eq!(fuzzy("x", "GRBTER"), None);
-        assert_eq!(fuzzy("e", "GRBTER"), None, "con una letra solo el principio o el interior seguido");
+        assert_eq!(
+            fuzzy("e", "GRBTER"),
+            None,
+            "con una letra solo el principio o el interior seguido"
+        );
         let (_, _, hits) = fuzzy("dent", "dashboard_entrenamiento").unwrap();
         assert_eq!(hits, [0, 10, 11, 12]);
         // Letras en orden solo si no hay nada mejor.
-        let cand = |k: &str| Cand { key: k.into(), label: k.into(), insert: k.into(), kind: Kind::Command, detail: "".into(), skip: 0 };
-        let labels = |q: &str| rank(q, vec![cand("cargo"), cand("canberra-gtk-play")]).into_iter().map(|i| i.label).collect::<Vec<_>>();
+        let cand = |k: &str| Cand {
+            key: k.into(),
+            label: k.into(),
+            insert: k.into(),
+            kind: Kind::Command,
+            detail: "".into(),
+            skip: 0,
+        };
+        let labels = |q: &str| {
+            rank(q, vec![cand("cargo"), cand("canberra-gtk-play")])
+                .into_iter()
+                .map(|i| i.label)
+                .collect::<Vec<_>>()
+        };
         assert_eq!(labels("carg"), ["cargo"]);
         assert_eq!(labels("cgp"), ["canberra-gtk-play"]);
     }
@@ -1205,12 +1381,24 @@ mod tests {
         let labels = |c: &Completions| c.items.iter().map(|i| i.label.clone()).collect::<Vec<_>>();
 
         let c = complete("cd ", cwd).unwrap();
-        assert_eq!(labels(&c), ["Descargas/", "Documentos/", "Mi carpeta/"], "solo carpetas, sin ocultas");
+        assert_eq!(
+            labels(&c),
+            ["Descargas/", "Documentos/", "Mi carpeta/"],
+            "solo carpetas, sin ocultas"
+        );
         let c = complete("cd doc", cwd).unwrap();
         assert_eq!(labels(&c), ["Documentos/"]);
-        assert_eq!(c.accept_bytes(0).unwrap(), b"\x7f\x7f\x7fDocumentos/", "se reescribe con sus mayúsculas");
+        assert_eq!(
+            c.accept_bytes(0).unwrap(),
+            b"\x7f\x7f\x7fDocumentos/",
+            "se reescribe con sus mayúsculas"
+        );
         let c = complete("cd Doc", cwd).unwrap();
-        assert_eq!(c.accept_bytes(0).unwrap(), b"umentos/", "si amplía, solo lo que falta");
+        assert_eq!(
+            c.accept_bytes(0).unwrap(),
+            b"umentos/",
+            "si amplía, solo lo que falta"
+        );
         assert_eq!(c.ghost().as_deref(), Some("umentos/"));
         let c = complete("cd D", cwd).unwrap();
         assert_eq!(c.ghost(), None, "dos candidatos: sin sugerencia en gris");
@@ -1223,11 +1411,30 @@ mod tests {
         assert_eq!(labels(&c), [".oculta/"]);
         let c = complete("cat ", cwd).unwrap();
         assert!(labels(&c).contains(&"notas.txt".to_string()));
-        assert_eq!(c.items.iter().find(|i| i.label == "notas.txt").unwrap().insert, "notas.txt ");
-        assert_eq!(complete("ls -", cwd).unwrap().items.len(), 0, "opciones: para bash");
+        assert_eq!(
+            c.items
+                .iter()
+                .find(|i| i.label == "notas.txt")
+                .unwrap()
+                .insert,
+            "notas.txt "
+        );
+        assert_eq!(
+            complete("ls -", cwd).unwrap().items.len(),
+            0,
+            "opciones: para bash"
+        );
         let c = complete("cat not", cwd).unwrap();
-        assert_eq!(labels(&c), ["notas.txt"], "nombres con saltos de línea o ESC: fuera");
-        assert_eq!(replace("x", "a\nb"), None, "nunca se escribe un control en el PTY");
+        assert_eq!(
+            labels(&c),
+            ["notas.txt"],
+            "nombres con saltos de línea o ESC: fuera"
+        );
+        assert_eq!(
+            replace("x", "a\nb"),
+            None,
+            "nunca se escribe un control en el PTY"
+        );
         assert!(complete("", cwd).is_none());
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -1242,13 +1449,31 @@ mod tests {
         std::fs::write(g.join("refs/heads/feature/menu"), "x").unwrap();
         std::fs::write(g.join("refs/remotes/origin/HEAD"), "x").unwrap();
         std::fs::write(g.join("refs/remotes/origin/main"), "x").unwrap();
-        std::fs::write(g.join("packed-refs"), "# pack\nabc refs/remotes/origin/arreglo\n").unwrap();
+        std::fs::write(
+            g.join("packed-refs"),
+            "# pack\nabc refs/remotes/origin/arreglo\n",
+        )
+        .unwrap();
         std::fs::write(g.join("config"), "[core]\n[remote \"origin\"]\n\turl = x\n").unwrap();
         std::fs::create_dir_all(dir.join("src")).unwrap();
         let cwd = Some(dir.join("src"));
-        let labels = |q: &str| complete(q, cwd.as_deref()).unwrap().items.into_iter().map(|i| i.label).collect::<Vec<_>>();
-        assert_eq!(labels("git switch "), ["feature/menu", "main", "arreglo"], "remotas sin local, con nombre corto");
-        assert_eq!(labels("git merge "), ["feature/menu", "main", "origin/arreglo", "origin/main"]);
+        let labels = |q: &str| {
+            complete(q, cwd.as_deref())
+                .unwrap()
+                .items
+                .into_iter()
+                .map(|i| i.label)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            labels("git switch "),
+            ["feature/menu", "main", "arreglo"],
+            "remotas sin local, con nombre corto"
+        );
+        assert_eq!(
+            labels("git merge "),
+            ["feature/menu", "main", "origin/arreglo", "origin/main"]
+        );
         assert_eq!(labels("git push "), ["origin"]);
         assert!(labels("git ch").starts_with(&["checkout".to_string(), "cherry-pick".to_string()]));
         std::fs::remove_dir_all(&dir).ok();
@@ -1265,7 +1490,11 @@ mod tests {
             tier: 3,
             score: 0,
         };
-        let c = Completions { start: 3, word: "pro".into(), items: vec![item("proyecto-a"), item("proyecto-b")] };
+        let c = Completions {
+            start: 3,
+            word: "pro".into(),
+            items: vec![item("proyecto-a"), item("proyecto-b")],
+        };
         assert_eq!(c.common_extension().unwrap(), b"yecto-");
         let mut m = Menu::new(1, "cd pro".into(), c);
         m.move_sel(-1);

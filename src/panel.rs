@@ -127,7 +127,9 @@ impl PanelState {
 
     /// Cuánto está desplegada la fila `i` (0 = cerrada, 1 = abierta).
     fn openness(&self, i: usize, now: Instant) -> f32 {
-        let t = self.anim.map_or(1.0, |t| now.duration_since(t).as_secs_f32() / ANIM.as_secs_f32());
+        let t = self.anim.map_or(1.0, |t| {
+            now.duration_since(t).as_secs_f32() / ANIM.as_secs_f32()
+        });
         let e = ease(t);
         if self.expand == Some(i) {
             e
@@ -140,7 +142,10 @@ impl PanelState {
 
     /// Filas que necesitan su vista previa en este fotograma.
     pub fn previewed(&self, now: Instant) -> impl Iterator<Item = usize> + '_ {
-        [self.expand, self.collapse].into_iter().flatten().filter(move |&i| self.openness(i, now) > 0.0)
+        [self.expand, self.collapse]
+            .into_iter()
+            .flatten()
+            .filter(move |&i| self.openness(i, now) > 0.0)
     }
 
     fn split(&self) -> (Vec<&PortInfo>, Vec<&PortInfo>) {
@@ -150,22 +155,45 @@ impl PanelState {
     /// Alto de una fila de agente con `sub_lines` líneas de subagentes y desplegada `open`.
     fn agent_h(sub_lines: usize, open: f32, m: Metrics, s: f32) -> (f32, f32) {
         let base = 10.0 * s + m.th + 2.0 * s + 2.0 * m.lh + 10.0 * s;
-        let subs = if sub_lines > 0 { 4.0 * s + sub_lines as f32 * (m.lh + 2.0 * s) } else { 0.0 };
+        let subs = if sub_lines > 0 {
+            4.0 * s + sub_lines as f32 * (m.lh + 2.0 * s)
+        } else {
+            0.0
+        };
         let preview = open * (PREVIEW_LINES as f32 * m.plh + 16.0 * s + 8.0 * s);
         ((base + subs).round(), preview)
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn layout(&self, subs: &[usize], x: f32, y: f32, w: f32, h: f32, s: f32, m: Metrics, now: Instant) -> Layout {
+    fn layout(
+        &self,
+        subs: &[usize],
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        s: f32,
+        m: Metrics,
+        now: Instant,
+    ) -> Layout {
         let header_h = (44.0 * s).round();
         let lh = m.lh;
         let port_h = (2.0 * lh + 16.0 * s).round();
         let line_h = (lh + 14.0 * s).round();
         let mut rows = Vec::new();
 
-        let heights: Vec<(f32, f32)> =
-            subs.iter().enumerate().map(|(i, &n)| Self::agent_h(n, self.openness(i, now), m, s)).collect();
-        let agents_content = header_h + heights.iter().map(|(b, p)| b + p).sum::<f32>().max(3.0 * lh) + 8.0 * s;
+        let heights: Vec<(f32, f32)> = subs
+            .iter()
+            .enumerate()
+            .map(|(i, &n)| Self::agent_h(n, self.openness(i, now), m, s))
+            .collect();
+        let agents_content = header_h
+            + heights
+                .iter()
+                .map(|(b, p)| b + p)
+                .sum::<f32>()
+                .max(3.0 * lh)
+            + 8.0 * s;
         let first_h = heights.first().map_or(3.0 * lh, |(b, _)| *b);
         let (agents_h, ports_h) = match (self.agents, self.ports) {
             (true, true) => {
@@ -221,9 +249,17 @@ impl PanelState {
                     }
                 }
             }
-            Section { y: sy, close: close(sy) }
+            Section {
+                y: sy,
+                close: close(sy),
+            }
         });
-        Layout { agents, ports, rows, header_h }
+        Layout {
+            agents,
+            ports,
+            rows,
+            header_h,
+        }
     }
 
     /// `subs`: líneas de subagentes de cada fila de agente.
@@ -285,7 +321,12 @@ impl PanelState {
         p.rect(x, y, w, h, theme.tab_bar, 1.0);
         p.rect(x, y, hair, h, theme.foreground, 0.10);
 
-        let header = |p: &mut Painter, sec: &Section, title: &str, extra: &str, robot: bool, hovered: bool| {
+        let header = |p: &mut Painter,
+                      sec: &Section,
+                      title: &str,
+                      extra: &str,
+                      robot: bool,
+                      hovered: bool| {
             let cy = sec.y + l.header_h / 2.0;
             let ix = x + pad + 7.0 * s;
             if robot {
@@ -301,21 +342,51 @@ impl PanelState {
                 p.circle(cx, cy, r, theme.foreground, 0.12);
             }
             cross(p, cx, cy, 3.5 * s, 1.4 * s, dimc);
-            p.rect(x, sec.y + l.header_h - hair, w, hair, theme.foreground, 0.08);
+            p.rect(
+                x,
+                sec.y + l.header_h - hair,
+                w,
+                hair,
+                theme.foreground,
+                0.08,
+            );
         };
 
         // --- Agentes
         if let Some(sec) = &l.agents {
-            let working = agents.iter().filter(|a| a.status == Status::Working).count();
-            let extra = if working > 0 { format!("{working} trabajando") } else { String::new() };
-            header(p, sec, "Agentes", &extra, true, self.hover == Some(Hit::CloseAgents));
+            let working = agents
+                .iter()
+                .filter(|a| a.status == Status::Working)
+                .count();
+            let extra = if working > 0 {
+                format!("{working} trabajando")
+            } else {
+                String::new()
+            };
+            header(
+                p,
+                sec,
+                "Agentes",
+                &extra,
+                true,
+                self.hover == Some(Hit::CloseAgents),
+            );
             if agents.is_empty() {
-                p.ui_text_in(x + pad, sec.y + l.header_h, lh * 2.5, "Ningún agente en ejecución", dimc, w - 2.0 * pad);
+                p.ui_text_in(
+                    x + pad,
+                    sec.y + l.header_h,
+                    lh * 2.5,
+                    "Ningún agente en ejecución",
+                    dimc,
+                    w - 2.0 * pad,
+                );
             }
             for &(hit, ry, rh) in &l.rows {
                 let Hit::Agent(i) = hit else { continue };
                 let hovered = self.hover == Some(hit);
-                self.draw_agent(p, theme, &agents[i], i, x, ry, w, rh, s, m, now, phase, hovered);
+                self.draw_agent(
+                    p, theme, &agents[i], i, x, ry, w, rh, s, m, now, phase, hovered,
+                );
             }
         }
 
@@ -329,52 +400,167 @@ impl PanelState {
                 1 => "1 servidor web".to_string(),
                 n => format!("{n} servidores web"),
             };
-            header(p, sec, "Puertos", if self.ports_loaded { &extra } else { "buscando…" }, false, self.hover == Some(Hit::ClosePorts));
+            header(
+                p,
+                sec,
+                "Puertos",
+                if self.ports_loaded {
+                    &extra
+                } else {
+                    "buscando…"
+                },
+                false,
+                self.hover == Some(Hit::ClosePorts),
+            );
             if self.ports_loaded && web.is_empty() {
                 let t = "No hay servidores web";
                 let tw = p.ui_measure(t);
-                p.ui_text_in(x + (w - tw) / 2.0, sec.y + l.header_h, 2.0 * lh + 16.0 * s, t, dimc, w);
+                p.ui_text_in(
+                    x + (w - tw) / 2.0,
+                    sec.y + l.header_h,
+                    2.0 * lh + 16.0 * s,
+                    t,
+                    dimc,
+                    w,
+                );
             }
             for &(hit, ry, rh) in &l.rows {
                 match hit {
                     Hit::Port(port) => {
-                        let Some(info) = self.ports_data.iter().find(|p| p.port == port) else { continue };
+                        let Some(info) = self.ports_data.iter().find(|p| p.port == port) else {
+                            continue;
+                        };
                         if self.hover == Some(hit) {
-                            p.rounded(x + 6.0 * s, ry + 2.0 * s, w - 12.0 * s, rh - 4.0 * s, theme.foreground, 0.06, (8.0 * s).round());
+                            p.rounded(
+                                x + 6.0 * s,
+                                ry + 2.0 * s,
+                                w - 12.0 * s,
+                                rh - 4.0 * s,
+                                theme.foreground,
+                                0.06,
+                                (8.0 * s).round(),
+                            );
                         }
                         let proc_name = info.process.clone().unwrap_or_else(|| "sistema".into());
                         if info.web {
-                            p.circle(x + pad + 4.0 * s, ry + 8.0 * s + lh / 2.0, 3.5 * s, theme.palette[2], 1.0);
+                            p.circle(
+                                x + pad + 4.0 * s,
+                                ry + 8.0 * s + lh / 2.0,
+                                3.5 * s,
+                                theme.palette[2],
+                                1.0,
+                            );
                             let tx = x + pad + 16.0 * s;
-                            p.ui_text(tx, ry + 8.0 * s, &format!("localhost:{port}"), theme.foreground, w - (tx - x) - pad - 20.0 * s);
+                            p.ui_text(
+                                tx,
+                                ry + 8.0 * s,
+                                &format!("localhost:{port}"),
+                                theme.foreground,
+                                w - (tx - x) - pad - 20.0 * s,
+                            );
                             p.ui_text(tx, ry + 8.0 * s + lh, &proc_name, dimc, w - (tx - x) - pad);
                             // Flecha "abrir en el navegador"
                             let ax = x + w - pad - 6.0 * s;
                             let ay = ry + 8.0 * s + lh / 2.0;
-                            let c = if self.hover == Some(hit) { theme.foreground } else { dimc };
-                            p.line(ax - 5.0 * s, ay + 5.0 * s, ax + 4.0 * s, ay - 4.0 * s, 1.4 * s, c, 1.0);
-                            p.line(ax - 2.0 * s, ay - 4.0 * s, ax + 4.0 * s, ay - 4.0 * s, 1.4 * s, c, 1.0);
-                            p.line(ax + 4.0 * s, ay - 4.0 * s, ax + 4.0 * s, ay + 2.0 * s, 1.4 * s, c, 1.0);
+                            let c = if self.hover == Some(hit) {
+                                theme.foreground
+                            } else {
+                                dimc
+                            };
+                            p.line(
+                                ax - 5.0 * s,
+                                ay + 5.0 * s,
+                                ax + 4.0 * s,
+                                ay - 4.0 * s,
+                                1.4 * s,
+                                c,
+                                1.0,
+                            );
+                            p.line(
+                                ax - 2.0 * s,
+                                ay - 4.0 * s,
+                                ax + 4.0 * s,
+                                ay - 4.0 * s,
+                                1.4 * s,
+                                c,
+                                1.0,
+                            );
+                            p.line(
+                                ax + 4.0 * s,
+                                ay - 4.0 * s,
+                                ax + 4.0 * s,
+                                ay + 2.0 * s,
+                                1.4 * s,
+                                c,
+                                1.0,
+                            );
                         } else {
                             let tx = x + pad + 16.0 * s;
                             let t = format!(":{port}");
                             let tw = p.ui_text_in(tx, ry, rh, &t, dimc, w * 0.3);
-                            p.ui_text_in(tx + tw + 12.0 * s, ry, rh, &proc_name, dimc, w - (tx - x) - tw - pad);
+                            p.ui_text_in(
+                                tx + tw + 12.0 * s,
+                                ry,
+                                rh,
+                                &proc_name,
+                                dimc,
+                                w - (tx - x) - tw - pad,
+                            );
                         }
                     }
                     Hit::MorePorts => {
                         let cx = x + pad + 4.0 * s;
                         let cy = ry + rh / 2.0;
-                        let c = if self.hover == Some(hit) { theme.foreground } else { dimc };
-                        if self.more_ports {
-                            p.line(cx - 4.0 * s, cy - 2.0 * s, cx, cy + 2.0 * s, 1.5 * s, c, 1.0);
-                            p.line(cx, cy + 2.0 * s, cx + 4.0 * s, cy - 2.0 * s, 1.5 * s, c, 1.0);
+                        let c = if self.hover == Some(hit) {
+                            theme.foreground
                         } else {
-                            p.line(cx - 2.0 * s, cy - 4.0 * s, cx + 2.0 * s, cy, 1.5 * s, c, 1.0);
-                            p.line(cx + 2.0 * s, cy, cx - 2.0 * s, cy + 4.0 * s, 1.5 * s, c, 1.0);
+                            dimc
+                        };
+                        if self.more_ports {
+                            p.line(
+                                cx - 4.0 * s,
+                                cy - 2.0 * s,
+                                cx,
+                                cy + 2.0 * s,
+                                1.5 * s,
+                                c,
+                                1.0,
+                            );
+                            p.line(
+                                cx,
+                                cy + 2.0 * s,
+                                cx + 4.0 * s,
+                                cy - 2.0 * s,
+                                1.5 * s,
+                                c,
+                                1.0,
+                            );
+                        } else {
+                            p.line(
+                                cx - 2.0 * s,
+                                cy - 4.0 * s,
+                                cx + 2.0 * s,
+                                cy,
+                                1.5 * s,
+                                c,
+                                1.0,
+                            );
+                            p.line(
+                                cx + 2.0 * s,
+                                cy,
+                                cx - 2.0 * s,
+                                cy + 4.0 * s,
+                                1.5 * s,
+                                c,
+                                1.0,
+                            );
                         }
                         let n = other.len();
-                        let t = if n == 1 { "1 puerto más (no web)".to_string() } else { format!("{n} puertos más (no web)") };
+                        let t = if n == 1 {
+                            "1 puerto más (no web)".to_string()
+                        } else {
+                            format!("{n} puertos más (no web)")
+                        };
                         p.ui_text_in(x + pad + 16.0 * s, ry, rh, &t, c, w - 2.0 * pad);
                     }
                     _ => {}
@@ -405,10 +591,26 @@ impl PanelState {
         let lh = m.lh;
         let open = self.openness(i, now);
         if hovered || open > 0.0 {
-            p.rounded(x + 6.0 * s, ry + 3.0 * s, w - 12.0 * s, rh - 6.0 * s, theme.foreground, 0.06, (8.0 * s).round());
+            p.rounded(
+                x + 6.0 * s,
+                ry + 3.0 * s,
+                w - 12.0 * s,
+                rh - 6.0 * s,
+                theme.foreground,
+                0.06,
+                (8.0 * s).round(),
+            );
         }
         if a.active {
-            p.rounded(x + 6.0 * s, ry + 10.0 * s, 3.0 * s, m.th + 2.0 * lh, theme.accent, 1.0, 1.5 * s);
+            p.rounded(
+                x + 6.0 * s,
+                ry + 10.0 * s,
+                3.0 * s,
+                m.th + 2.0 * lh,
+                theme.accent,
+                1.0,
+                1.5 * s,
+            );
         }
         let tx = x + pad;
         let right = x + w - pad;
@@ -417,8 +619,21 @@ impl PanelState {
         let top = ry + 10.0 * s;
         let time = sessions::ago(now.duration_since(a.since));
         let tw = p.ui_measure(&time);
-        p.ui_text(right - tw, top + ((m.th - lh) / 2.0).round(), &time, dimc, tw + 2.0);
-        p.ui_text_v(tx, top, a.agent.name, theme.foreground, right - tw - 12.0 * s - tx, UiVariant::Title);
+        p.ui_text(
+            right - tw,
+            top + ((m.th - lh) / 2.0).round(),
+            &time,
+            dimc,
+            tw + 2.0,
+        );
+        p.ui_text_v(
+            tx,
+            top,
+            a.agent.name,
+            theme.foreground,
+            right - tw - 12.0 * s - tx,
+            UiVariant::Title,
+        );
 
         // Directorio y estado
         let l1 = top + m.th + 2.0 * s;
@@ -456,25 +671,57 @@ impl PanelState {
         for sub in a.subagents {
             let mid = (sy + lh / 2.0).round();
             p.line(tree_x, trunk, tree_x, mid, 1.2 * s, theme.foreground, 0.22);
-            p.line(tree_x, mid, tree_x + 7.0 * s, mid, 1.2 * s, theme.foreground, 0.22);
+            p.line(
+                tree_x,
+                mid,
+                tree_x + 7.0 * s,
+                mid,
+                1.2 * s,
+                theme.foreground,
+                0.22,
+            );
             trunk = mid;
             let ix = tx + 18.0 * s;
             if sub.running {
                 spinner(p, ix - 4.0 * s, mid, s * 0.7, theme.accent, phase);
             } else {
                 let c = theme.palette[2];
-                p.line(ix - 3.5 * s, mid, ix - 1.0 * s, mid + 2.5 * s, 1.4 * s, c, 1.0);
-                p.line(ix - 1.0 * s, mid + 2.5 * s, ix + 3.5 * s, mid - 2.5 * s, 1.4 * s, c, 1.0);
+                p.line(
+                    ix - 3.5 * s,
+                    mid,
+                    ix - 1.0 * s,
+                    mid + 2.5 * s,
+                    1.4 * s,
+                    c,
+                    1.0,
+                );
+                p.line(
+                    ix - 1.0 * s,
+                    mid + 2.5 * s,
+                    ix + 3.5 * s,
+                    mid - 2.5 * s,
+                    1.4 * s,
+                    c,
+                    1.0,
+                );
             }
             let elapsed = if sub.running {
-                short_duration(SystemTime::now().duration_since(sub.started).unwrap_or_default())
+                short_duration(
+                    SystemTime::now()
+                        .duration_since(sub.started)
+                        .unwrap_or_default(),
+                )
             } else {
                 String::new()
             };
             let ew = p.ui_measure(&elapsed);
             p.ui_text(right - ew, sy, &elapsed, dimc, ew + 2.0);
             let avail = right - ew - 8.0 * s - sub_x;
-            let (main, extra) = if sub.description.is_empty() { (sub.kind.as_str(), "") } else { (sub.description.as_str(), sub.kind.as_str()) };
+            let (main, extra) = if sub.description.is_empty() {
+                (sub.kind.as_str(), "")
+            } else {
+                (sub.description.as_str(), sub.kind.as_str())
+            };
             let c = if sub.running { theme.foreground } else { dimc };
             let dw = p.ui_text(sub_x, sy, main, c, avail);
             // El tipo, solo si cabe entero.
@@ -503,7 +750,14 @@ impl PanelState {
                 let mut py = by + 8.0 * s;
                 let lines = a.preview.as_deref().unwrap_or_default();
                 if lines.is_empty() && py + m.plh <= by + bh {
-                    p.ui_text_v(px, py, "(pantalla vacía)", dimc, pmax - px, UiVariant::Small);
+                    p.ui_text_v(
+                        px,
+                        py,
+                        "(pantalla vacía)",
+                        dimc,
+                        pmax - px,
+                        UiVariant::Small,
+                    );
                 }
                 for line in lines {
                     if py + m.plh > by + bh {
@@ -525,7 +779,9 @@ impl PanelState {
 
 /// Líneas que ocupan los subagentes de una fila (los que trabajan llevan su actividad debajo).
 pub fn sub_lines(subs: &[SubAgent]) -> usize {
-    subs.iter().map(|s| 1 + usize::from(s.running && s.activity.is_some())).sum()
+    subs.iter()
+        .map(|s| 1 + usize::from(s.running && s.activity.is_some()))
+        .sum()
 }
 
 /// "12 s", "3 min", "1 h"
@@ -547,7 +803,15 @@ pub fn spinner(p: &mut Painter, x: f32, cy: f32, s: f32, c: Rgb, phase: usize) {
 }
 
 fn robot_icon(p: &mut Painter, cx: f32, cy: f32, s: f32, c: Rgb, bg: Rgb) {
-    p.rounded(cx - 7.0 * s, cy - 3.5 * s, 14.0 * s, 10.0 * s, c, 1.0, 3.0 * s);
+    p.rounded(
+        cx - 7.0 * s,
+        cy - 3.5 * s,
+        14.0 * s,
+        10.0 * s,
+        c,
+        1.0,
+        3.0 * s,
+    );
     p.circle(cx - 3.0 * s, cy + 1.5 * s, 1.6 * s, bg, 1.0);
     p.circle(cx + 3.0 * s, cy + 1.5 * s, 1.6 * s, bg, 1.0);
     p.line(cx, cy - 3.5 * s, cx, cy - 6.5 * s, 1.4 * s, c, 1.0);
@@ -566,7 +830,10 @@ mod tests {
 
     #[test]
     fn despliegue_animado() {
-        let mut st = PanelState { agents: true, ..Default::default() };
+        let mut st = PanelState {
+            agents: true,
+            ..Default::default()
+        };
         let t0 = Instant::now();
         assert!(st.set_hover(Some(Hit::Agent(1)), t0));
         assert_eq!(st.openness(1, t0), 0.0);
@@ -588,8 +855,16 @@ mod tests {
 
     #[test]
     fn la_fila_desplegada_no_desaparece() {
-        let st = PanelState { agents: true, expand: Some(0), ..Default::default() };
-        let m = Metrics { lh: 17.0, th: 21.0, plh: 15.0 };
+        let st = PanelState {
+            agents: true,
+            expand: Some(0),
+            ..Default::default()
+        };
+        let m = Metrics {
+            lh: 17.0,
+            th: 21.0,
+            plh: 15.0,
+        };
         let now = Instant::now();
         // Panel muy bajo: la fila cabe sin vista previa; la vista previa se recorta.
         let l = st.layout(&[0], 0.0, 0.0, 300.0, 140.0, 1.0, m, now);

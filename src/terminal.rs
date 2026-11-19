@@ -106,7 +106,10 @@ pub fn term_config(cfg: &Config) -> TermConfig {
     };
     TermConfig {
         scrolling_history: cfg.terminal.scrollback,
-        default_cursor_style: VteCursorStyle { shape, blinking: cfg.terminal.cursor_blink },
+        default_cursor_style: VteCursorStyle {
+            shape,
+            blinking: cfg.terminal.cursor_blink,
+        },
         ..Default::default()
     }
 }
@@ -140,14 +143,25 @@ impl Tab {
         proxy: EventLoopProxy<UserEvent>,
     ) -> std::io::Result<Self> {
         let listener = Listener { tab_id: id, proxy };
-        let size = TermSize { columns: ws.num_cols as usize, lines: ws.num_lines as usize };
-        let term = Arc::new(FairMutex::new(Term::new(term_config(cfg), &size, listener.clone())));
+        let size = TermSize {
+            columns: ws.num_cols as usize,
+            lines: ws.num_lines as usize,
+        };
+        let term = Arc::new(FairMutex::new(Term::new(
+            term_config(cfg),
+            &size,
+            listener.clone(),
+        )));
 
         let mut env = cfg.shell.env.clone();
-        env.entry("TERM".into()).or_insert_with(|| "xterm-256color".into());
+        env.entry("TERM".into())
+            .or_insert_with(|| "xterm-256color".into());
         env.insert("COLORTERM".into(), "truecolor".into());
         env.insert("TERM_PROGRAM".into(), "garbo".into());
-        env.insert("TERM_PROGRAM_VERSION".into(), env!("CARGO_PKG_VERSION").into());
+        env.insert(
+            "TERM_PROGRAM_VERSION".into(),
+            env!("CARGO_PKG_VERSION").into(),
+        );
         // Prompt de Garbo (lo pone la integración de bash; ver shell/garbo.bash).
         if cfg.terminal.garbo_prompt {
             env.insert("GARBO_PROMPT".into(), "1".into());
@@ -164,7 +178,6 @@ impl Tab {
             working_directory: cwd,
             drain_on_exit: false,
             env,
-            ..Default::default()
         };
 
         let pty = tty::new(&opts, ws, id)?;
@@ -229,7 +242,10 @@ impl Tab {
     /// Nuevo título (OSC 0/2): se recuerda qué proceso lo puso.
     pub fn set_title(&mut self, title: String) {
         use std::os::fd::AsRawFd;
-        self.title_owner = self.master.as_ref().and_then(|f| crate::sessions::foreground_pgid(f.as_raw_fd()));
+        self.title_owner = self
+            .master
+            .as_ref()
+            .and_then(|f| crate::sessions::foreground_pgid(f.as_raw_fd()));
         self.title = title;
         self.task = self.compute_task();
     }
@@ -252,7 +268,12 @@ impl Tab {
     /// ¿Espera bash un comando (con la integración de Garbo)? Entre las marcas B y C.
     pub fn at_prompt(&self) -> bool {
         let waiting = self.blocks.lock().unwrap().input_start.is_some();
-        waiting && !self.term.lock().mode().contains(alacritty_terminal::term::TermMode::ALT_SCREEN)
+        waiting
+            && !self
+                .term
+                .lock()
+                .mode()
+                .contains(alacritty_terminal::term::TermMode::ALT_SCREEN)
     }
 
     /// A quién van los atajos de edición (ver `edit.rs`): el prompt, un agente o lo de siempre.
@@ -261,7 +282,10 @@ impl Tab {
         if self.at_prompt() {
             return crate::edit::Context::Prompt;
         }
-        let pgid = self.master.as_ref().and_then(|f| crate::sessions::foreground_pgid(f.as_raw_fd()));
+        let pgid = self
+            .master
+            .as_ref()
+            .and_then(|f| crate::sessions::foreground_pgid(f.as_raw_fd()));
         match pgid.and_then(crate::sessions::identify_agent) {
             Some(a) => crate::edit::Context::Agent(a.name),
             None => crate::edit::Context::Other,
@@ -269,7 +293,11 @@ impl Tab {
     }
 
     /// Flechas para llevar el cursor del prompt a la celda pulsada (`None`: no es lo escrito).
-    pub fn click_moves(&self, p: alacritty_terminal::index::Point, side: alacritty_terminal::index::Side) -> Option<Vec<u8>> {
+    pub fn click_moves(
+        &self,
+        p: alacritty_terminal::index::Point,
+        side: alacritty_terminal::index::Side,
+    ) -> Option<Vec<u8>> {
         let term = self.term.lock();
         let start = self.blocks.lock().unwrap().input_start?;
         crate::edit::click_moves(&term, start, p, side)
@@ -293,7 +321,10 @@ impl Tab {
     pub fn resize(&mut self, ws: WindowSize) {
         self.ws = ws;
         self.sender.send(Msg::Resize(ws));
-        let size = TermSize { columns: ws.num_cols as usize, lines: ws.num_lines as usize };
+        let size = TermSize {
+            columns: ws.num_cols as usize,
+            lines: ws.num_lines as usize,
+        };
         self.term.lock().resize(size);
     }
 
@@ -302,8 +333,13 @@ impl Tab {
         use std::os::fd::AsRawFd;
         let fd = self.master.as_ref().map(|f| f.as_raw_fd());
         let report = self.blocks.lock().unwrap().program.summary();
-        let mut changed = self.session.refresh(fd, self.last_output, viewing, now, report);
-        if self.cwd_checked.is_none_or(|t| now.duration_since(t).as_millis() >= 1000) {
+        let mut changed = self
+            .session
+            .refresh(fd, self.last_output, viewing, now, report);
+        if self
+            .cwd_checked
+            .is_none_or(|t| now.duration_since(t).as_millis() >= 1000)
+        {
             self.cwd_checked = Some(now);
             if let Some(l) = crate::sessions::cwd_label(self.child_pid) {
                 if l != self.cwd_label {
@@ -327,13 +363,18 @@ impl Tab {
     ///   - el shell esperando: el nombre de la carpeta.
     fn compute_task(&self) -> String {
         use std::os::fd::AsRawFd;
-        let fg = self.master.as_ref().and_then(|f| crate::sessions::foreground_pgid(f.as_raw_fd()));
+        let fg = self
+            .master
+            .as_ref()
+            .and_then(|f| crate::sessions::foreground_pgid(f.as_raw_fd()));
         match fg {
             Some(pg) if pg != self.child_pid as i32 => {
                 let title = clean_title(&self.title);
                 if self.title_owner == Some(pg) && !title.is_empty() {
                     title
-                } else if let Some(agent) = self.session.agent.filter(|_| self.session.pid == Some(pg)) {
+                } else if let Some(agent) =
+                    self.session.agent.filter(|_| self.session.pid == Some(pg))
+                {
                     agent.name.to_string()
                 } else {
                     crate::sessions::command_label(pg).unwrap_or_default()
@@ -345,13 +386,21 @@ impl Tab {
 
     /// Directorio actual abreviado (para el panel de agentes).
     pub fn dir_label(&self) -> &str {
-        if self.cwd_label.is_empty() { &self.title } else { &self.cwd_label }
+        if self.cwd_label.is_empty() {
+            &self.title
+        } else {
+            &self.cwd_label
+        }
     }
 
     /// Actualiza los subagentes del agente en primer plano (si sabe lanzarlos).
     pub fn refresh_subagents(&mut self, now: std::time::Instant) -> bool {
-        let pid = self.session.agent.filter(|a| a.subagents).and(self.session.pid);
-        self.subagents.refresh(pid, now)
+        let target = self
+            .session
+            .agent
+            .and_then(|a| a.subagents)
+            .zip(self.session.pid);
+        self.subagents.refresh(target, now)
     }
 
     /// Título visible de la pestaña: lo que se está haciendo (ver `compute_task`).
@@ -400,13 +449,19 @@ pub fn input_for<T>(term: &Term<T>, start: Option<(i64, usize)>) -> Option<Strin
 }
 
 /// Sugerencia para un terminal ya bloqueado (`start` = inicio de lo escrito en el prompt).
-pub fn suggestion_for<T>(term: &Term<T>, start: Option<(i64, usize)>, cwd: Option<&std::path::Path>) -> Option<String> {
+pub fn suggestion_for<T>(
+    term: &Term<T>,
+    start: Option<(i64, usize)>,
+    cwd: Option<&std::path::Path>,
+) -> Option<String> {
     crate::suggest::suggest(&input_for(term, start)?, cwd)
 }
 
 /// Quita del título los símbolos de estado que algunos programas anteponen ("✳ Tarea" -> "Tarea").
 pub fn clean_title(t: &str) -> String {
-    t.trim_start_matches(|c: char| !c.is_alphanumeric() && !"([{\"'¿¡~/.".contains(c)).trim().to_string()
+    t.trim_start_matches(|c: char| !c.is_alphanumeric() && !"([{\"'¿¡~/.".contains(c))
+        .trim()
+        .to_string()
 }
 
 /// Última carpeta de una ruta abreviada ("~/Documentos/Proyectos/GRBTER" -> "GRBTER").
@@ -425,14 +480,23 @@ mod tests {
     #[test]
     fn escribir_no_cuenta_como_trabajo() {
         let t0 = std::time::Instant::now();
-        assert!(is_echo(t0, t0 + std::time::Duration::from_millis(30)), "eco al teclear");
+        assert!(
+            is_echo(t0, t0 + std::time::Duration::from_millis(30)),
+            "eco al teclear"
+        );
         assert!(is_echo(t0, t0 + ECHO_WINDOW));
-        assert!(!is_echo(t0, t0 + ECHO_WINDOW + std::time::Duration::from_millis(1)), "salida propia");
+        assert!(
+            !is_echo(t0, t0 + ECHO_WINDOW + std::time::Duration::from_millis(1)),
+            "salida propia"
+        );
     }
 
     #[test]
     fn titulos_de_pestana() {
-        assert_eq!(clean_title("✳ Rediseñar los ajustes"), "Rediseñar los ajustes");
+        assert_eq!(
+            clean_title("✳ Rediseñar los ajustes"),
+            "Rediseñar los ajustes"
+        );
         assert_eq!(clean_title("⠂ Claude Code"), "Claude Code");
         assert_eq!(clean_title("~/src"), "~/src");
         assert_eq!(short_dir("~/Documentos/Proyectos/GRBTER"), "GRBTER");

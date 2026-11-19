@@ -34,12 +34,24 @@ impl LoadedFont {
         let data = unsafe { Mmap::map(&file).ok()? };
         let f = FontRef::from_index(&data, index as usize)?;
         let (offset, key) = (f.offset, f.key);
-        let color = [b"COLR", b"CBDT", b"sbix"].iter().any(|t| f.table(swash::tag_from_bytes(t)).is_some());
-        Some(Self { data, index, offset, key, color })
+        let color = [b"COLR", b"CBDT", b"sbix"]
+            .iter()
+            .any(|t| f.table(swash::tag_from_bytes(t)).is_some());
+        Some(Self {
+            data,
+            index,
+            offset,
+            key,
+            color,
+        })
     }
 
     fn as_ref(&self) -> FontRef<'_> {
-        FontRef { data: &self.data, offset: self.offset, key: self.key }
+        FontRef {
+            data: &self.data,
+            offset: self.offset,
+            key: self.key,
+        }
     }
 }
 
@@ -108,7 +120,6 @@ impl FontSet {
         line_height: f32,
         mono: bool,
     ) -> Self {
-
         let resolve = |families: &[fontdb::Family], weight, style| -> Option<(PathBuf, u32)> {
             let id = db.query(&fontdb::Query {
                 families,
@@ -117,7 +128,9 @@ impl FontSet {
                 style,
             })?;
             match db.face_source(id)? {
-                (fontdb::Source::File(p), i) | (fontdb::Source::SharedFile(p, _), i) => Some((p, i)),
+                (fontdb::Source::File(p), i) | (fontdb::Source::SharedFile(p, _), i) => {
+                    Some((p, i))
+                }
                 _ => None,
             }
         };
@@ -125,10 +138,13 @@ impl FontSet {
         // fontdb no conoce la monoespaciada del sistema (por defecto asume "Courier New"):
         // probamos la familia pedida, luego los fallbacks monoespaciados y por último cualquiera.
         let has_mono = |name: &str| {
-            db.faces().any(|f| f.monospaced && f.families.iter().any(|(n, _)| n.eq_ignore_ascii_case(name)))
+            db.faces().any(|f| {
+                f.monospaced && f.families.iter().any(|(n, _)| n.eq_ignore_ascii_case(name))
+            })
         };
         let exists = |name: &str| {
-            db.faces().any(|f| f.families.iter().any(|(n, _)| n.eq_ignore_ascii_case(name)))
+            db.faces()
+                .any(|f| f.families.iter().any(|(n, _)| n.eq_ignore_ascii_case(name)))
         };
         let chosen: String = if exists(family) {
             family.to_string()
@@ -158,16 +174,32 @@ impl FontSet {
             let (path, index) = resolve(&fams, w, s)
                 .or_else(|| slots.first().map(|s: &Slot| (s.path.clone(), s.index)))
                 .expect("No se encontró ninguna fuente monoespaciada en el sistema");
-            slots.push(Slot { path, index, font: None });
+            slots.push(Slot {
+                path,
+                index,
+                font: None,
+            });
         }
         log::info!("Fuente: {chosen} ({})", slots[0].path.display());
-        for name in fallbacks.iter().filter(|n| !n.eq_ignore_ascii_case(&chosen)) {
+        for name in fallbacks
+            .iter()
+            .filter(|n| !n.eq_ignore_ascii_case(&chosen))
+        {
             let q = [fontdb::Family::Name(name.as_str())];
             // Solo aceptamos coincidencia exacta de familia para fallbacks.
-            let exact = db.query(&fontdb::Query { families: &q, ..Default::default() });
+            let exact = db.query(&fontdb::Query {
+                families: &q,
+                ..Default::default()
+            });
             if exact.is_some() {
-                if let Some((path, index)) = resolve(&q, fontdb::Weight::NORMAL, fontdb::Style::Normal) {
-                    slots.push(Slot { path, index, font: None });
+                if let Some((path, index)) =
+                    resolve(&q, fontdb::Weight::NORMAL, fontdb::Style::Normal)
+                {
+                    slots.push(Slot {
+                        path,
+                        index,
+                        font: None,
+                    });
                 }
             }
         }
@@ -176,7 +208,13 @@ impl FontSet {
             slots,
             ctx: ScaleContext::new(),
             size_px,
-            metrics: CellMetrics { width: 1.0, height: 1.0, baseline: 1.0, underline_pos: 1.0, stroke: 1.0 },
+            metrics: CellMetrics {
+                width: 1.0,
+                height: 1.0,
+                baseline: 1.0,
+                underline_pos: 1.0,
+                stroke: 1.0,
+            },
             line_height,
             lookup: HashMap::new(),
         };
@@ -222,7 +260,10 @@ impl FontSet {
 
     fn compute_metrics(&mut self, line_height: f32) -> CellMetrics {
         let size = self.size_px;
-        let f = self.slots[0].get().expect("fuente principal ilegible").as_ref();
+        let f = self.slots[0]
+            .get()
+            .expect("fuente principal ilegible")
+            .as_ref();
         let m = f.metrics(&[]).scale(size);
         let gm = f.glyph_metrics(&[]).scale(size);
         let gid = f.charmap().map('M');
@@ -233,7 +274,13 @@ impl FontSet {
         let baseline = ((height - (m.ascent + m.descent.abs())) / 2.0 + m.ascent).round();
         let stroke = (size / 14.0).round().max(1.0);
         let underline_pos = (baseline + (m.descent.abs() * 0.5).max(stroke)).min(height - stroke);
-        CellMetrics { width, height, baseline, underline_pos, stroke }
+        CellMetrics {
+            width,
+            height,
+            baseline,
+            underline_pos,
+            stroke,
+        }
     }
 
     /// Resuelve un carácter a (slot, glyph_id) probando estilo -> regular -> fallbacks.
@@ -328,7 +375,9 @@ impl FontSet {
         match img.content {
             Content::Color => {
                 // Los emoji bitmap vienen grandes (p.ej. 136 px): se escalan a la celda.
-                let scale = (max_w / p.width as f32).min(m.height / p.height as f32).min(1.0);
+                let scale = (max_w / p.width as f32)
+                    .min(m.height / p.height as f32)
+                    .min(1.0);
                 let (w, h) = (
                     ((p.width as f32 * scale).round() as u32).max(1),
                     ((p.height as f32 * scale).round() as u32).max(1),
@@ -344,7 +393,14 @@ impl FontSet {
                 } else {
                     p.top
                 };
-                Some(RasterGlyph { width: w, height: h, left: 0, top, is_color: true, rgba })
+                Some(RasterGlyph {
+                    width: w,
+                    height: h,
+                    left: 0,
+                    top,
+                    is_color: true,
+                    rgba,
+                })
             }
             _ => {
                 let mut rgba = Vec::with_capacity(img.data.len() * 4);

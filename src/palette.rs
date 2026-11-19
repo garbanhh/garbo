@@ -38,9 +38,19 @@ impl Palette {
             })
             .collect();
         for &t in Theme::NAMES {
-            entries.push(Entry { label: format!("Tema: {}", Theme::display_name(t)), hint: String::new(), item: Item::Theme(t) });
+            entries.push(Entry {
+                label: format!("Tema: {}", Theme::display_name(t)),
+                hint: String::new(),
+                item: Item::Theme(t),
+            });
         }
-        let mut p = Self { query: String::new(), selected: 0, entries, filtered: vec![], wheel: 0.0 };
+        let mut p = Self {
+            query: String::new(),
+            selected: 0,
+            entries,
+            filtered: vec![],
+            wheel: 0.0,
+        };
         p.refilter();
         p
     }
@@ -58,7 +68,9 @@ impl Palette {
     }
 
     pub fn entry(&self, idx_in_filtered: usize) -> Option<&Entry> {
-        self.filtered.get(idx_in_filtered).map(|&i| &self.entries[i])
+        self.filtered
+            .get(idx_in_filtered)
+            .map(|&i| &self.entries[i])
     }
 
     pub fn current(&self) -> Option<Item> {

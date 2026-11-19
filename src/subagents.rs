@@ -1,4 +1,4 @@
-//! Subagentes de Claude Code: los agentes que lanza una sesión (herramienta Agent/Task).
+//! Subagentes de las sesiones en primer plano. Las fuentes locales se consultan en solo lectura.
 //!
 //! Claude Code guarda cada sesión en `~/.claude/projects/<proyecto>/<sesión>.jsonl` y, por cada
 //! subagente, `<sesión>/subagents/agent-<id>.jsonl` (su conversación) y `agent-<id>.meta.json`
@@ -14,8 +14,12 @@
 use std::collections::HashMap;
 use std::fs;
 use std::io::{Read, Seek, SeekFrom};
+use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime};
+
+mod transcripts;
+use transcripts::{CodexCache, Location};
 
 /// Cada cuánto se vuelve a mirar la carpeta de subagentes.
 const CHECK_EVERY: Duration = Duration::from_millis(1000);
@@ -42,37 +46,58 @@ pub struct SubAgent {
 
 #[derive(Default)]
 pub struct Watch {
-    pid: i32,
-    dir: Option<PathBuf>,
+    target: Option<(Provider, i32)>,
+    location: Option<Location>,
     resolved: Option<Instant>,
     checked: Option<Instant>,
     /// Actividad ya leída por subagente, con la fecha de modificación de su conversación.
     cache: HashMap<String, (SystemTime, Option<String>)>,
+    codex_cache: CodexCache,
     pub list: Vec<SubAgent>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Provider {
+    Claude,
+    Codex,
+    Gemini,
+}
+
 impl Watch {
-    /// Actualiza la lista para el proceso `pid` (None = no hay Claude Code en primer plano).
+    /// Actualiza la lista del agente en primer plano.
     /// Devuelve `true` si cambió algo visible.
-    pub fn refresh(&mut self, pid: Option<i32>, now: Instant) -> bool {
-        let Some(pid) = pid else {
+    pub fn refresh(&mut self, target: Option<(Provider, i32)>, now: Instant) -> bool {
+        let Some((provider, pid)) = target else {
             let had = !self.list.is_empty();
             *self = Self::default();
             return had;
         };
-        if pid == self.pid && self.checked.is_some_and(|t| now.duration_since(t) < CHECK_EVERY) {
+        let changed_target = target != self.target;
+        if !changed_target
+            && self
+                .checked
+                .is_some_and(|t| now.duration_since(t) < CHECK_EVERY)
+        {
             return false;
         }
         self.checked = Some(now);
-        if pid != self.pid || self.resolved.is_none_or(|t| now.duration_since(t) >= RESOLVE_EVERY) {
-            self.pid = pid;
-            self.dir = session_dir(pid);
+        if changed_target
+            || self
+                .resolved
+                .is_none_or(|t| now.duration_since(t) >= RESOLVE_EVERY)
+        {
+            let location = Location::resolve(provider, pid);
+            if location != self.location || changed_target {
+                self.cache.clear();
+                self.codex_cache.clear();
+            }
+            self.target = target;
+            self.location = location;
             self.resolved = Some(now);
         }
-        let list = match &self.dir {
-            Some(dir) => scan(dir, &mut self.cache),
-            None => Vec::new(),
-        };
+        let list = self.location.as_ref().map_or_else(Vec::new, |location| {
+            location.scan(&mut self.cache, &mut self.codex_cache)
+        });
         if list != self.list {
             self.list = list;
             return true;
@@ -83,6 +108,7 @@ impl Watch {
     /// Fuerza una consulta en el próximo `refresh` (al abrir el panel).
     pub fn invalidate(&mut self) {
         self.checked = None;
+        self.resolved = None;
     }
 }
 
@@ -106,33 +132,53 @@ fn session_dir(pid: i32) -> Option<PathBuf> {
             (slug, id)
         }
     };
-    Some(config_dir(pid).join("projects").join(slug).join(session).join("subagents"))
+    Some(
+        config_dir(pid)
+            .join("projects")
+            .join(slug)
+            .join(session)
+            .join("subagents"),
+    )
 }
 
 /// Nombre de la carpeta del proyecto: la ruta con todo lo que no es alfanumérico cambiado por '-'.
 fn project_slug(path: &str) -> String {
-    path.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '-' }).collect()
+    path.chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect()
 }
 
 fn config_dir(pid: i32) -> PathBuf {
-    let environ = fs::read(format!("/proc/{pid}/environ")).unwrap_or_default();
+    process_env_path(pid, b"CLAUDE_CONFIG_DIR=")
+        .unwrap_or_else(|| dirs::home_dir().unwrap_or_default().join(".claude"))
+}
+
+fn process_env_path(pid: i32, key: &[u8]) -> Option<PathBuf> {
+    let environ = fs::read(format!("/proc/{pid}/environ")).ok()?;
     environ
         .split(|&b| b == 0)
-        .find_map(|kv| kv.strip_prefix(b"CLAUDE_CONFIG_DIR="))
+        .find_map(|kv| kv.strip_prefix(key))
         .filter(|v| !v.is_empty())
-        .map(|v| PathBuf::from(String::from_utf8_lossy(v).into_owned()))
-        .unwrap_or_else(|| dirs::home_dir().unwrap_or_default().join(".claude"))
+        .map(|v| PathBuf::from(std::ffi::OsStr::from_bytes(v)))
 }
 
 fn is_uuid(s: &str) -> bool {
     s.len() == 36
-        && s.char_indices().all(|(i, c)| if matches!(i, 8 | 13 | 18 | 23) { c == '-' } else { c.is_ascii_hexdigit() })
+        && s.char_indices().all(|(i, c)| {
+            if matches!(i, 8 | 13 | 18 | 23) {
+                c == '-'
+            } else {
+                c.is_ascii_hexdigit()
+            }
+        })
 }
 
 /// Busca entre los archivos abiertos una ruta `…/claude-<uid>/<proyecto>/<sesión>/…`.
 fn session_from_fds(pid: i32) -> Option<(String, String)> {
     for e in fs::read_dir(format!("/proc/{pid}/fd")).ok()?.flatten() {
-        let Ok(target) = fs::read_link(e.path()) else { continue };
+        let Ok(target) = fs::read_link(e.path()) else {
+            continue;
+        };
         let t = target.to_string_lossy();
         let parts: Vec<&str> = t.split('/').collect();
         for w in parts.windows(3) {
@@ -145,11 +191,30 @@ fn session_from_fds(pid: i32) -> Option<(String, String)> {
 }
 
 fn session_from_cmdline(pid: i32) -> Option<String> {
+    let args = resume_args(pid)?;
+    explicit_session(&args, &["--resume", "-r", "--session-id"])
+}
+
+fn resume_args(pid: i32) -> Option<Vec<String>> {
     let cmd = fs::read(format!("/proc/{pid}/cmdline")).ok()?;
-    let args: Vec<String> = cmd.split(|&b| b == 0).map(|a| String::from_utf8_lossy(a).into_owned()).collect();
-    args.windows(2)
-        .find(|w| matches!(w[0].as_str(), "--resume" | "-r" | "--session-id") && is_uuid(&w[1]))
-        .map(|w| w[1].clone())
+    Some(
+        cmd.split(|&b| b == 0)
+            .map(|a| String::from_utf8_lossy(a).into_owned())
+            .collect(),
+    )
+}
+
+fn explicit_session(args: &[String], flags: &[&str]) -> Option<String> {
+    args.iter().enumerate().find_map(|(i, arg)| {
+        let id = if let Some((flag, id)) = arg.split_once('=') {
+            flags.contains(&flag).then_some(id)
+        } else if flags.contains(&arg.as_str()) {
+            args.get(i + 1).map(String::as_str)
+        } else {
+            None
+        }?;
+        is_uuid(id).then(|| id.to_string())
+    })
 }
 
 fn newest_session(base: &Path) -> Option<String> {
@@ -158,7 +223,10 @@ fn newest_session(base: &Path) -> Option<String> {
         .flatten()
         .filter_map(|e| {
             let name = e.file_name().to_string_lossy().into_owned();
-            let id = name.strip_suffix(".jsonl").filter(|id| is_uuid(id))?.to_string();
+            let id = name
+                .strip_suffix(".jsonl")
+                .filter(|id| is_uuid(id))?
+                .to_string();
             Some((e.metadata().ok()?.modified().ok()?, id))
         })
         .max()
@@ -166,12 +234,19 @@ fn newest_session(base: &Path) -> Option<String> {
 }
 
 fn scan(dir: &Path, cache: &mut HashMap<String, (SystemTime, Option<String>)>) -> Vec<SubAgent> {
-    let Ok(rd) = fs::read_dir(dir) else { return Vec::new() };
+    let Ok(rd) = fs::read_dir(dir) else {
+        return Vec::new();
+    };
     let now = SystemTime::now();
     let mut list = Vec::new();
     for e in rd.flatten() {
         let name = e.file_name().to_string_lossy().into_owned();
-        let Some(id) = name.strip_prefix("agent-").and_then(|n| n.strip_suffix(".jsonl")) else { continue };
+        let Some(id) = name
+            .strip_prefix("agent-")
+            .and_then(|n| n.strip_suffix(".jsonl"))
+        else {
+            continue;
+        };
         if id.contains("compact") {
             continue;
         }
@@ -215,19 +290,23 @@ fn scan(dir: &Path, cache: &mut HashMap<String, (SystemTime, Option<String>)>) -
 
 /// Lo último que hizo el subagente según el final de su conversación.
 fn last_activity(path: &Path) -> Option<String> {
+    let text = read_tail(path)?;
+    text.lines().rev().find_map(activity_of)
+}
+
+fn read_tail(path: &Path) -> Option<String> {
     let mut f = fs::File::open(path).ok()?;
     let len = f.metadata().ok()?.len();
     let start = len.saturating_sub(TAIL);
     f.seek(SeekFrom::Start(start)).ok()?;
     let mut buf = Vec::with_capacity((len - start) as usize);
-    f.read_to_end(&mut buf).ok()?;
+    f.take(TAIL).read_to_end(&mut buf).ok()?;
     let text = String::from_utf8_lossy(&buf);
-    let mut lines = text.lines();
-    if start > 0 {
-        lines.next(); // primera línea cortada
-    }
-    let lines: Vec<&str> = lines.collect();
-    lines.iter().rev().find_map(|l| activity_of(l))
+    Some(if start > 0 {
+        text.split_once('\n')?.1.to_owned()
+    } else {
+        text.into_owned()
+    })
 }
 
 fn activity_of(line: &str) -> Option<String> {
@@ -235,14 +314,21 @@ fn activity_of(line: &str) -> Option<String> {
     let content = v.pointer("/message/content")?.as_array()?;
     match v.get("type")?.as_str()? {
         "assistant" => {
-            let tool = content.iter().rev().find(|c| c.get("type").and_then(|t| t.as_str()) == Some("tool_use"));
+            let tool = content
+                .iter()
+                .rev()
+                .find(|c| c.get("type").and_then(|t| t.as_str()) == Some("tool_use"));
             Some(match tool {
                 Some(t) => describe_tool(t.get("name")?.as_str()?, t.get("input")),
                 None => "Pensando…".to_string(),
             })
         }
         // Acaba de recibir el resultado de una herramienta: está pensando el siguiente paso.
-        "user" if content.iter().any(|c| c.get("type").and_then(|t| t.as_str()) == Some("tool_result")) => {
+        "user"
+            if content
+                .iter()
+                .any(|c| c.get("type").and_then(|t| t.as_str()) == Some("tool_result")) =>
+        {
             Some("Pensando…".to_string())
         }
         _ => None,
@@ -250,11 +336,19 @@ fn activity_of(line: &str) -> Option<String> {
 }
 
 fn describe_tool(name: &str, input: Option<&serde_json::Value>) -> String {
-    let field = |k: &str| input.and_then(|i| i.get(k)).and_then(|v| v.as_str()).map(str::trim).filter(|s| !s.is_empty());
+    let field = |k: &str| {
+        input
+            .and_then(|i| i.get(k))
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+    };
     let base = |p: &str| p.rsplit('/').next().unwrap_or(p).to_string();
     let detail = match name {
         "Read" | "Edit" | "Write" | "MultiEdit" | "NotebookEdit" => field("file_path").map(base),
-        "Bash" => field("description").or_else(|| field("command")).map(str::to_string),
+        "Bash" => field("description")
+            .or_else(|| field("command"))
+            .map(str::to_string),
         "Grep" | "Glob" => field("pattern").map(str::to_string),
         "WebFetch" => field("url").map(|u| u.split('/').nth(2).unwrap_or(u).to_string()),
         "WebSearch" => field("query").map(str::to_string),
@@ -273,7 +367,10 @@ mod tests {
 
     #[test]
     fn rutas_y_sesiones() {
-        assert_eq!(project_slug("/home/ana/Proyectos/mi_app.v2"), "-home-ana-Proyectos-mi-app-v2");
+        assert_eq!(
+            project_slug("/home/ana/Proyectos/mi_app.v2"),
+            "-home-ana-Proyectos-mi-app-v2"
+        );
         assert!(is_uuid("230899e2-1844-4dde-be21-0099e76c31c5"));
         assert!(!is_uuid("230899e2-1844-4dde-be21-0099e76c31c"));
         assert!(!is_uuid("tasks"));
@@ -285,7 +382,8 @@ mod tests {
         assert_eq!(activity_of(tool).as_deref(), Some("Read main.rs"));
         let bash = r#"{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"cargo build","description":"Compilar"}}]}}"#;
         assert_eq!(activity_of(bash).as_deref(), Some("Bash Compilar"));
-        let result = r#"{"type":"user","message":{"content":[{"type":"tool_result","content":"ok"}]}}"#;
+        let result =
+            r#"{"type":"user","message":{"content":[{"type":"tool_result","content":"ok"}]}}"#;
         assert_eq!(activity_of(result).as_deref(), Some("Pensando…"));
         assert_eq!(activity_of("no es json"), None);
     }
@@ -295,10 +393,22 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("garbo-sub-{}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();
         let running = r#"{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Grep","input":{"pattern":"fn main"}}]}}"#;
-        fs::write(dir.join("agent-a1.jsonl"), format!("{{\"type\":\"user\"}}\n{running}\n")).unwrap();
-        fs::write(dir.join("agent-a1.meta.json"), r#"{"agentType":"Explore","description":"Buscar main"}"#).unwrap();
+        fs::write(
+            dir.join("agent-a1.jsonl"),
+            format!("{{\"type\":\"user\"}}\n{running}\n"),
+        )
+        .unwrap();
+        fs::write(
+            dir.join("agent-a1.meta.json"),
+            r#"{"agentType":"Explore","description":"Buscar main"}"#,
+        )
+        .unwrap();
         fs::write(dir.join("agent-a2.jsonl"), "{}\n").unwrap();
-        fs::write(dir.join("agent-a2.meta.json"), r#"{"agentType":"Plan","description":"Planear","finished":true}"#).unwrap();
+        fs::write(
+            dir.join("agent-a2.meta.json"),
+            r#"{"agentType":"Plan","description":"Planear","finished":true}"#,
+        )
+        .unwrap();
         let mut cache = HashMap::new();
         let list = scan(&dir, &mut cache);
         fs::remove_dir_all(&dir).ok();

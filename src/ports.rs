@@ -24,21 +24,23 @@ pub fn start(proxy: EventLoopProxy<UserEvent>) {
     if ACTIVE.swap(true, Ordering::SeqCst) {
         return;
     }
-    let _ = std::thread::Builder::new().name("puertos".into()).spawn(move || {
-        let mut cache: HashMap<(u16, u64), bool> = HashMap::new();
-        while ACTIVE.load(Ordering::Relaxed) {
-            let list = scan(&mut cache);
-            if proxy.send_event(UserEvent::Ports(list)).is_err() {
-                break;
-            }
-            for _ in 0..30 {
-                if !ACTIVE.load(Ordering::Relaxed) {
-                    return;
+    let _ = std::thread::Builder::new()
+        .name("puertos".into())
+        .spawn(move || {
+            let mut cache: HashMap<(u16, u64), bool> = HashMap::new();
+            while ACTIVE.load(Ordering::Relaxed) {
+                let list = scan(&mut cache);
+                if proxy.send_event(UserEvent::Ports(list)).is_err() {
+                    break;
                 }
-                std::thread::sleep(Duration::from_millis(100));
+                for _ in 0..30 {
+                    if !ACTIVE.load(Ordering::Relaxed) {
+                        return;
+                    }
+                    std::thread::sleep(Duration::from_millis(100));
+                }
             }
-        }
-    });
+        });
 }
 
 pub fn stop() {
@@ -58,9 +60,22 @@ fn parse_proc_net(text: &str, v6: bool, out: &mut Vec<Listen>) {
         if f.len() < 10 || f[3] != "0A" {
             continue; // 0A = LISTEN
         }
-        let Some(port) = f[1].rsplit(':').next().and_then(|p| u16::from_str_radix(p, 16).ok()) else { continue };
-        let (Ok(uid), Ok(inode)) = (f[7].parse(), f[9].parse()) else { continue };
-        out.push(Listen { port, inode, uid, v6 });
+        let Some(port) = f[1]
+            .rsplit(':')
+            .next()
+            .and_then(|p| u16::from_str_radix(p, 16).ok())
+        else {
+            continue;
+        };
+        let (Ok(uid), Ok(inode)) = (f[7].parse(), f[9].parse()) else {
+            continue;
+        };
+        out.push(Listen {
+            port,
+            inode,
+            uid,
+            v6,
+        });
     }
 }
 
@@ -73,15 +88,25 @@ fn scan(cache: &mut HashMap<(u16, u64), bool>) -> Vec<PortInfo> {
             parse_proc_net(&t, v6, &mut socks);
         }
     }
-    let mine: Vec<u64> = socks.iter().filter(|s| s.uid == me).map(|s| s.inode).collect();
+    let mine: Vec<u64> = socks
+        .iter()
+        .filter(|s| s.uid == me)
+        .map(|s| s.inode)
+        .collect();
     let owners = socket_owners(&mine, me);
 
     let mut by_port: HashMap<u16, PortInfo> = HashMap::new();
     for s in &socks {
         let process = owners.get(&s.inode).cloned();
         let web = s.uid == me
-            && *cache.entry((s.port, s.inode)).or_insert_with(|| probe_http(s.port, s.v6));
-        let e = by_port.entry(s.port).or_insert(PortInfo { port: s.port, web: false, process: None });
+            && *cache
+                .entry((s.port, s.inode))
+                .or_insert_with(|| probe_http(s.port, s.v6));
+        let e = by_port.entry(s.port).or_insert(PortInfo {
+            port: s.port,
+            web: false,
+            process: None,
+        });
         e.web |= web;
         if e.process.is_none() {
             e.process = process;
@@ -99,18 +124,33 @@ fn socket_owners(inodes: &[u64], me: u32) -> HashMap<u64, String> {
     if inodes.is_empty() {
         return out;
     }
-    let Ok(procs) = std::fs::read_dir("/proc") else { return out };
+    let Ok(procs) = std::fs::read_dir("/proc") else {
+        return out;
+    };
     for p in procs.flatten() {
         let name = p.file_name();
-        let Some(pid) = name.to_str().filter(|s| s.bytes().all(|b| b.is_ascii_digit())) else { continue };
+        let Some(pid) = name
+            .to_str()
+            .filter(|s| s.bytes().all(|b| b.is_ascii_digit()))
+        else {
+            continue;
+        };
         if p.metadata().map(|m| m.uid()).ok() != Some(me) {
             continue;
         }
-        let Ok(fds) = std::fs::read_dir(p.path().join("fd")) else { continue };
+        let Ok(fds) = std::fs::read_dir(p.path().join("fd")) else {
+            continue;
+        };
         for fd in fds.flatten() {
-            let Ok(link) = std::fs::read_link(fd.path()) else { continue };
+            let Ok(link) = std::fs::read_link(fd.path()) else {
+                continue;
+            };
             let l = link.to_string_lossy();
-            if let Some(n) = l.strip_prefix("socket:[").and_then(|r| r.strip_suffix(']')).and_then(|n| n.parse().ok()) {
+            if let Some(n) = l
+                .strip_prefix("socket:[")
+                .and_then(|r| r.strip_suffix(']'))
+                .and_then(|n| n.parse().ok())
+            {
                 if inodes.contains(&n) {
                     out.entry(n).or_insert_with(|| process_label(pid));
                 }
@@ -125,8 +165,13 @@ fn socket_owners(inodes: &[u64], me: u32) -> HashMap<u64, String> {
 
 /// "node · vite", "python3 · http.server", "postgres"
 fn process_label(pid: &str) -> String {
-    let comm = std::fs::read_to_string(format!("/proc/{pid}/comm")).unwrap_or_default().trim().to_string();
-    let interpreters = ["node", "python", "python3", "bun", "deno", "ruby", "java", "php", "perl"];
+    let comm = std::fs::read_to_string(format!("/proc/{pid}/comm"))
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    let interpreters = [
+        "node", "python", "python3", "bun", "deno", "ruby", "java", "php", "perl",
+    ];
     if interpreters.contains(&comm.as_str()) {
         let cmd = std::fs::read(format!("/proc/{pid}/cmdline")).unwrap_or_default();
         let script = cmd
@@ -144,11 +189,19 @@ fn process_label(pid: &str) -> String {
 
 /// ¿Responde HTTP? Petición HEAD mínima con tiempos de espera cortos.
 fn probe_http(port: u16, v6: bool) -> bool {
-    let addr: SocketAddr = if v6 { ([0u16, 0, 0, 0, 0, 0, 0, 1], port).into() } else { ([127, 0, 0, 1], port).into() };
-    let Ok(mut s) = TcpStream::connect_timeout(&addr, Duration::from_millis(200)) else { return false };
+    let addr: SocketAddr = if v6 {
+        ([0u16, 0, 0, 0, 0, 0, 0, 1], port).into()
+    } else {
+        ([127, 0, 0, 1], port).into()
+    };
+    let Ok(mut s) = TcpStream::connect_timeout(&addr, Duration::from_millis(200)) else {
+        return false;
+    };
     let _ = s.set_read_timeout(Some(Duration::from_millis(400)));
     let _ = s.set_write_timeout(Some(Duration::from_millis(200)));
-    if s.write_all(b"HEAD / HTTP/1.0\r\nHost: localhost\r\n\r\n").is_err() {
+    if s.write_all(b"HEAD / HTTP/1.0\r\nHost: localhost\r\n\r\n")
+        .is_err()
+    {
         return false;
     }
     let mut buf = [0u8; 8];

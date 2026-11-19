@@ -83,7 +83,10 @@ fn layout<T>(term: &Term<T>, start: (i64, usize)) -> Option<Layout> {
     let cur = grid.cursor.point;
     let first = Line((start.0 - term.history_size() as i64) as i32);
     let bottom = Line(term.screen_lines() as i32 - 1);
-    if first > cur.line || first < term.topmost_line() || !crate::suggest::prompt_before(term, first, start.1) {
+    if first > cur.line
+        || first < term.topmost_line()
+        || !crate::suggest::prompt_before(term, first, start.1)
+    {
         return None;
     }
     let cols = term.columns();
@@ -109,7 +112,11 @@ fn layout<T>(term: &Term<T>, start: (i64, usize)) -> Option<Layout> {
             for c in from..cols {
                 let cell = &row[Column(c)];
                 if !blank(cell.c) {
-                    end = c + if cell.flags.contains(Flags::WIDE_CHAR) { 2 } else { 1 };
+                    end = c + if cell.flags.contains(Flags::WIDE_CHAR) {
+                        2
+                    } else {
+                        1
+                    };
                 }
             }
             if l == cur.line {
@@ -120,7 +127,10 @@ fn layout<T>(term: &Term<T>, start: (i64, usize)) -> Option<Layout> {
         }
         for c in from..end {
             let cell = &row[Column(c)];
-            if !cell.flags.intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER) {
+            if !cell
+                .flags
+                .intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER)
+            {
                 pos.push(Point::new(l, Column(c)));
                 ends.push(false);
                 text.push(if cell.c == '\0' { ' ' } else { cell.c });
@@ -140,19 +150,33 @@ fn layout<T>(term: &Term<T>, start: (i64, usize)) -> Option<Layout> {
         return None;
     }
     let cursor = pos.iter().position(|p| *p == cur)?;
-    Some(Layout { pos, end: ends, cursor, first, last, multiline })
+    Some(Layout {
+        pos,
+        end: ends,
+        cursor,
+        first,
+        last,
+        multiline,
+    })
 }
 
 impl Layout {
     /// Índice del carácter delante del que queda el cursor al pulsar en `p` (lado `side` de la
     /// celda). `None` fuera de lo escrito.
     fn index_at(&self, p: Point, side: Side, start_col: usize) -> Option<usize> {
-        if p.line < self.first || p.line > self.last || (p.line == self.first && p.column.0 < start_col) {
+        if p.line < self.first
+            || p.line > self.last
+            || (p.line == self.first && p.column.0 < start_col)
+        {
             return None;
         }
         let want = p.column.0 + (side == Side::Right) as usize;
         let after = |q: &Point| q.line > p.line || (q.line == p.line && q.column.0 >= want);
-        let i = self.pos.iter().position(after).unwrap_or(self.pos.len() - 1);
+        let i = self
+            .pos
+            .iter()
+            .position(after)
+            .unwrap_or(self.pos.len() - 1);
         // A la derecha del texto de una fila que acaba en salto de línea: delante de ese salto (en
         // una fila partida por el ancho, el siguiente carácter ya es el de la fila de abajo).
         match self.pos.iter().rposition(|q| q.line == p.line) {
@@ -164,13 +188,22 @@ impl Layout {
 
 /// Flechas para llevar el cursor del carácter `from` al `to` (lo que pulsaría el usuario).
 fn arrows(from: usize, to: usize, app: bool) -> Vec<u8> {
-    let (n, key) = if to >= from { (to - from, 'C') } else { (from - to, 'D') };
+    let (n, key) = if to >= from {
+        (to - from, 'C')
+    } else {
+        (from - to, 'D')
+    };
     let one = crate::input::cursor_key(key, ModifiersState::empty(), app);
     one.repeat(n)
 }
 
 /// Flechas para llevar el cursor de readline a donde se pulsó (`p`, celda de la rejilla).
-pub fn click_moves<T>(term: &Term<T>, start: (i64, usize), p: Point, side: Side) -> Option<Vec<u8>> {
+pub fn click_moves<T>(
+    term: &Term<T>,
+    start: (i64, usize),
+    p: Point,
+    side: Side,
+) -> Option<Vec<u8>> {
     let lay = layout(term, start)?;
     let to = lay.index_at(p, side, start.1)?;
     let app = term.mode().contains(TermMode::APP_CURSOR);
@@ -190,7 +223,11 @@ pub fn vertical_moves<T>(term: &Term<T>, start: (i64, usize), up: bool) -> Optio
     if line < lay.first || line > lay.last {
         return None;
     }
-    let col = if line == lay.first { cur.column.0.max(start.1) } else { cur.column.0 };
+    let col = if line == lay.first {
+        cur.column.0.max(start.1)
+    } else {
+        cur.column.0
+    };
     let to = lay.index_at(Point::new(line, Column(col)), Side::Left, start.1)?;
     let app = term.mode().contains(TermMode::APP_CURSOR);
     Some(arrows(lay.cursor, to, app))
@@ -210,7 +247,10 @@ mod tests {
         let mut p: Processor = Processor::new();
         p.advance(&mut t, b"salida\r\n");
         // El enlace del prompt, como lo pone `BlockState` (por OSC 8 el id no admite ":").
-        t.set_hyperlink(Some(Hyperlink { id: Some("garbo:p:1".into()), uri: crate::blocks::LINK_URI.into() }));
+        t.set_hyperlink(Some(Hyperlink {
+            id: Some("garbo:p:1".into()),
+            uri: crate::blocks::LINK_URI.into(),
+        }));
         p.advance(&mut t, b"  ~");
         t.set_hyperlink(None);
         p.advance(&mut t, b"\r\n");
@@ -231,16 +271,43 @@ mod tests {
         let enter = Key::Named(NamedKey::Enter);
         let bs = Key::Named(NamedKey::Backspace);
         let z = Key::Character("z".into());
-        assert_eq!(shortcut(&enter, shift, Context::Prompt), Some(&b"\x16\n"[..]));
-        assert_eq!(shortcut(&enter, shift, Context::Agent("Claude Code")), Some(&b"\n"[..]));
-        assert_eq!(shortcut(&enter, shift, Context::Agent("Aider")), Some(&b"\x1b\r"[..]));
-        assert_eq!(shortcut(&enter, shift, Context::Other), None, "vim, python…: como siempre");
-        assert_eq!(shortcut(&enter, ModifiersState::empty(), Context::Prompt), None);
+        assert_eq!(
+            shortcut(&enter, shift, Context::Prompt),
+            Some(&b"\x16\n"[..])
+        );
+        assert_eq!(
+            shortcut(&enter, shift, Context::Agent("Claude Code")),
+            Some(&b"\n"[..])
+        );
+        assert_eq!(
+            shortcut(&enter, shift, Context::Agent("Aider")),
+            Some(&b"\x1b\r"[..])
+        );
+        assert_eq!(
+            shortcut(&enter, shift, Context::Other),
+            None,
+            "vim, python…: como siempre"
+        );
+        assert_eq!(
+            shortcut(&enter, ModifiersState::empty(), Context::Prompt),
+            None
+        );
         assert_eq!(shortcut(&bs, ctrl, Context::Prompt), Some(&b"\x1b\x7f"[..]));
-        assert_eq!(shortcut(&bs, ctrl, Context::Agent("Codex")), Some(&b"\x17"[..]));
+        assert_eq!(
+            shortcut(&bs, ctrl, Context::Agent("Codex")),
+            Some(&b"\x17"[..])
+        );
         assert_eq!(shortcut(&z, ctrl, Context::Prompt), Some(&b"\x1f"[..]));
-        assert_eq!(shortcut(&z, ctrl, Context::Agent("Claude Code")), None, "Ctrl+Z llega tal cual");
-        assert!(is_candidate(&enter, shift) && is_candidate(&z, ctrl) && !is_candidate(&enter, ModifiersState::empty()));
+        assert_eq!(
+            shortcut(&z, ctrl, Context::Agent("Claude Code")),
+            None,
+            "Ctrl+Z llega tal cual"
+        );
+        assert!(
+            is_candidate(&enter, shift)
+                && is_candidate(&z, ctrl)
+                && !is_candidate(&enter, ModifiersState::empty())
+        );
     }
 
     #[test]
@@ -250,18 +317,33 @@ mod tests {
         let row = Line(2);
         let at = |c: usize| Point::new(row, Column(c));
         // Clic en la "h" (columna 5): 10 a la izquierda.
-        assert_eq!(click_moves(&t, start, at(5), Side::Left), Some(b"\x1b[D".repeat(10)));
+        assert_eq!(
+            click_moves(&t, start, at(5), Side::Left),
+            Some(b"\x1b[D".repeat(10))
+        );
         // Lado derecho de la "h": detrás de ella.
-        assert_eq!(click_moves(&t, start, at(5), Side::Right), Some(b"\x1b[D".repeat(9)));
+        assert_eq!(
+            click_moves(&t, start, at(5), Side::Right),
+            Some(b"\x1b[D".repeat(9))
+        );
         // Más allá del final: el final (ya está ahí, nada que mandar).
         assert_eq!(click_moves(&t, start, at(18), Side::Left), None);
         // Con el cursor en medio ("echo |hola mundo"), más allá del final lleva al final.
         let (mut t, start) = term(b"echo hola mundo");
         feed(&mut t, b"\x1b[3;6H");
-        assert_eq!(click_moves(&t, start, at(18), Side::Left), Some(b"\x1b[C".repeat(10)));
+        assert_eq!(
+            click_moves(&t, start, at(18), Side::Left),
+            Some(b"\x1b[C".repeat(10))
+        );
         // Fuera de lo escrito (la línea del prompt o la salida anterior): nada.
-        assert_eq!(click_moves(&t, start, Point::new(Line(1), Column(2)), Side::Left), None);
-        assert_eq!(click_moves(&t, start, Point::new(Line(0), Column(2)), Side::Left), None);
+        assert_eq!(
+            click_moves(&t, start, Point::new(Line(1), Column(2)), Side::Left),
+            None
+        );
+        assert_eq!(
+            click_moves(&t, start, Point::new(Line(0), Column(2)), Side::Left),
+            None
+        );
     }
 
     #[test]
@@ -269,12 +351,22 @@ mod tests {
         // "ls ñ界\necho fin" (con el salto de línea de bash: el resto sigue en la fila siguiente).
         let (mut t, start) = term("ls ñ界\r\necho fin".as_bytes());
         // Cursor al final de "echo fin" (fila 3, columna 8). Clic en la fila de arriba tras "界".
-        assert_eq!(click_moves(&t, start, Point::new(Line(2), Column(15)), Side::Left), Some(b"\x1b[D".repeat(9)));
+        assert_eq!(
+            click_moves(&t, start, Point::new(Line(2), Column(15)), Side::Left),
+            Some(b"\x1b[D".repeat(9))
+        );
         // Clic sobre la mitad derecha de "界" (columnas 4-5): detrás de él.
-        assert_eq!(click_moves(&t, start, Point::new(Line(2), Column(5)), Side::Right), Some(b"\x1b[D".repeat(9)));
+        assert_eq!(
+            click_moves(&t, start, Point::new(Line(2), Column(5)), Side::Right),
+            Some(b"\x1b[D".repeat(9))
+        );
         // ↑ desde la columna 8 de la segunda fila: final de la primera (después de "界").
         assert_eq!(vertical_moves(&t, start, true), Some(b"\x1b[D".repeat(9)));
-        assert_eq!(vertical_moves(&t, start, false), None, "en la última fila, ↓ recorre el historial");
+        assert_eq!(
+            vertical_moves(&t, start, false),
+            None,
+            "en la última fila, ↓ recorre el historial"
+        );
         // Con el cursor en la primera fila, ↓ baja a la misma columna.
         feed(&mut t, b"\x1b[3;3H");
         assert_eq!(vertical_moves(&t, start, false), Some(b"\x1b[C".repeat(6)));
@@ -285,19 +377,35 @@ mod tests {
     fn una_linea_larga_partida_por_el_ancho() {
         // 25 caracteres en 20 columnas: la fila se parte sola (no es un salto de línea).
         let (t, start) = term(b"echo aaaaaaaaaaaaaaaaaaaa");
-        assert_eq!(vertical_moves(&t, start, true), None, "sin saltos de línea, ↑ es el historial");
+        assert_eq!(
+            vertical_moves(&t, start, true),
+            None,
+            "sin saltos de línea, ↑ es el historial"
+        );
         // Clic en la columna 0 de la primera fila: 25 a la izquierda.
-        assert_eq!(click_moves(&t, start, Point::new(Line(2), Column(0)), Side::Left), Some(b"\x1b[D".repeat(25)));
+        assert_eq!(
+            click_moves(&t, start, Point::new(Line(2), Column(0)), Side::Left),
+            Some(b"\x1b[D".repeat(25))
+        );
         // Lado derecho de la última celda de la primera fila: delante del primer carácter de la segunda.
-        assert_eq!(click_moves(&t, start, Point::new(Line(2), Column(19)), Side::Right), Some(b"\x1b[D".repeat(5)));
+        assert_eq!(
+            click_moves(&t, start, Point::new(Line(2), Column(19)), Side::Right),
+            Some(b"\x1b[D".repeat(5))
+        );
     }
 
     #[test]
     fn busqueda_de_readline_y_pantalla_alternativa() {
         let (t, start) = term(b"(reverse-i-search)`ec': echo hola");
-        assert_eq!(click_moves(&t, start, Point::new(Line(2), Column(2)), Side::Left), None);
+        assert_eq!(
+            click_moves(&t, start, Point::new(Line(2), Column(2)), Side::Left),
+            None
+        );
         let (mut t, start) = term(b"echo");
         feed(&mut t, b"\x1b[?1049h");
-        assert_eq!(click_moves(&t, start, Point::new(Line(2), Column(1)), Side::Left), None);
+        assert_eq!(
+            click_moves(&t, start, Point::new(Line(2), Column(1)), Side::Left),
+            None
+        );
     }
 }

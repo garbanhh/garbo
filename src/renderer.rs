@@ -26,7 +26,8 @@ pub fn limit_vulkan_drivers() {
         let mut select: Vec<&str> = Vec::new();
         if let Ok(dir) = std::fs::read_dir("/sys/class/drm") {
             for entry in dir.flatten() {
-                let vendor = std::fs::read_to_string(entry.path().join("device/vendor")).unwrap_or_default();
+                let vendor =
+                    std::fs::read_to_string(entry.path().join("device/vendor")).unwrap_or_default();
                 let drivers: &[&str] = match vendor.trim() {
                     "0x8086" => &["*intel*"],
                     "0x1002" => &["*radeon*", "*amd*"],
@@ -66,11 +67,21 @@ pub struct Instance {
 
 impl Instance {
     pub fn rect(x: f32, y: f32, w: f32, h: f32, color: [f32; 4]) -> Self {
-        Self { pos: [x, y], size: [w, h], uv: [0.0; 4], color, kind: 0, radius: 0.0 }
+        Self {
+            pos: [x, y],
+            size: [w, h],
+            uv: [0.0; 4],
+            color,
+            kind: 0,
+            radius: 0.0,
+        }
     }
 
     pub fn rounded(x: f32, y: f32, w: f32, h: f32, color: [f32; 4], radius: f32) -> Self {
-        Self { radius, ..Self::rect(x, y, w, h, color) }
+        Self {
+            radius,
+            ..Self::rect(x, y, w, h, color)
+        }
     }
 }
 
@@ -110,8 +121,14 @@ impl Renderer {
         };
         let mut found = None;
         for backends in [wgpu::Backends::PRIMARY, wgpu::Backends::GL] {
-            let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor { backends, flags, ..Default::default() });
-            let Ok(surface) = instance.create_surface(window.clone()) else { continue };
+            let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+                backends,
+                flags,
+                ..Default::default()
+            });
+            let Ok(surface) = instance.create_surface(window.clone()) else {
+                continue;
+            };
             let adapter = instance
                 .request_adapter(&wgpu::RequestAdapterOptions {
                     // GPU integrada = menos consumo
@@ -132,7 +149,8 @@ impl Renderer {
             .request_device(&wgpu::DeviceDescriptor {
                 label: Some("garbo"),
                 required_features: wgpu::Features::empty(),
-                required_limits: wgpu::Limits::downlevel_webgl2_defaults().using_resolution(adapter.limits()),
+                required_limits: wgpu::Limits::downlevel_webgl2_defaults()
+                    .using_resolution(adapter.limits()),
                 memory_hints: wgpu::MemoryHints::MemoryUsage,
                 trace: wgpu::Trace::Off,
             })
@@ -149,7 +167,11 @@ impl Renderer {
             .copied()
             .find(|f| !f.is_srgb())
             .unwrap_or(caps.formats[0]);
-        let alpha_mode = if transparent && caps.alpha_modes.contains(&wgpu::CompositeAlphaMode::PreMultiplied) {
+        let alpha_mode = if transparent
+            && caps
+                .alpha_modes
+                .contains(&wgpu::CompositeAlphaMode::PreMultiplied)
+        {
             wgpu::CompositeAlphaMode::PreMultiplied
         } else {
             caps.alpha_modes[0]
@@ -174,7 +196,11 @@ impl Renderer {
 
         let atlas = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("atlas"),
-            size: wgpu::Extent3d { width: ATLAS_SIZE, height: ATLAS_SIZE, depth_or_array_layers: 1 },
+            size: wgpu::Extent3d {
+                width: ATLAS_SIZE,
+                height: ATLAS_SIZE,
+                depth_or_array_layers: 1,
+            },
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
@@ -231,9 +257,18 @@ impl Renderer {
             label: None,
             layout: &bgl,
             entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: uniforms.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&atlas_view) },
-                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&sampler) },
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: uniforms.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&atlas_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::Sampler(&sampler),
+                },
             ],
         });
 
@@ -281,7 +316,19 @@ impl Renderer {
         let instance_cap = 16 * 1024;
         let instances = Self::make_instance_buffer(&device, instance_cap);
 
-        Self { surface, device, queue, config, pipeline, bind_group, uniforms, instances, instance_cap, atlas, capture }
+        Self {
+            surface,
+            device,
+            queue,
+            config,
+            pipeline,
+            bind_group,
+            uniforms,
+            instances,
+            instance_cap,
+            atlas,
+            capture,
+        }
     }
 
     fn make_instance_buffer(device: &wgpu::Device, cap: usize) -> wgpu::Buffer {
@@ -308,10 +355,15 @@ impl Renderer {
             self.instance_cap = instances.len().next_power_of_two();
             self.instances = Self::make_instance_buffer(&self.device, self.instance_cap);
         }
-        let u = Uniforms { screen: [self.config.width as f32, self.config.height as f32], _pad: [0.0; 2] };
-        self.queue.write_buffer(&self.uniforms, 0, bytemuck::bytes_of(&u));
+        let u = Uniforms {
+            screen: [self.config.width as f32, self.config.height as f32],
+            _pad: [0.0; 2],
+        };
+        self.queue
+            .write_buffer(&self.uniforms, 0, bytemuck::bytes_of(&u));
         if !instances.is_empty() {
-            self.queue.write_buffer(&self.instances, 0, bytemuck::cast_slice(instances));
+            self.queue
+                .write_buffer(&self.instances, 0, bytemuck::cast_slice(instances));
         }
 
         let frame = match self.surface.get_current_texture() {
@@ -354,7 +406,8 @@ impl Renderer {
             pass.set_vertex_buffer(0, self.instances.slice(..));
             pass.draw(0..4, 0..instances.len() as u32);
         }
-        let readback = self.capture.is_some() && self.config.usage.contains(wgpu::TextureUsages::COPY_SRC);
+        let readback =
+            self.capture.is_some() && self.config.usage.contains(wgpu::TextureUsages::COPY_SRC);
         let padded_row = (self.config.width * 4).div_ceil(256) * 256;
         let buffer = readback.then(|| {
             let buf = self.device.create_buffer(&wgpu::BufferDescriptor {
@@ -390,7 +443,10 @@ impl Renderer {
         let _ = self.device.poll(wgpu::PollType::Wait);
         let data = slice.get_mapped_range();
         let (w, h) = (self.config.width, self.config.height);
-        let bgra = matches!(self.config.format, wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Bgra8UnormSrgb);
+        let bgra = matches!(
+            self.config.format,
+            wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Bgra8UnormSrgb
+        );
         let mut out = format!("P6\n{w} {h}\n255\n").into_bytes();
         for y in 0..h {
             let row = &data[(y * padded_row) as usize..];

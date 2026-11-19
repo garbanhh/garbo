@@ -104,7 +104,10 @@ pub fn key_to_bytes(ev: &KeyEvent, m: ModifiersState, mode: TermMode) -> Option<
         }
     }
 
-    ev.text.as_ref().filter(|t| !t.is_empty()).map(|t| alt(t.as_bytes().to_vec()))
+    ev.text
+        .as_ref()
+        .filter(|t| !t.is_empty())
+        .map(|t| alt(t.as_bytes().to_vec()))
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -141,6 +144,13 @@ pub fn mouse_report(
         if col > 222 || line > 222 {
             return None;
         }
-        Some(vec![0x1b, b'[', b'M', 32 + code, 33 + col as u8, 33 + line as u8])
+        Some(vec![
+            0x1b,
+            b'[',
+            b'M',
+            32 + code,
+            33 + col as u8,
+            33 + line as u8,
+        ])
     }
 }

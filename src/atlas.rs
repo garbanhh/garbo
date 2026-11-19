@@ -24,7 +24,11 @@ struct Packer {
 
 impl Packer {
     fn new() -> Self {
-        Self { x: 1, y: 1, row_h: 0 }
+        Self {
+            x: 1,
+            y: 1,
+            row_h: 0,
+        }
     }
 
     fn alloc(&mut self, w: u32, h: u32) -> Option<(u32, u32)> {
@@ -66,7 +70,11 @@ impl UiVariant {
     }
 
     fn style(self) -> Style {
-        if self == UiVariant::Title { Style::Bold } else { Style::Regular }
+        if self == UiVariant::Title {
+            Style::Bold
+        } else {
+            Style::Regular
+        }
     }
 
     fn id(self) -> u8 {
@@ -95,7 +103,14 @@ pub struct GlyphCache {
 
 impl GlyphCache {
     pub fn new(fonts: FontSet, ui: FontSet) -> Self {
-        Self { fonts, ui, packer: Packer::new(), map: HashMap::new(), ui_adv: HashMap::new(), overflowed: false }
+        Self {
+            fonts,
+            ui,
+            packer: Packer::new(),
+            map: HashMap::new(),
+            ui_adv: HashMap::new(),
+            overflowed: false,
+        }
     }
 
     pub fn clear(&mut self) {
@@ -158,12 +173,21 @@ impl GlyphCache {
         }
         let emoji = ch as u32 >= 0x1F000;
         let (slot, gid) = self.ui.resolve(ch, v.style(), emoji);
-        let a = if emoji { self.ui.size_px * 1.3 } else { self.ui.advance(slot, gid) } * v.scale();
+        let a = if emoji {
+            self.ui.size_px * 1.3
+        } else {
+            self.ui.advance(slot, gid)
+        } * v.scale();
         self.ui_adv.insert((ch, v.id()), a);
         a
     }
 
-    fn upload(&mut self, queue: &wgpu::Queue, texture: &wgpu::Texture, r: RasterGlyph) -> Option<AtlasGlyph> {
+    fn upload(
+        &mut self,
+        queue: &wgpu::Queue,
+        texture: &wgpu::Texture,
+        r: RasterGlyph,
+    ) -> Option<AtlasGlyph> {
         let pos = match self.packer.alloc(r.width, r.height) {
             Some(p) => p,
             None => {
@@ -177,16 +201,33 @@ impl GlyphCache {
             wgpu::TexelCopyTextureInfo {
                 texture,
                 mip_level: 0,
-                origin: wgpu::Origin3d { x: pos.0, y: pos.1, z: 0 },
+                origin: wgpu::Origin3d {
+                    x: pos.0,
+                    y: pos.1,
+                    z: 0,
+                },
                 aspect: wgpu::TextureAspect::All,
             },
             &r.rgba,
-            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(r.width * 4), rows_per_image: Some(r.height) },
-            wgpu::Extent3d { width: r.width, height: r.height, depth_or_array_layers: 1 },
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(r.width * 4),
+                rows_per_image: Some(r.height),
+            },
+            wgpu::Extent3d {
+                width: r.width,
+                height: r.height,
+                depth_or_array_layers: 1,
+            },
         );
         let s = ATLAS_SIZE as f32;
         Some(AtlasGlyph {
-            uv: [pos.0 as f32 / s, pos.1 as f32 / s, r.width as f32 / s, r.height as f32 / s],
+            uv: [
+                pos.0 as f32 / s,
+                pos.1 as f32 / s,
+                r.width as f32 / s,
+                r.height as f32 / s,
+            ],
             width: r.width as f32,
             height: r.height as f32,
             left: r.left as f32,
@@ -197,7 +238,13 @@ impl GlyphCache {
 }
 
 /// Si la fuente elegida declara el glifo pero no sabe dibujarlo, prueba las siguientes.
-fn rasterize_with_fallback(fonts: &mut FontSet, ch: char, slot: u16, gid: u16, max_w: f32) -> Option<RasterGlyph> {
+fn rasterize_with_fallback(
+    fonts: &mut FontSet,
+    ch: char,
+    slot: u16,
+    gid: u16,
+    max_w: f32,
+) -> Option<RasterGlyph> {
     let mut raster = fonts.rasterize(slot, gid, max_w);
     let mut cur = slot;
     while raster.is_none() && !ch.is_whitespace() && gid != 0 {

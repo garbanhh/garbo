@@ -15,13 +15,20 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
-use winit::event::{ElementState, KeyEvent, MouseButton, MouseScrollDelta, StartCause, WindowEvent};
+use winit::event::{
+    ElementState, KeyEvent, MouseButton, MouseScrollDelta, StartCause, WindowEvent,
+};
 use winit::event_loop::{ActiveEventLoop, ControlFlow};
 use winit::keyboard::{Key, ModifiersState, NamedKey};
 use winit::window::{CursorIcon, ResizeDirection, Window, WindowId};
 
 /// Línea divisoria de paneles bajo el ratón (con unos píxeles de margen para atinar).
-fn divider_at(geo: &crate::app::Geometry, x: f32, y: f32, scale: f32) -> Option<&crate::panes::Divider> {
+fn divider_at(
+    geo: &crate::app::Geometry,
+    x: f32,
+    y: f32,
+    scale: f32,
+) -> Option<&crate::panes::Divider> {
     let m = 4.0 * scale;
     geo.dividers.iter().find(|d| {
         let [dx, dy, dw, dh] = d.rect;
@@ -49,6 +56,12 @@ fn resize_cursor(dir: ResizeDirection) -> CursorIcon {
 const BLINK: Duration = Duration::from_millis(530);
 const MULTI_CLICK: Duration = Duration::from_millis(400);
 
+fn pane_is_visible(groups: &[crate::panes::Group], active_group: usize, id: u64) -> bool {
+    groups
+        .get(active_group)
+        .is_some_and(|group| group.layout.contains(id))
+}
+
 impl ApplicationHandler<UserEvent> for App {
     fn resumed(&mut self, el: &ActiveEventLoop) {
         if self.st.is_some() {
@@ -72,7 +85,9 @@ impl ApplicationHandler<UserEvent> for App {
         // Identificador de la app: GNOME lo usa para asociar la ventana con su .desktop e icono.
         #[cfg(all(unix, not(target_os = "macos")))]
         let attrs = {
-            use winit::platform::startup_notify::{self, EventLoopExtStartupNotify, WindowAttributesExtStartupNotify};
+            use winit::platform::startup_notify::{
+                self, EventLoopExtStartupNotify, WindowAttributesExtStartupNotify,
+            };
             use winit::platform::wayland::WindowAttributesExtWayland;
             use winit::platform::x11::WindowAttributesExtX11;
             let attrs = WindowAttributesExtWayland::with_name(attrs, crate::APP_ID, "garbo");
@@ -135,7 +150,11 @@ impl ApplicationHandler<UserEvent> for App {
         self.refresh_sessions();
         let blink = self.cfg.terminal.cursor_blink;
         let tick = self.next_tick();
-        let blink_at = self.st.as_ref().filter(|st| blink && st.focused).map(|st| st.next_blink);
+        let blink_at = self
+            .st
+            .as_ref()
+            .filter(|st| blink && st.focused)
+            .map(|st| st.next_blink);
         // Sin animaciones ni parpadeo pendientes, la app duerme hasta el siguiente evento.
         match (blink_at, tick) {
             (Some(a), Some(b)) => el.set_control_flow(ControlFlow::WaitUntil(a.min(b))),
@@ -165,15 +184,29 @@ impl ApplicationHandler<UserEvent> for App {
                 return;
             }
             UserEvent::NoticeShown(tab, pid) => {
-                match self.st.as_mut().and_then(|st| st.tabs.iter_mut().find(|t| t.id == tab)) {
+                match self
+                    .st
+                    .as_mut()
+                    .and_then(|st| st.tabs.iter_mut().find(|t| t.id == tab))
+                {
                     Some(t) => t.notice.shown = Some(pid),
                     None => crate::notify::close(pid), // la pestaña ya se cerró
                 }
                 return;
             }
             UserEvent::NoticeClicked(tab, token) => {
-                log::info!("Aviso pulsado ({})", if token.is_some() { "con permiso de activación" } else { "sin permiso" });
-                let idx = self.st.as_ref().and_then(|st| st.tabs.iter().position(|t| t.id == tab));
+                log::info!(
+                    "Aviso pulsado ({})",
+                    if token.is_some() {
+                        "con permiso de activación"
+                    } else {
+                        "sin permiso"
+                    }
+                );
+                let idx = self
+                    .st
+                    .as_ref()
+                    .and_then(|st| st.tabs.iter().position(|t| t.id == tab));
                 if let Some(i) = idx {
                     self.select_tab(i);
                     let st = self.st();
@@ -195,6 +228,19 @@ impl ApplicationHandler<UserEvent> for App {
             }
             UserEvent::Update(state) => {
                 if let Some(st) = self.st.as_mut() {
+                    use crate::update::UpdateState;
+                    if matches!(state, UpdateState::Available(_))
+                        && matches!(
+                            st.update,
+                            Some(
+                                UpdateState::Downloading(_)
+                                    | UpdateState::Installing(_)
+                                    | UpdateState::Installed(_)
+                            )
+                        )
+                    {
+                        return;
+                    }
                     let first = st.update.is_none();
                     st.update = Some(state);
                     if first {
@@ -207,13 +253,13 @@ impl ApplicationHandler<UserEvent> for App {
             }
         };
         let Some(st) = self.st.as_mut() else { return };
-        let Some(idx) = st.tabs.iter().position(|t| t.id == id) else { return };
-        let is_active = idx == st.active;
+        let Some(idx) = st.tabs.iter().position(|t| t.id == id) else {
+            return;
+        };
         match ev {
             TermEvent::Wakeup => {
                 st.tabs[idx].note_output(Instant::now());
-                // Las pestañas en segundo plano no gastan GPU.
-                if is_active {
+                if pane_is_visible(&st.groups, st.group, id) {
                     st.window.request_redraw();
                 }
             }
@@ -230,33 +276,52 @@ impl ApplicationHandler<UserEvent> for App {
                 st.window.request_redraw();
             }
             TermEvent::Bell => {
-                let viewing = is_active && st.focused;
+                let viewing = st.focused && pane_is_visible(&st.groups, st.group, id);
                 if st.tabs[idx].session.bell(viewing, Instant::now()) {
                     st.window.request_redraw();
                 }
                 if !st.focused {
-                    st.window.request_user_attention(Some(winit::window::UserAttentionType::Informational));
+                    st.window.request_user_attention(Some(
+                        winit::window::UserAttentionType::Informational,
+                    ));
                 }
             }
             TermEvent::PtyWrite(s) => st.tabs[idx].write(s.into_bytes()),
             TermEvent::ClipboardStore(ty, text) => {
-                let cb = if ty == ClipboardType::Selection { &mut st.selection_clip } else { &mut st.clipboard };
+                let cb = if ty == ClipboardType::Selection {
+                    &mut st.selection_clip
+                } else {
+                    &mut st.clipboard
+                };
                 let _ = cb.set_contents(text);
             }
             TermEvent::ClipboardLoad(ty, fmt) => {
-                let cb = if ty == ClipboardType::Selection { &mut st.selection_clip } else { &mut st.clipboard };
+                let cb = if ty == ClipboardType::Selection {
+                    &mut st.selection_clip
+                } else {
+                    &mut st.clipboard
+                };
                 let text = cb.get_contents().unwrap_or_default();
                 st.tabs[idx].write(fmt(&text).into_bytes());
             }
             TermEvent::ColorRequest(i, fmt) => {
                 let term_color = st.tabs[idx].term.lock().colors()[i];
-                let c = term_color.map(|c| crate::config::Rgb(c.r, c.g, c.b)).unwrap_or_else(|| match i {
-                    0..=255 => self.theme.color256(i as u8),
-                    257 => self.theme.background,
-                    258 => self.theme.cursor,
-                    _ => self.theme.foreground,
-                });
-                st.tabs[idx].write(fmt(VteRgb { r: c.0, g: c.1, b: c.2 }).into_bytes());
+                let c = term_color
+                    .map(|c| crate::config::Rgb(c.r, c.g, c.b))
+                    .unwrap_or_else(|| match i {
+                        0..=255 => self.theme.color256(i as u8),
+                        257 => self.theme.background,
+                        258 => self.theme.cursor,
+                        _ => self.theme.foreground,
+                    });
+                st.tabs[idx].write(
+                    fmt(VteRgb {
+                        r: c.0,
+                        g: c.1,
+                        b: c.2,
+                    })
+                    .into_bytes(),
+                );
             }
             TermEvent::TextAreaSizeRequest(fmt) => {
                 let ws = st.tabs[idx].ws;
@@ -287,7 +352,9 @@ impl ApplicationHandler<UserEvent> for App {
                 self.st().renderer.resize(size.width, size.height);
                 self.relayout();
             }
-            WindowEvent::ScaleFactorChanged { scale_factor, .. } => self.set_scale(scale_factor as f32),
+            WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
+                self.set_scale(scale_factor as f32)
+            }
             WindowEvent::Focused(f) => {
                 let st = self.st();
                 st.focused = f;
@@ -317,7 +384,9 @@ impl ApplicationHandler<UserEvent> for App {
                     el.exit();
                 }
             }
-            WindowEvent::CursorMoved { position, .. } => self.on_mouse_move(position.x as f32, position.y as f32),
+            WindowEvent::CursorMoved { position, .. } => {
+                self.on_mouse_move(position.x as f32, position.y as f32)
+            }
             WindowEvent::CursorLeft { .. } => {
                 let st = self.st();
                 let panel = st.panel.set_hover(None, Instant::now());
@@ -361,7 +430,8 @@ impl App {
         // Ajustes abiertos: capturan el teclado.
         if self.st().settings.is_some() {
             let mods = self.st().mods;
-            if self.keys.lookup(&ev.logical_key, mods) == Some(crate::keybindings::Action::Settings) {
+            if self.keys.lookup(&ev.logical_key, mods) == Some(crate::keybindings::Action::Settings)
+            {
                 return self.run_action(crate::keybindings::Action::Settings);
             }
             use crate::settings::Nav;
@@ -377,7 +447,9 @@ impl App {
                 Key::Named(NamedKey::ArrowLeft) => Some(Nav::Left),
                 Key::Named(NamedKey::ArrowRight) => Some(Nav::Right),
                 Key::Named(NamedKey::Tab) if shift => Some(Nav::PrevCategory),
-                Key::Named(NamedKey::Tab) | Key::Named(NamedKey::PageDown) => Some(Nav::NextCategory),
+                Key::Named(NamedKey::Tab) | Key::Named(NamedKey::PageDown) => {
+                    Some(Nav::NextCategory)
+                }
                 Key::Named(NamedKey::PageUp) => Some(Nav::PrevCategory),
                 Key::Named(NamedKey::Enter) | Key::Named(NamedKey::Space) => Some(Nav::Activate),
                 _ => None,
@@ -393,7 +465,9 @@ impl App {
         // Paleta de comandos abierta: captura todo el teclado.
         if self.st().palette.is_some() {
             let mods = self.st().mods;
-            if self.keys.lookup(&ev.logical_key, mods) == Some(crate::keybindings::Action::CommandPalette) {
+            if self.keys.lookup(&ev.logical_key, mods)
+                == Some(crate::keybindings::Action::CommandPalette)
+            {
                 return self.run_action(crate::keybindings::Action::CommandPalette);
             }
             let st = self.st();
@@ -412,7 +486,11 @@ impl App {
                     pal.refilter();
                 }
                 _ => {
-                    if let Some(t) = ev.text.as_ref().filter(|t| t.chars().all(|c| !c.is_control())) {
+                    if let Some(t) = ev
+                        .text
+                        .as_ref()
+                        .filter(|t| t.chars().all(|c| !c.is_control()))
+                    {
                         pal.query.push_str(t);
                         pal.refilter();
                     }
@@ -443,10 +521,15 @@ impl App {
         }
 
         let tcfg = &self.cfg.terminal;
-        let (autosuggest, tab_accepts, as_you_type) =
-            (tcfg.autosuggest, tcfg.tab_key == crate::config::TabKey::Accept, tcfg.complete_as_you_type);
+        let (autosuggest, tab_accepts, as_you_type) = (
+            tcfg.autosuggest,
+            tcfg.tab_key == crate::config::TabKey::Accept,
+            tcfg.complete_as_you_type,
+        );
         let st = self.st();
-        let Some(tab) = st.tabs.get(st.active) else { return false };
+        let Some(tab) = st.tabs.get(st.active) else {
+            return false;
+        };
         let key = &ev.logical_key;
         let plain = mods.is_empty();
         let ctrl = mods == ModifiersState::CONTROL;
@@ -459,7 +542,11 @@ impl App {
         let accept_word = ctrl && matches!(key, Key::Named(NamedKey::ArrowRight));
         if autosuggest && (accept_all || accept_word) {
             if let Some(rest) = tab.suggestion() {
-                let text = if accept_word { crate::suggest::next_word(&rest).to_string() } else { rest };
+                let text = if accept_word {
+                    crate::suggest::next_word(&rest).to_string()
+                } else {
+                    rest
+                };
                 tab.input(text.into_bytes());
                 self.scroll_to_bottom();
                 return false;
@@ -471,7 +558,9 @@ impl App {
             return false;
         }
         let st = self.st();
-        let Some(tab) = st.tabs.get(st.active) else { return false };
+        let Some(tab) = st.tabs.get(st.active) else {
+            return false;
+        };
         // Edición al estilo Warp (`edit.rs`): Shift+Intro, Ctrl+Retroceso/Supr, Ctrl+Z y ↑/↓ en
         // un comando de varias líneas.
         let vertical = plain && matches!(key, Key::Named(NamedKey::ArrowUp | NamedKey::ArrowDown));
@@ -498,15 +587,26 @@ impl App {
                 term.selection = None;
             }
             // "Menú al escribir": se recuerda lo que había para abrir el menú cuando llegue el eco.
-            let typed = !mods.control_key() && !mods.alt_key() && ev.text.as_ref().is_some_and(|t| t.chars().all(|c| !c.is_control()));
-            let before = (as_you_type && typed && st.menu.is_none()).then(|| tab.prompt_input()).flatten();
+            let typed = !mods.control_key()
+                && !mods.alt_key()
+                && ev
+                    .text
+                    .as_ref()
+                    .is_some_and(|t| t.chars().all(|c| !c.is_control()));
+            let before = (as_you_type && typed && st.menu.is_none())
+                .then(|| tab.prompt_input())
+                .flatten();
             tab.input(bytes);
             let st = self.st();
             if let Some(b) = before {
                 st.menu_auto = Some((b, Instant::now()));
             }
             let active = st.active;
-            if st.tabs.get_mut(active).is_some_and(|t| t.selected_block.take().is_some()) {
+            if st
+                .tabs
+                .get_mut(active)
+                .is_some_and(|t| t.selected_block.take().is_some())
+            {
                 st.window.request_redraw();
             }
             self.scroll_to_bottom();
@@ -516,8 +616,12 @@ impl App {
 
     /// ¿Hay una búsqueda abierta en la pestaña activa?
     fn search_open(&self) -> bool {
-        let Some(st) = self.st.as_ref() else { return false };
-        st.search.as_ref().is_some_and(|s| st.tabs.get(st.active).is_some_and(|t| t.id == s.tab))
+        let Some(st) = self.st.as_ref() else {
+            return false;
+        };
+        st.search
+            .as_ref()
+            .is_some_and(|s| st.tabs.get(st.active).is_some_and(|t| t.id == s.tab))
     }
 
     /// Teclas con la búsqueda abierta: escribir busca, Intro / ↑ van a la anterior, Shift+Intro /
@@ -530,7 +634,14 @@ impl App {
         match self.keys.lookup(&ev.logical_key, mods) {
             Some(Action::Paste) => {
                 let text = self.st().clipboard.get_contents().unwrap_or_default();
-                pasted = Some(text.lines().next().unwrap_or("").chars().filter(|c| !c.is_control()).collect::<String>());
+                pasted = Some(
+                    text.lines()
+                        .next()
+                        .unwrap_or("")
+                        .chars()
+                        .filter(|c| !c.is_control())
+                        .collect::<String>(),
+                );
             }
             Some(action) => return self.run_action(action),
             None => {}
@@ -541,9 +652,15 @@ impl App {
             st.window.request_redraw();
             return false;
         }
-        let Some(tab) = st.tabs.get(st.active) else { return false };
-        let Some(search) = st.search.as_mut() else { return false };
-        let typed = ev.text.as_ref().filter(|t| !mods.control_key() && !mods.alt_key() && t.chars().all(|c| !c.is_control()));
+        let Some(tab) = st.tabs.get(st.active) else {
+            return false;
+        };
+        let Some(search) = st.search.as_mut() else {
+            return false;
+        };
+        let typed = ev.text.as_ref().filter(|t| {
+            !mods.control_key() && !mods.alt_key() && t.chars().all(|c| !c.is_control())
+        });
         match &ev.logical_key {
             Key::Named(NamedKey::Enter) => search.step(&mut tab.term.lock(), !mods.shift_key()),
             Key::Named(NamedKey::ArrowUp) => search.step(&mut tab.term.lock(), true),
@@ -571,8 +688,12 @@ impl App {
     /// (escribiendo antes lo que todos comparten). `false` = no hay nada que ofrecer.
     pub fn open_menu(&mut self) -> bool {
         let st = self.st();
-        let Some(tab) = st.tabs.get(st.active) else { return false };
-        let Some((input, comp)) = tab.completions() else { return false };
+        let Some(tab) = st.tabs.get(st.active) else {
+            return false;
+        };
+        let Some((input, comp)) = tab.completions() else {
+            return false;
+        };
         match comp.items.len() {
             0 => return false,
             1 => {
@@ -650,7 +771,11 @@ impl App {
         let fy = ((y - geo.y) / m.height).max(0.0);
         let col = (fx as usize).min(geo.ws.num_cols as usize - 1);
         let row = (fy as usize).min(geo.ws.num_lines as usize - 1);
-        let side = if fx.fract() < 0.5 { Side::Left } else { Side::Right };
+        let side = if fx.fract() < 0.5 {
+            Side::Left
+        } else {
+            Side::Right
+        };
         (col, row, side)
     }
 
@@ -658,11 +783,10 @@ impl App {
         let geo = self.geometry();
         let st = self.st();
         st.mouse = (x, y);
-        if st.settings.is_some() {
+        if let Some(set) = st.settings.as_mut() {
             let (w, h) = st.renderer.size();
             let top = geo.tab_bar.as_ref().map_or(0.0, |t| t.height);
             let scale = st.scale;
-            let set = st.settings.as_mut().unwrap();
             let hit = set.hit(x, y, w, h, top, scale);
             if set.hover != Some(hit) {
                 set.hover = Some(hit);
@@ -701,7 +825,11 @@ impl App {
         }
         // Arrastrando una línea divisoria: cambia el reparto de los paneles.
         if let Some((path, side, area)) = self.st().drag.clone() {
-            let ratio = if side { (x - area[0]) / area[2].max(1.0) } else { (y - area[1]) / area[3].max(1.0) };
+            let ratio = if side {
+                (x - area[0]) / area[2].max(1.0)
+            } else {
+                (y - area[1]) / area[3].max(1.0)
+            };
             let st = self.st();
             let g = st.group;
             if let Some(group) = st.groups.get_mut(g) {
@@ -711,8 +839,15 @@ impl App {
             return;
         }
         let in_bar = geo.tab_bar.as_ref().is_some_and(|tb| y < tb.height);
-        let in_gutter = !in_bar && self.blocks_active() && geo.panes.iter().any(|p| x >= p.rect[0] && x < p.x && y >= p.y && y < p.rect[1] + p.rect[3]);
-        let divider = (!in_bar).then(|| divider_at(&geo, x, y, self.st().scale)).flatten();
+        let in_gutter = !in_bar
+            && self.blocks_active()
+            && geo
+                .panes
+                .iter()
+                .any(|p| x >= p.rect[0] && x < p.x && y >= p.y && y < p.rect[1] + p.rect[3]);
+        let divider = (!in_bar)
+            .then(|| divider_at(&geo, x, y, self.st().scale))
+            .flatten();
         let on_link = !in_bar && !in_gutter && divider.is_none() && self.update_link(x, y);
         let icon = match self.resize_edge(x, y) {
             Some(dir) => resize_cursor(dir),
@@ -733,13 +868,17 @@ impl App {
 
         let (col, row, side) = self.cell_at(x, y);
         let st = self.st();
-        let Some(tab) = st.tabs.get(st.active) else { return };
+        let Some(tab) = st.tabs.get(st.active) else {
+            return;
+        };
         let mut term = tab.term.lock();
         let mode = *term.mode();
         let reporting = mode.intersects(TermMode::MOUSE_MODE) && !st.mods.shift_key();
         if reporting {
             let held = st.mouse_buttons != 0;
-            if mode.contains(TermMode::MOUSE_MOTION) || (held && mode.contains(TermMode::MOUSE_DRAG)) {
+            if mode.contains(TermMode::MOUSE_MOTION)
+                || (held && mode.contains(TermMode::MOUSE_DRAG))
+            {
                 let btn = match st.mouse_buttons {
                     b if b & 1 != 0 => MouseButtonCode::Left,
                     b if b & 2 != 0 => MouseButtonCode::Middle,
@@ -824,7 +963,9 @@ impl App {
                 use crate::search::Hit;
                 if hit == Hit::Close {
                     st.search = None;
-                } else if let (Some(tab), Some(search)) = (st.tabs.get(st.active), st.search.as_mut()) {
+                } else if let (Some(tab), Some(search)) =
+                    (st.tabs.get(st.active), st.search.as_mut())
+                {
                     let mut term = tab.term.lock();
                     match hit {
                         Hit::Prev => search.step(&mut term, true),
@@ -886,7 +1027,8 @@ impl App {
             if pressed {
                 let st = self.st();
                 let now = Instant::now();
-                let double = now.duration_since(st.last_click.0) < MULTI_CLICK && st.last_click.1 == 1;
+                let double =
+                    now.duration_since(st.last_click.0) < MULTI_CLICK && st.last_click.1 == 1;
                 st.last_click = (now, if double { 0 } else { 1 });
                 match (tb.hit(x, y), button) {
                     (Some(TabHit::Tab(i)), MouseButton::Left) => self.select_group(i),
@@ -899,7 +1041,9 @@ impl App {
                     (Some(TabHit::Settings), MouseButton::Left) => {
                         self.run_action(crate::keybindings::Action::Settings);
                     }
-                    (Some(TabHit::Minimize), MouseButton::Left) => self.st().window.set_minimized(true),
+                    (Some(TabHit::Minimize), MouseButton::Left) => {
+                        self.st().window.set_minimized(true)
+                    }
                     (Some(TabHit::Maximize), MouseButton::Left) => self.toggle_maximized(),
                     (Some(TabHit::CloseWindow), MouseButton::Left) => return true,
                     (Some(TabHit::Empty), MouseButton::Left) if double => self.toggle_maximized(),
@@ -938,14 +1082,24 @@ impl App {
         };
 
         // Margen izquierdo: clic selecciona (o deselecciona) el bloque de esa línea.
-        if pressed && button == MouseButton::Left && x >= geo.pane[0] && x < geo.x && y >= geo.y && self.blocks_active() {
+        if pressed
+            && button == MouseButton::Left
+            && x >= geo.pane[0]
+            && x < geo.x
+            && y >= geo.y
+            && self.blocks_active()
+        {
             let row = ((y - geo.y) / self.st().glyphs.fonts.metrics.height).max(0.0) as i32;
             let st = self.st();
             if let Some(tab) = st.tabs.get_mut(st.active) {
                 let term = tab.term.lock();
-                let line = Line(row.min(term.screen_lines() as i32 - 1) - term.grid().display_offset() as i32);
+                let line = Line(
+                    row.min(term.screen_lines() as i32 - 1) - term.grid().display_offset() as i32,
+                );
                 let idle = tab.blocks.lock().unwrap().idle_current();
-                let hit = blocks::anchor_at(&term, line, 10_000).map(|a| a.id).filter(|id| Some(*id) != idle);
+                let hit = blocks::anchor_at(&term, line, 10_000)
+                    .map(|a| a.id)
+                    .filter(|id| Some(*id) != idle);
                 drop(term);
                 tab.selected_block = if hit == tab.selected_block { None } else { hit };
                 st.window.request_redraw();
@@ -978,7 +1132,9 @@ impl App {
         }
 
         let st = self.st();
-        let Some(tab) = st.tabs.get(st.active) else { return false };
+        let Some(tab) = st.tabs.get(st.active) else {
+            return false;
+        };
         let mode = *tab.term.lock().mode();
 
         // La app del terminal quiere el ratón (vim, htop...). Shift fuerza selección local.
@@ -998,7 +1154,11 @@ impl App {
         match (button, pressed) {
             (MouseButton::Left, true) => {
                 let now = Instant::now();
-                let count = if now.duration_since(st.last_click.0) < MULTI_CLICK { st.last_click.1 % 3 + 1 } else { 1 };
+                let count = if now.duration_since(st.last_click.0) < MULTI_CLICK {
+                    st.last_click.1 % 3 + 1
+                } else {
+                    1
+                };
                 st.last_click = (now, count);
                 let ty = match count {
                     2 => SelectionType::Semantic,
@@ -1020,7 +1180,12 @@ impl App {
             (MouseButton::Left, false) => {
                 if st.selecting {
                     st.selecting = false;
-                    let empty = tab.term.lock().selection.as_ref().is_none_or(|s| s.is_empty());
+                    let empty = tab
+                        .term
+                        .lock()
+                        .selection
+                        .as_ref()
+                        .is_none_or(|s| s.is_empty());
                     if empty {
                         tab.term.lock().selection = None;
                         // Un clic (sin arrastrar) en lo escrito en el prompt lleva el cursor ahí.
@@ -1058,7 +1223,9 @@ impl App {
             }
             return false;
         }
-        let Some(tab) = st.tabs.get(st.active) else { return false };
+        let Some(tab) = st.tabs.get(st.active) else {
+            return false;
+        };
         let key = (cell.0, cell.1);
         if let Some((id, k, found)) = &st.link {
             if *id == tab.id && *k == key {
@@ -1069,7 +1236,11 @@ impl App {
         let found = {
             let term = tab.term.lock();
             let offset = term.grid().display_offset() as i32;
-            crate::links::find(&term, Point::new(Line(cell.1 as i32 - offset), Column(cell.0)), cwd.as_deref())
+            crate::links::find(
+                &term,
+                Point::new(Line(cell.1 as i32 - offset), Column(cell.0)),
+                cwd.as_deref(),
+            )
         };
         let changed = st.link.as_ref().map(|l| &l.2) != Some(&found);
         let has = found.is_some();
@@ -1081,8 +1252,14 @@ impl App {
     }
 
     fn blocks_active(&self) -> bool {
-        let Some(st) = self.st.as_ref() else { return false };
-        self.cfg.terminal.blocks && st.tabs.get(st.active).is_some_and(|t| t.blocks.lock().unwrap().active)
+        let Some(st) = self.st.as_ref() else {
+            return false;
+        };
+        self.cfg.terminal.blocks
+            && st
+                .tabs
+                .get(st.active)
+                .is_some_and(|t| t.blocks.lock().unwrap().active)
     }
 
     fn toggle_maximized(&mut self) {
@@ -1124,7 +1301,11 @@ impl App {
             MouseScrollDelta::LineDelta(_, y) => y * mult,
             MouseScrollDelta::PixelDelta(p) => p.y as f32 / ch,
         };
-        if let Some(menu) = st.menu.as_mut().filter(|m| m.contains(st.mouse.0, st.mouse.1)) {
+        if let Some(menu) = st
+            .menu
+            .as_mut()
+            .filter(|m| m.contains(st.mouse.0, st.mouse.1))
+        {
             // Sobre el menú de completado, la rueda recorre sus opciones.
             let steps = match delta {
                 MouseScrollDelta::LineDelta(_, y) => y,
@@ -1172,10 +1353,16 @@ impl App {
         let (x, y) = st.mouse;
         let (col, row, _) = self.cell_at(x, y);
         let st = self.st();
-        let Some(tab) = st.tabs.get(st.active) else { return };
+        let Some(tab) = st.tabs.get(st.active) else {
+            return;
+        };
         let mode = *tab.term.lock().mode();
         if mode.intersects(TermMode::MOUSE_MODE) && !st.mods.shift_key() {
-            let code = if n > 0 { MouseButtonCode::WheelUp } else { MouseButtonCode::WheelDown };
+            let code = if n > 0 {
+                MouseButtonCode::WheelUp
+            } else {
+                MouseButtonCode::WheelDown
+            };
             for _ in 0..n.abs() {
                 if let Some(b) = input::mouse_report(code, true, false, col, row, st.mods, mode) {
                     tab.input(b);
