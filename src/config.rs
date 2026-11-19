@@ -268,8 +268,9 @@ impl Config {
         }
     }
 
-    /// Guarda los valores que se pueden cambiar desde Ajustes. Edita el archivo existente
-    /// en su sitio (toml_edit), así se conservan comentarios y el resto de claves.
+    /// Guarda los valores que se pueden cambiar desde Ajustes. Edita el documento con toml_edit
+    /// (se conservan comentarios y el resto de claves) y lo sustituye de una vez: se escribe al
+    /// lado y se renombra encima. Un archivo de solo lectura no se toca.
     pub fn save(&self) -> std::io::Result<()> {
         let path = Self::path().ok_or_else(|| {
             io::Error::new(io::ErrorKind::NotFound, "Sin carpeta de configuración")
@@ -289,6 +290,13 @@ impl Config {
                     .parse::<DocumentMut>()
                     .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
                 let permissions = fs::metadata(&path)?.permissions();
+                // `chmod 444` para congelarlo: se respeta (renombrar encima lo saltaría).
+                if permissions.readonly() {
+                    return Err(io::Error::new(
+                        io::ErrorKind::PermissionDenied,
+                        "config.toml es de solo lectura",
+                    ));
+                }
                 (path, Some(permissions), doc)
             }
             Err(e) if e.kind() == io::ErrorKind::NotFound => {
@@ -353,7 +361,9 @@ impl Config {
         if let Some(permissions) = permissions {
             file.set_permissions(permissions)?;
         }
-        file.sync_all()?;
+        // Sin fsync: se guarda en cada paso de un ajuste, en el hilo de la interfaz. Renombrar
+        // encima del archivo ya hace que btrfs y ext4 escriban antes los datos.
+        drop(file);
         fs::rename(staged, path)
     }
 
@@ -406,6 +416,28 @@ mod tests {
             );
             assert_eq!(fs::read_to_string(&path).unwrap(), original);
         }
+    }
+
+    #[test]
+    fn guardar_respeta_un_archivo_de_solo_lectura() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = crate::temp_dir::TempDir::new_in(&std::env::temp_dir()).unwrap();
+        let path = dir.path().join("config.toml");
+        fs::write(&path, "theme = \"garbo-black\"\n").unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o444)).unwrap();
+        let mut cfg = Config::load_at(&path);
+        cfg.theme = "otro".into();
+        let err = cfg.save_at(&path).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            "theme = \"garbo-black\"\n",
+            "sin tocar"
+        );
+        assert_eq!(
+            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o444
+        );
     }
 
     #[test]

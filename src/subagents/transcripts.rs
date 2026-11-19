@@ -207,7 +207,8 @@ fn codex_child(path: &Path, parent: &str, started: SystemTime) -> Option<SubAgen
         return None;
     }
     let id = meta["id"].as_str().filter(|id| is_uuid(id))?;
-    let (running, activity) = codex_status(&read_tail(path)?);
+    // Sin final legible (una línea larga a medio escribir): sigue en la lista, sin actividad.
+    let (running, activity) = codex_status(&read_tail(path).unwrap_or_default());
     let spawn = &meta["source"]["subagent"]["thread_spawn"];
     let role = meta["agent_role"]
         .as_str()
@@ -277,7 +278,7 @@ fn gemini_agents(dir: &Path) -> Vec<SubAgent> {
                 return None;
             }
             let id = header["sessionId"].as_str().filter(|id| is_uuid(id))?;
-            let tail = read_tail(&path)?;
+            let tail = read_tail(&path).unwrap_or_default();
             let (running, activity) = gemini_status(&tail);
             (running || age <= KEEP_DONE).then(|| SubAgent {
                 id: id.into(),

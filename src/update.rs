@@ -252,6 +252,7 @@ fn install(rel: &Release, send: &dyn Fn(UpdateState)) -> Result<(), String> {
         .join("updates");
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let dir = fs::canonicalize(dir).map_err(|e| e.to_string())?;
+    remove_stale_downloads(&dir);
     let staged = crate::temp_dir::TempDir::new_in(&dir).map_err(|e| e.to_string())?;
     let path = staged.path().join("garbo.rpm");
     let download = curl()
@@ -278,6 +279,27 @@ fn install(rel: &Release, send: &dyn Fn(UpdateState)) -> Result<(), String> {
         Ok(())
     } else {
         Err("instalación cancelada o fallida".into())
+    }
+}
+
+/// Descargas a medias de intentos anteriores (Garbo se cerró antes de terminar): fuera las de
+/// hace más de una hora, para no pisar otra instalación en curso.
+fn remove_stale_downloads(dir: &Path) {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let stale = entry.file_name().to_string_lossy().starts_with(".garbo-")
+            && entry.file_type().is_ok_and(|t| t.is_dir())
+            && entry
+                .metadata()
+                .and_then(|m| m.modified())
+                .ok()
+                .and_then(|t| t.elapsed().ok())
+                .is_some_and(|age| age > Duration::from_secs(3600));
+        if stale {
+            let _ = fs::remove_dir_all(entry.path());
+        }
     }
 }
 

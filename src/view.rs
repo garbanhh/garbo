@@ -371,7 +371,8 @@ fn preview_end(
 
     let cursor = usize::try_from(cursor).ok().filter(|&row| row < rows.len());
     let prompt = cursor.and_then(|cursor| {
-        (cursor.saturating_sub(12)..=cursor).rev().find(|&row| {
+        // Hasta arriba: la condición de abajo (todo lo de en medio, sangrado o marco) ya la limita.
+        (0..=cursor).rev().find(|&row| {
             let mut text = rows[row]
                 .iter()
                 .map(|&(ch, _)| ch)
@@ -393,10 +394,14 @@ fn preview_end(
         return Some(border.unwrap_or(prompt));
     }
     // Evita confundir un separador de la conversación con el editor de un agente distinto.
-    let cursor = cursor?;
-    let upper = (cursor.saturating_sub(15)..cursor).rfind(|&row| is_rule(&rows[row]))?;
-    let lower = (cursor + 1..rows.len().min(upper + 16)).any(|row| is_rule(&rows[row]));
-    lower.then_some(upper)
+    let between = cursor.and_then(|cursor| {
+        let upper = (cursor.saturating_sub(15)..cursor).rfind(|&row| is_rule(&rows[row]))?;
+        let lower = (cursor + 1..rows.len().min(upper + 16)).any(|row| is_rule(&rows[row]));
+        lower.then_some(upper)
+    });
+    // Los CLI hechos con Ink (Gemini CLI…) dejan el cursor bajo el pie: vale un marco completo
+    // (línea de arriba y de abajo) cerca del final. Un separador suelto no cuenta.
+    between.or_else(|| input_rules(rows).and_then(|(upper, _)| upper))
 }
 
 /// Línea horizontal de lado a lado (o borde de caja): solo marcos y al menos 8 trazos.
@@ -413,6 +418,11 @@ fn is_rule(cells: &[(char, Rgb)]) -> bool {
 /// queda la barra de estado: se busca la línea más baja con, como mucho, 12 líneas con texto
 /// debajo y, hasta 15 líneas por encima, su pareja.
 pub fn input_area_top(rows: &[Vec<(char, Rgb)>]) -> Option<usize> {
+    input_rules(rows).map(|(upper, lower)| upper.unwrap_or(lower))
+}
+
+/// Líneas del marco de la zona de entrada: la de arriba (si la hay) y la de abajo.
+fn input_rules(rows: &[Vec<(char, Rgb)>]) -> Option<(Option<usize>, usize)> {
     let has_text = |r: &Vec<(char, Rgb)>| r.iter().any(|(c, _)| !is_frame(*c));
     let last = rows.iter().rposition(has_text)?;
     let mut below = 0;
@@ -433,7 +443,7 @@ pub fn input_area_top(rows: &[Vec<(char, Rgb)>]) -> Option<usize> {
     let upper = (lower.saturating_sub(15)..lower)
         .rev()
         .find(|&r| is_rule(&rows[r]));
-    Some(upper.unwrap_or(lower))
+    Some((upper, lower))
 }
 
 /// Texto sugerido (en gris) a continuación del cursor, sin pasar del borde derecho.
@@ -1470,6 +1480,21 @@ mod tests {
             "  gemini",
         ]);
         assert_eq!(preview_end(&r, 2, Some(Provider::Gemini)), Some(1));
+        // Ink deja el cursor bajo el pie: también se recorta el marco.
+        let r = rows(&[
+            "✦ Revisé las pruebas",
+            "╭──────────────────╮",
+            "│ > borrador       │",
+            "╰──────────────────╯",
+            "~/proj (main*)  gemini-2.5-pro",
+            "",
+        ]);
+        assert_eq!(preview_end(&r, 5, Some(Provider::Gemini)), Some(1));
+        assert_eq!(
+            preview_end(&r, 5, None),
+            Some(1),
+            "agentes sin adaptador, igual"
+        );
         assert_eq!(
             preview_end(&rows(&["historial", "────────", "resultado"]), 2, None),
             None

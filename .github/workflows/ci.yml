@@ -15,7 +15,8 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # master
         with:
-          toolchain: stable
+          # Versión fija: una versión nueva de clippy con avisos nuevos no rompe el CI sin cambios.
+          toolchain: 1.100.0
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
       - name: Compilar
@@ -31,5 +32,7 @@ jobs:
           VK_LOADER_DRIVERS_SELECT: '*lvp*'
         run: |
           sudo apt-get update
-          sudo apt-get install -y xvfb xauth xdotool mesa-vulkan-drivers fonts-dejavu-core
+          # winit abre estas bibliotecas de X11 al arrancar (en Fedora con GNOME ya están).
+          sudo apt-get install -y xvfb xauth xdotool mesa-vulkan-drivers fonts-dejavu-core \
+            libxkbcommon-x11-0 libx11-xcb1 libxcursor1 libxrandr2 libxi6
           xvfb-run -a -s '-screen 0 1920x1080x24' python3 tools/prueba_paneles.py target/debug/garbo
