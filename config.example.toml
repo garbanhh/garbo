@@ -40,6 +40,12 @@ autosuggest = true       # sugerir en gris el resto del comando (→ lo acepta, 
 tab_key = "menu"         # menu: Tab abre el menú de completado | accept: Tab acepta la sugerencia
 complete_as_you_type = false # abrir el menú de completado solo, mientras se escribe
 
+# Avisos del escritorio cuando un agente termina
+[notifications]
+agents = "unfocused"     # unfocused: si no estás viendo su pestaña | always | never
+min_work_secs = 5        # solo si trabajó al menos estos segundos
+sound = true
+
 # Sobrescribe colores del tema elegido
 [colors]
 # background = "#101216"

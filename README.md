@@ -156,6 +156,11 @@ secciones:
 - **Subagentes**: bajo cada sesión de Claude Code se listan los subagentes que lanza, con su
   descripción, el tiempo en marcha y la última herramienta que están usando. Se obtienen, en modo
   de solo lectura, de los archivos de sesión que Claude Code guarda en `~/.claude/projects`.
+- **Avisos**: cuando un agente termina y no estás viendo su pestaña, Garbo muestra un aviso del
+  escritorio ("Claude Code ha terminado", con el tema de la conversación, la carpeta y el tiempo que
+  trabajó). Al pulsarlo se vuelve a Garbo, en esa pestaña. En *Ajustes → Avisos* se elige cuándo
+  avisar (si no lo ves, siempre o nunca), el tiempo mínimo de trabajo y el sonido, y se puede
+  enviar uno de prueba. Usa `notify-send` (paquete `libnotify`).
 - **Puertos**: servidores web locales del usuario (detectados mediante una petición HTTP), con el
   programa que los ejecuta; un clic los abre en el navegador. El resto de puertos en escucha se
   agrupa en una lista desplegable. Esta sección solo consulta el sistema mientras está visible.
@@ -240,6 +245,7 @@ src/
   sessions.rs     detección de agentes en primer plano y su estado
   ports.rs        puertos en escucha y detección de servidores web
   subagents.rs    subagentes de Claude Code a partir de sus archivos de sesión
+  notify.rs       avisos del escritorio cuando un agente termina
   panel.rs        panel lateral de agentes y puertos, con vista previa al pasar el ratón
 shell/            integración con bash
 packaging/        icono, entrada de escritorio y metadatos AppStream

@@ -518,10 +518,31 @@ impl App {
         let (active, focused) = (st.active, st.focused);
         let mut changed = false;
         let agents_panel = st.panel.agents;
+        let ncfg = &self.cfg.notifications;
+        let min_work = std::time::Duration::from_secs(ncfg.min_work_secs);
         for (i, tab) in st.tabs.iter_mut().enumerate() {
-            changed |= tab.refresh_session(focused && i == active, now);
+            let viewing = focused && i == active;
+            changed |= tab.refresh_session(viewing, now);
             if agents_panel {
                 changed |= tab.refresh_subagents(now);
+            }
+            // Aviso del escritorio: al mirar la pestaña se retira; al terminar el agente, se envía.
+            if viewing {
+                if let Some(id) = tab.notice.shown.take() {
+                    crate::notify::close(id);
+                }
+            }
+            if let Some(worked) = tab.notice.update(tab.session.is_working(), min_work, now) {
+                let alive = tab.session.status != crate::sessions::Status::Exited;
+                if let Some(agent) = tab.session.agent.filter(|_| alive && crate::notify::wanted(ncfg, viewing)) {
+                    let dir = crate::terminal::short_dir(&tab.cwd_label);
+                    let (title, body) = crate::notify::notice_text(agent.name, tab.label(), &dir, worked);
+                    // Uno por pestaña: el anterior sobra.
+                    if let Some(old) = tab.notice.shown.take() {
+                        crate::notify::close(old);
+                    }
+                    crate::notify::send(crate::notify::Notice { tab: tab.id, title, body, sound: ncfg.sound }, self.proxy.clone());
+                }
             }
         }
         // Animación del indicador "trabajando" (~7 fps, solo mientras algún agente trabaja).
@@ -543,6 +564,9 @@ impl App {
         let mut next: Option<Instant> = None;
         let mut push = |t: Instant| next = Some(next.map_or(t, |n: Instant| n.min(t)));
         for tab in &st.tabs {
+            if let Some(t) = tab.notice.next_wake() {
+                push(t);
+            }
             if tab.session.is_working() {
                 push(now + std::time::Duration::from_millis(150));
             } else if now.duration_since(tab.last_output) < crate::sessions::WORK_WINDOW {
@@ -680,6 +704,17 @@ impl App {
                 if on {
                     crate::update::start_checker(self.proxy.clone());
                 }
+            }
+            Change::TestNotice => {
+                // Aviso de muestra, con el sonido elegido y aunque los avisos estén desactivados.
+                let st = self.st();
+                let tab = st.tabs.get(st.active).map_or(0, |t| t.id);
+                let dir = st.tabs.get(st.active).map(|t| crate::terminal::short_dir(&t.cwd_label)).unwrap_or_default();
+                let (title, body) =
+                    crate::notify::notice_text("Claude Code", "Así se verá el aviso", &dir, std::time::Duration::from_secs(125));
+                let n = crate::notify::Notice { tab, title, body, sound: self.cfg.notifications.sound };
+                crate::notify::send(n, self.proxy.clone());
+                return false;
             }
             Change::OpenFile => {
                 if let Some(path) = Config::path() {

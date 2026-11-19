@@ -18,6 +18,7 @@ mod sessions;
 mod settings;
 mod subagents;
 mod complete;
+mod notify;
 mod suggest;
 mod clipboard;
 mod terminal;

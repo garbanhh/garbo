@@ -20,6 +20,35 @@ pub struct Config {
     pub keybindings: HashMap<String, String>,
     /// Consultar en GitHub si hay versión nueva (al arrancar y cada 24 h).
     pub check_updates: bool,
+    /// Avisos del escritorio (agente que termina).
+    pub notifications: NotifyConfig,
+}
+
+/// Cuándo avisar de que un agente terminó.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum NotifyWhen {
+    /// Si no se está viendo su pestaña (ventana sin foco u otra pestaña).
+    #[default]
+    Unfocused,
+    Always,
+    Never,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct NotifyConfig {
+    pub agents: NotifyWhen,
+    /// Solo si el agente trabajó al menos estos segundos.
+    pub min_work_secs: u64,
+    /// Con sonido (el de "completado" del tema de sonidos).
+    pub sound: bool,
+}
+
+impl Default for NotifyConfig {
+    fn default() -> Self {
+        Self { agents: NotifyWhen::Unfocused, min_work_secs: 5, sound: true }
+    }
 }
 
 impl Default for Config {
@@ -33,6 +62,7 @@ impl Default for Config {
             colors: ColorOverrides::default(),
             keybindings: HashMap::new(),
             check_updates: true,
+            notifications: NotifyConfig::default(),
         }
     }
 }
@@ -226,6 +256,13 @@ impl Config {
         let r2 = |v: f32| ((v as f64) * 100.0).round() / 100.0;
         doc["theme"] = value(self.theme.clone());
         doc["check_updates"] = value(self.check_updates);
+        doc["notifications"]["agents"] = value(match self.notifications.agents {
+            NotifyWhen::Unfocused => "unfocused",
+            NotifyWhen::Always => "always",
+            NotifyWhen::Never => "never",
+        });
+        doc["notifications"]["min_work_secs"] = value(self.notifications.min_work_secs as i64);
+        doc["notifications"]["sound"] = value(self.notifications.sound);
         doc["font"]["family"] = value(self.font.family.clone());
         doc["font"]["size"] = value(r2(self.font.size));
         doc["font"]["line_height"] = value(r2(self.font.line_height));

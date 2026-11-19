@@ -1,6 +1,6 @@
 [package]
 name = "garbo"
-version = "0.5.0"
+version = "0.6.0"
 edition = "2021"
 description = "Terminal GPU ligera, rápida y personalizable con pestañas y bloques de comandos"
 license = "MIT"
@@ -53,6 +53,9 @@ assets = [
 
 [package.metadata.generate-rpm.requires]
 curl = "*"
+# notify-send (avisos) y gdbus (retirarlos)
+libnotify = "*"
+glib2 = "*"
 
 [profile.release]
 opt-level = 3

@@ -3,7 +3,7 @@
 //! el resto del archivo).
 
 use crate::atlas::UiVariant;
-use crate::config::{Config, CursorStyle, Rgb, TabKey, Theme};
+use crate::config::{Config, CursorStyle, NotifyWhen, Rgb, TabKey, Theme};
 use crate::ui::{cross, dim, surface};
 use crate::update::{CheckState, UpdateState};
 use crate::view::Painter;
@@ -24,6 +24,10 @@ pub enum Field {
     Blocks,
     GarboPrompt,
     ShellIntegration,
+    NotifyAgents,
+    NotifyMinWork,
+    NotifySound,
+    NotifyTest,
     Padding,
     Opacity,
     Decorations,
@@ -46,6 +50,8 @@ pub enum Change {
     Redraw,
     Restart,
     OpenFile,
+    /// "Probar aviso" de la categoría Avisos.
+    TestNotice,
     Updates,
     /// Botón "Buscar" / "Actualizar" de la categoría Actualizaciones.
     CheckNow,
@@ -81,6 +87,15 @@ const CATEGORIES: &[(&str, &[(Field, &str)])] = &[
             (Field::Blocks, "Bloques de comandos"),
             (Field::GarboPrompt, "Prompt de Garbo"),
             (Field::ShellIntegration, "Integración con bash"),
+        ],
+    ),
+    (
+        "Avisos",
+        &[
+            (Field::NotifyAgents, "Cuando un agente termine"),
+            (Field::NotifyMinWork, "Si trabajó al menos"),
+            (Field::NotifySound, "Con sonido"),
+            (Field::NotifyTest, "Probar aviso"),
         ],
     ),
     (
@@ -314,6 +329,16 @@ impl Settings {
                 TabKey::Accept => "Sugerencia".into(),
             },
             Field::EditFile => "Abrir".into(),
+            Field::NotifyTest => "Enviar".into(),
+            Field::NotifyAgents => match cfg.notifications.agents {
+                NotifyWhen::Unfocused => "Si no lo veo".into(),
+                NotifyWhen::Always => "Siempre".into(),
+                NotifyWhen::Never => "Nunca".into(),
+            },
+            Field::NotifyMinWork => match cfg.notifications.min_work_secs {
+                s if s >= 60 && s % 60 == 0 => format!("{} min", s / 60),
+                s => format!("{s} s"),
+            },
             Field::Version => env!("CARGO_PKG_VERSION").into(),
             _ => String::new(),
         }
@@ -325,6 +350,7 @@ impl Settings {
             Field::CopyOnSelect => cfg.terminal.copy_on_select,
             Field::Autosuggest => cfg.terminal.autosuggest,
             Field::CompleteAsYouType => cfg.terminal.complete_as_you_type,
+            Field::NotifySound => cfg.notifications.sound,
             Field::Blocks => cfg.terminal.blocks,
             Field::GarboPrompt => cfg.terminal.garbo_prompt,
             Field::ShellIntegration => cfg.terminal.shell_integration,
@@ -428,6 +454,26 @@ impl Settings {
                 Change::Restart
             }
             Field::EditFile => Change::OpenFile,
+            Field::NotifyAgents => {
+                let order = [NotifyWhen::Unfocused, NotifyWhen::Always, NotifyWhen::Never];
+                let pos = order.iter().position(|w| *w == cfg.notifications.agents).unwrap_or(0) as i32;
+                cfg.notifications.agents = order[(pos + d).rem_euclid(3) as usize];
+                Change::Redraw
+            }
+            Field::NotifyMinWork => {
+                const STEPS: [u64; 6] = [0, 5, 10, 30, 60, 300];
+                let cur = cfg.notifications.min_work_secs;
+                let pos = STEPS.iter().position(|s| *s >= cur).unwrap_or(STEPS.len() - 1) as i32;
+                cfg.notifications.min_work_secs = STEPS[(pos + d).clamp(0, STEPS.len() as i32 - 1) as usize];
+                Change::Redraw
+            }
+            Field::NotifySound => {
+                cfg.notifications.sound = !cfg.notifications.sound;
+                Change::Redraw
+            }
+            // Como el de actualizaciones: solo con Intro o clic.
+            Field::NotifyTest if dir == 0 => Change::TestNotice,
+            Field::NotifyTest => Change::None,
             // El botón solo responde a Intro o clic, no a ← →.
             Field::CheckNow if dir == 0 => Change::CheckNow,
             Field::CheckNow => Change::None,
@@ -712,8 +758,8 @@ impl Settings {
                 let t = self.value_text(f, cfg);
                 let tw = p.ui_measure(&t);
                 p.ui_text_in(right - tw, ry, rh, &t, dimc, tw + 2.0);
-            } else if f == Field::EditFile {
-                let t = "Abrir";
+            } else if matches!(f, Field::EditFile | Field::NotifyTest) {
+                let t = &self.value_text(f, cfg);
                 let tw = p.ui_measure(t);
                 p.ui_text_in(right - tw - 12.0 * s, ry, rh, t, theme.accent, tw + 2.0);
                 let ax = right - 4.0 * s;

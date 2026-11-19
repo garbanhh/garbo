@@ -26,6 +26,9 @@ pub enum UserEvent {
     Ports(Vec<crate::ports::PortInfo>),
     /// Imagen del portapapeles guardada (o error) para pegar su ruta en la pestaña.
     PasteImage(u64, Result<PathBuf, String>),
+    /// Aviso mostrado (pestaña, proceso `notify-send`) y aviso pulsado (pestaña). Ver `notify.rs`.
+    NoticeShown(u64, u32),
+    NoticeClicked(u64),
 }
 
 /// Salida que llega justo después de que el usuario escriba es su eco (o el redibujado de la
@@ -82,6 +85,8 @@ pub struct Tab {
     pub session: crate::sessions::Session,
     /// Subagentes de Claude Code (solo se consultan con el panel de agentes abierto).
     pub subagents: crate::subagents::Watch,
+    /// Aviso del escritorio cuando el agente termina.
+    pub notice: crate::notify::Tracker,
     /// Directorio actual abreviado (título de la pestaña).
     pub cwd_label: String,
     cwd_checked: Option<std::time::Instant>,
@@ -188,6 +193,7 @@ impl Tab {
             title_owner: None,
             session: Default::default(),
             subagents: Default::default(),
+            notice: Default::default(),
             cwd_label: String::new(),
             cwd_checked: None,
             title,

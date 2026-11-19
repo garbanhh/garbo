@@ -89,6 +89,12 @@ impl ApplicationHandler<UserEvent> for App {
     /// portapapeles destruiría sus objetos de Wayland sobre una conexión ya cerrada (SIGSEGV en
     /// cada cierre).
     fn exiting(&mut self, _el: &ActiveEventLoop) {
+        // Los avisos de esta sesión ya no llevarían a ninguna parte.
+        if let Some(st) = self.st.as_ref() {
+            for pid in st.tabs.iter().filter_map(|t| t.notice.shown) {
+                crate::notify::close(pid);
+            }
+        }
         self.st = None;
     }
 
@@ -139,6 +145,24 @@ impl ApplicationHandler<UserEvent> for App {
             UserEvent::UpdateCheck(state) => {
                 if let Some(st) = self.st.as_mut() {
                     st.update_check = state;
+                    st.window.request_redraw();
+                }
+                return;
+            }
+            UserEvent::NoticeShown(tab, pid) => {
+                match self.st.as_mut().and_then(|st| st.tabs.iter_mut().find(|t| t.id == tab)) {
+                    Some(t) => t.notice.shown = Some(pid),
+                    None => crate::notify::close(pid), // la pestaña ya se cerró
+                }
+                return;
+            }
+            UserEvent::NoticeClicked(tab) => {
+                let idx = self.st.as_ref().and_then(|st| st.tabs.iter().position(|t| t.id == tab));
+                if let Some(i) = idx {
+                    self.select_tab(i);
+                    let st = self.st();
+                    st.tabs[i].notice.shown = None;
+                    st.window.focus_window();
                     st.window.request_redraw();
                 }
                 return;
