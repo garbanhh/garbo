@@ -84,6 +84,14 @@ impl ApplicationHandler<UserEvent> for App {
         self.init(window);
     }
 
+    /// Al salir, todo se libera aquí, con la conexión de Wayland aún abierta. En winit 0.30
+    /// `run_app` consume el bucle de eventos: si el estado se soltara después, el hilo del
+    /// portapapeles destruiría sus objetos de Wayland sobre una conexión ya cerrada (SIGSEGV en
+    /// cada cierre).
+    fn exiting(&mut self, _el: &ActiveEventLoop) {
+        self.st = None;
+    }
+
     fn new_events(&mut self, _el: &ActiveEventLoop, cause: StartCause) {
         if let StartCause::ResumeTimeReached { .. } = cause {
             let blink = self.cfg.terminal.cursor_blink;
