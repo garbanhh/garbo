@@ -505,7 +505,7 @@ pub fn current_input<T>(term: &Term<T>, start: (i64, usize)) -> Option<String> {
 /// Ctrl+R ("(reverse-i-search)…"): entonces lo que hay no es la línea de órdenes. Si lo escrito
 /// empieza en la primera columna (prompt de Garbo, o un prompt que llena la línea), el prompt está
 /// en la línea de encima.
-fn prompt_before<T>(term: &Term<T>, line: Line, col: usize) -> bool {
+pub(crate) fn prompt_before<T>(term: &Term<T>, line: Line, col: usize) -> bool {
     let is_prompt = |l: Line, c: usize| matches!(crate::blocks::cell_link(&term.grid()[l][Column(c)]), Some((b'p', _)));
     if col > 0 {
         is_prompt(line, col - 1)
@@ -518,7 +518,7 @@ fn prompt_before<T>(term: &Term<T>, line: Line, col: usize) -> bool {
 
 /// Lo que readline muestra en lugar de la línea durante una búsqueda o un argumento numérico. Con
 /// el prompt de Garbo lo escribe desde la primera columna, sin tocar el prompt.
-fn readline_mode(text: &str) -> bool {
+pub(crate) fn readline_mode(text: &str) -> bool {
     ["(reverse-i-search)", "(i-search)", "(failed reverse-i-search)", "(failed i-search)", "(arg: "]
         .iter()
         .any(|p| text.starts_with(p))

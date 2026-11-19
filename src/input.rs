@@ -9,7 +9,7 @@ fn mod_code(m: ModifiersState) -> u8 {
 }
 
 /// `CSI 1;m X` o `SS3 X` / `CSI X` según modo y modificadores.
-fn cursor_key(letter: char, m: ModifiersState, app: bool) -> Vec<u8> {
+pub(crate) fn cursor_key(letter: char, m: ModifiersState, app: bool) -> Vec<u8> {
     let code = mod_code(m);
     if code > 1 {
         format!("\x1b[1;{code}{letter}").into_bytes()

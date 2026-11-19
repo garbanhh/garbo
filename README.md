@@ -1,53 +1,76 @@
-# Garbo
+<p align="center">
+  <img src="assets/garbo-banner.svg" alt="Garbo" width="520">
+</p>
 
-Garbo es un emulador de terminal acelerado por GPU, escrito en Rust y diseñado para un consumo
-mínimo de recursos. Ofrece pestañas, bloques de comandos, paleta de comandos, temas y un panel de
-ajustes con persistencia automática.
+<p align="center">
+  <strong>Terminal para Linux acelerada por GPU, con bloques de comandos, completado inteligente
+  y seguimiento de agentes de código.</strong><br>
+  Escrita en Rust. Ligera, rápida y en español.
+</p>
+
+<p align="center">
+  <a href="https://github.com/garbanhh/garbo/releases/latest"><img alt="Última versión" src="https://img.shields.io/github/v/release/garbanhh/garbo?label=versi%C3%B3n&color=ff7a06"></a>
+  <a href="LICENSE"><img alt="Licencia MIT" src="https://img.shields.io/badge/licencia-MIT-69fc09"></a>
+  <img alt="Linux: Wayland y X11" src="https://img.shields.io/badge/Linux-Wayland%20%C2%B7%20X11-294172?logo=linux&logoColor=white">
+  <img alt="Hecha con Rust" src="https://img.shields.io/badge/hecha%20con-Rust-b7410e?logo=rust&logoColor=white">
+</p>
+
+<p align="center">
+  <a href="#instalación">Instalación</a> ·
+  <a href="#características">Características</a> ·
+  <a href="#atajos-de-teclado">Atajos</a> ·
+  <a href="#configuración">Configuración</a> ·
+  <a href="#compilar-desde-el-código">Compilar</a>
+</p>
+
+<p align="center">
+  <img src="assets/captura.png" alt="Garbo: bloques de comandos con su carpeta y duración, un error en rojo y el menú de completado con las ramas de git" width="900">
+</p>
 
 ## Características
 
-- Renderizado por GPU (wgpu: Vulkan, Metal, DX12 u OpenGL) con redibujado únicamente bajo demanda.
-- Pestañas integradas en la barra de título, con herencia del directorio de trabajo. Cada pestaña
-  se titula con lo que se está haciendo: el título del programa, la orden en ejecución o la carpeta.
-- Sugerencias de comandos a partir del historial, que se aceptan con `Tab`.
-- Pegado de imágenes: una captura en el portapapeles se pega como ruta de archivo, que los agentes
-  de código adjuntan como imagen.
-- Bloques de comandos: cada comando y su salida se agrupan con su estado de salida y duración.
-- Panel lateral con los agentes de código en ejecución en cada pestaña y los puertos en escucha.
-- Paleta de comandos con búsqueda aproximada.
-- Panel de ajustes con aplicación inmediata y guardado en `config.toml`.
-- Emoji a color (incluido el formato COLRv1), CJK, true color y estilos de subrayado.
-- Caracteres de dibujo de cajas y bloques generados por el propio renderizador, alineados al píxel.
-- Actualizaciones desde la propia aplicación.
-
-## Requisitos
-
-- Linux con Wayland o X11 (desarrollado y probado en Fedora 45 con GNOME).
-- GPU compatible con Vulkan, o en su defecto OpenGL.
-- Bash para la integración de bloques de comandos (opcional).
+- **Rápida y ligera.** Dibuja con la GPU (wgpu: Vulkan u OpenGL) y solo cuando algo cambia: en
+  reposo no gasta CPU y arranca con unos 30 MB de memoria.
+- **Bloques de comandos.** Cada comando y su salida forman un bloque con la carpeta, la duración y
+  el resultado (en rojo si falla). Se seleccionan, se recorren con el teclado y se copian enteros o
+  solo su salida.
+- **Completado al estilo Warp.** `Tab` abre un menú con lo que puede ir en cada sitio: órdenes,
+  carpetas tras `cd`, ramas de git, scripts de `package.json`, objetivos de `make`, equipos de SSH…
+  Mientras escribes, sugiere en gris comandos que ya usaste en esa carpeta.
+- **Edición cómoda de la línea.** `Shift+Intro` para escribir un comando en varias líneas, borrar
+  palabras con `Ctrl+Retroceso`, deshacer con `Ctrl+Z` y colocar el cursor con un clic.
+- **Hecha para agentes de código.** Un panel muestra qué hace cada agente (Claude Code, Codex,
+  Gemini CLI, Aider…) y sus subagentes. Cuando un agente termina y no lo estás mirando, recibes un
+  aviso del escritorio. Al pulsarlo vuelves a su pestaña. Las capturas de pantalla se pegan como
+  imagen.
+- **Pestañas en la barra de título.** Heredan la carpeta y se titulan solas con lo que se está
+  haciendo.
+- **A tu gusto.** Temas, fuentes, atajos y un panel de ajustes que aplica cada cambio al momento y
+  lo guarda en `config.toml`.
+- **Texto impecable.** Emoji a color (también COLRv1), CJK, *true color*, estilos de subrayado y
+  caracteres de cajas dibujados al píxel.
+- **Se actualiza sola.** Avisa de las versiones nuevas y las instala con un clic.
 
 ## Instalación
 
-Se descarga el paquete `.rpm` de la [última versión](https://github.com/garbanhh/garbo/releases/latest)
-y se instala con:
+Descarga el paquete `.rpm` de la [última versión](https://github.com/garbanhh/garbo/releases/latest)
+e instálalo con:
 
 ```bash
 sudo dnf install ./garbo-*.x86_64.rpm
 ```
 
-La aplicación aparece como **Garbo** en el menú de aplicaciones.
+Garbo aparece en el menú de aplicaciones. Las versiones siguientes se instalan desde la propia
+aplicación.
 
-## Compilación
-
-```bash
-sudo dnf install gcc rustup && rustup-init -y
-cargo build --release
-./target/release/garbo
-```
+**Requisitos:** Linux con Wayland o X11 (desarrollada y probada en Fedora 45 con GNOME) y una GPU
+con Vulkan u OpenGL. Los bloques de comandos, las sugerencias y el completado usan bash.
 
 ## Uso
 
 ### Atajos de teclado
+
+**Pestañas y ventana**
 
 | Atajo | Acción |
 |---|---|
@@ -57,28 +80,42 @@ cargo build --release
 | `Alt+1` … `Alt+9` | Ir a una pestaña (`Alt+9`: la última) |
 | `Ctrl+Shift+P` | Paleta de comandos |
 | `Ctrl+,` | Ajustes |
-| `Ctrl+Shift+C` / `Ctrl+Shift+V` | Copiar / pegar (también imágenes: ver más abajo) |
+| `Ctrl+Shift+A` / `Ctrl+Shift+E` | Panel de agentes / de puertos |
+
+**Línea de órdenes**
+
+| Atajo | Acción |
+|---|---|
 | `Tab` / `Ctrl+Espacio` | Menú de completado (sin candidatos, `Tab` llega al shell) |
 | `→` o `Ctrl+F` / `Ctrl+→` | Aceptar la sugerencia en gris / solo su siguiente palabra |
-| `Ctrl++` / `Ctrl+-` / `Ctrl+0` | Aumentar / reducir / restablecer el tamaño de fuente |
-| `Shift+RePág` / `Shift+AvPág` / `Shift+Inicio` / `Shift+Fin` | Desplazamiento por el historial |
-| `Ctrl+Shift+K` | Limpiar el historial |
-| `Ctrl+Shift+Y` | Siguiente tema |
-| `Ctrl+Shift+R` | Recargar la configuración |
+| `Shift+Intro` | Nueva línea sin ejecutar (también en Claude Code y otros agentes) |
+| `Ctrl+Retroceso` / `Ctrl+Supr` | Borrar la palabra anterior / siguiente |
+| `Ctrl+Z` | Deshacer |
+| Clic en lo escrito | Llevar el cursor ahí |
+| `↑` / `↓` | En un comando de varias líneas, cambiar de línea |
+
+**Texto, bloques e historial**
+
+| Atajo | Acción |
+|---|---|
+| `Ctrl+Shift+C` / `Ctrl+Shift+V` | Copiar / pegar (también imágenes) |
 | `Ctrl+Shift+↑` / `Ctrl+Shift+↓` | Bloque de comandos anterior / siguiente |
 | `Ctrl+Shift+O` | Copiar la salida del bloque seleccionado o del último comando |
-| `Ctrl+Shift+A` / `Ctrl+Shift+E` | Mostrar u ocultar los paneles de agentes / puertos |
+| `Shift+RePág` / `Shift+AvPág` / `Shift+Inicio` / `Shift+Fin` | Recorrer el historial |
+| `Ctrl+Shift+K` | Limpiar el historial |
+| `Ctrl++` / `Ctrl+-` / `Ctrl+0` | Aumentar / reducir / restablecer la fuente |
+| `Ctrl+Shift+Y` | Siguiente tema |
+| `Ctrl+Shift+R` | Recargar la configuración |
 
-Todos los atajos se pueden modificar en la sección `[keybindings]` de la configuración.
+Todos los atajos de Garbo se cambian en la sección `[keybindings]` de la configuración.
 
 ### Ratón
 
-- Doble clic selecciona una palabra; triple clic, una línea; `Ctrl+Alt` y arrastrar, un bloque rectangular.
+- Doble clic selecciona una palabra; triple clic, una línea; `Ctrl+Alt` y arrastrar, un rectángulo.
 - El clic central pega la selección primaria; sobre una pestaña, la cierra.
-- `Shift` fuerza la selección local en aplicaciones que capturan el ratón.
-- Arrastrar un archivo a la ventana inserta su ruta.
-- La barra de pestañas permite mover la ventana; el doble clic la maximiza. La ventana se
-  redimensiona desde sus bordes.
+- `Shift` fuerza la selección local en programas que capturan el ratón.
+- Arrastrar un archivo a la ventana escribe su ruta.
+- La barra de pestañas mueve la ventana y con doble clic la maximiza; los bordes la redimensionan.
 
 ### Completado y sugerencias
 
@@ -90,133 +127,135 @@ no distingue mayúsculas ni tildes (`doc` encuentra `Documentos`, `videos` encue
 nada empieza igual ni lo contiene, busca las letras en orden. `↑` `↓` (o `Tab`/`Shift+Tab`) eligen,
 `Intro`, `→` o un clic aceptan y `Esc` cierra; seguir escribiendo refina la lista. Con un único
 candidato se escribe directamente; si no hay ninguno (por ejemplo, opciones `-x`), `Tab` llega al
-shell y funciona su autocompletado habitual.
+shell y funciona su autocompletado de siempre.
 
-**Sugerencia en gris.** Mientras se escribe (a partir de dos caracteres), Garbo muestra en gris el
-resto de un comando ya usado que empieza igual: primero lo ejecutado en la carpeta actual y, si no,
-lo más reciente. `→` o `Ctrl+F` lo aceptan y `Ctrl+→` acepta solo la siguiente palabra. Si el
-historial no tiene nada, se sugiere el único candidato del completado (`cd Doc` → `umentos/`).
+**Sugerencia en gris.** A partir de dos caracteres, Garbo muestra en gris el resto de un comando ya
+usado que empieza igual: primero lo ejecutado en la carpeta actual y, si no, lo más reciente. Si el
+historial no tiene nada, sugiere el único candidato del completado (`cd Doc` → `umentos/`).
 
-Garbo guarda su propio historial en `~/.local/share/garbo/history.tsv`, con la carpeta en la que se
-ejecutó cada comando; lo combina con `$HISTFILE` (`~/.bash_history`). Un `cd` a una ruta relativa
-(`cd Proyectos`) solo se sugiere en la carpeta donde se hizo. Solo se sugieren comandos que se pueden
-ejecutar: su primera palabra debe ser un programa del `PATH`, una orden interna de bash o un alias o
-función de los archivos de arranque (`~/.bashrc`, `~/.bashrc.d/`, `~/.bash_aliases`). Los comandos
-que empiezan por un espacio no se guardan, y no hay sugerencias durante la búsqueda con `Ctrl+R`.
+Garbo guarda su propio historial en `~/.local/share/garbo/history.tsv`, con la carpeta de cada
+comando, y lo combina con `~/.bash_history`. Un `cd` a una ruta relativa solo se sugiere en la
+carpeta donde se hizo, y solo se sugieren comandos que se pueden ejecutar (programas del `PATH`,
+órdenes internas de bash, alias y funciones de `~/.bashrc`). Los comandos que empiezan por un
+espacio no se guardan.
 
-Requiere la integración con bash (véase *Bloques de comandos*). En *Ajustes → Completado* se puede
-desactivar la sugerencia en gris, hacer que `Tab` la acepte (el menú queda en `Ctrl+Espacio`) y
-abrir el menú automáticamente mientras se escribe.
+En *Ajustes → Completado* se puede desactivar la sugerencia en gris, hacer que `Tab` la acepte (el
+menú pasa a `Ctrl+Espacio`) y abrir el menú automáticamente mientras se escribe.
 
-### Pegar capturas de pantalla
+### Edición de la línea
 
-Si al pegar con `Ctrl+Shift+V` el portapapeles no contiene texto pero sí una imagen (por ejemplo,
-tras `ImprPant` en GNOME), Garbo la guarda en `~/.cache/garbo/capturas` y pega la ruta del archivo.
-Claude Code y otros agentes reconocen la ruta y adjuntan la imagen. La imagen se lee con
-`wl-paste` (Wayland) o `xclip` (X11); las capturas guardadas se eliminan al cabo de un día.
+Garbo añade a bash los atajos de edición de Warp. `Shift+Intro` parte el comando en varias líneas
+sin ejecutarlo; al pulsar `Intro` se ejecutan todas, una tras otra. En un comando de varias líneas,
+`↑` y `↓` cambian de línea; en la primera y en la última recorren el historial como siempre. Un
+clic en lo escrito lleva el cursor a ese punto. `Ctrl+Retroceso` y `Ctrl+Supr` borran por palabras
+(en `~/Documentos/Proyectos`, solo `Proyectos`) y `Ctrl+Z` deshace.
+
+Con un agente en primer plano, `Shift+Intro` también inserta un salto de línea (en Claude Code,
+Codex o Gemini CLI se envía `Ctrl+J`) y `Ctrl+Retroceso` borra la palabra anterior. En el resto de
+programas (vim, python…) las teclas funcionan como siempre.
 
 ### Bloques de comandos
 
-Cada comando y su salida forman un bloque, delimitado por un separador. Una barra en el margen
-izquierdo indica su estado (verde: correcto; rojo: error; azul: en ejecución).
+Cada comando y su salida forman un bloque. Una barra en el margen izquierdo indica su estado
+(verde: correcto; rojo: error; azul: en ejecución).
 
 Con el **prompt de Garbo** (activado por defecto), cada bloque muestra encima del comando la carpeta
 en la que se ejecutó y su duración (o el código de error, en rojo), y el comando en negrita. El
-prompt actual es una etiqueta con la carpeta y, si se está en un repositorio, la rama de git; lo
-que se escribe va debajo, desde la primera columna. Se desactiva en *Ajustes → Bloques → Prompt de
-Garbo* (`garbo_prompt = false`) para usar el prompt propio del shell; en ese caso el código de error
-o la duración (si supera un segundo) se muestran a la derecha.
+prompt actual es una etiqueta con la carpeta y, en un repositorio, la rama de git; lo que se
+escribe va debajo, desde la primera columna. Se desactiva en *Ajustes → Bloques → Prompt de Garbo*
+para usar el prompt propio del shell.
 
 Un bloque se selecciona con `Ctrl+Shift+↑` / `Ctrl+Shift+↓` o con un clic en el margen izquierdo.
 Con un bloque seleccionado, `Ctrl+Shift+C` copia el bloque completo y `Ctrl+Shift+O` su salida; la
-paleta de comandos permite además copiar únicamente el comando.
+paleta de comandos permite además copiar solo el comando.
 
-La integración funciona con bash: Garbo lo inicia con `--rcfile` apuntando a
-[`shell/garbo.bash`](shell/garbo.bash), que carga `~/.bashrc` y emite marcas OSC 133 al comienzo
-del prompt, del comando y de la salida, y al finalizar el comando. No requiere modificar la
-configuración del shell. Se desactiva con `shell_integration = false`, o solo su representación
-visual con `blocks = false`.
+La integración funciona con bash sin tocar su configuración: Garbo lo inicia con `--rcfile`
+apuntando a [`shell/garbo.bash`](shell/garbo.bash), que carga `~/.bashrc` y marca con OSC 133 el
+prompt, el comando y su salida. Cada bloque queda anclado al propio texto de la rejilla, así que
+conserva su sitio al desplazarse, al recortarse el historial y al redimensionar. Se desactiva con
+`shell_integration = false`, o solo su aspecto con `blocks = false`.
 
-Cada bloque queda anclado al propio contenido de la rejilla mediante un hiperenlace interno en las
-celdas del prompt, por lo que su posición se conserva ante el desplazamiento, el recorte del
-historial y el reajuste de líneas al redimensionar.
+### Agentes de código
 
-### Panel lateral
+Los botones de la barra de pestañas (o `Ctrl+Shift+A` y `Ctrl+Shift+E`) abren un panel lateral:
 
-Los botones de la barra de pestañas (o `Ctrl+Shift+A` y `Ctrl+Shift+E`) muestran un panel con dos
-secciones:
+- **Agentes**: pestañas con un agente de código (Claude Code, Codex, Gemini CLI, Aider, OpenCode,
+  entre otros), con su estado (*Trabajando*, *Terminado*, *Esperando tu mensaje*) y el tiempo
+  transcurrido. Un clic va a la pestaña; al pasar el ratón se ven las últimas líneas de la
+  conversación sin cambiar de pestaña.
+- **Subagentes**: bajo cada sesión de Claude Code, los subagentes que lanza, con su descripción, el
+  tiempo en marcha y la herramienta que usan. Se leen, sin modificarlos, de los archivos de sesión
+  de `~/.claude/projects`.
+- **Puertos**: servidores web locales con el programa que los ejecuta; un clic los abre en el
+  navegador. El resto de puertos en escucha se agrupa aparte. Solo se consulta con el panel abierto.
 
-- **Agentes**: pestañas que ejecutan un agente de código (Claude Code, Codex, Gemini CLI, Aider,
-  OpenCode, entre otros), con su estado (*Trabajando*, *Terminado*, *Esperando tu mensaje*) y el
-  tiempo transcurrido. Un clic activa la pestaña; al pasar el ratón, la fila se despliega y muestra
-  las últimas líneas de la conversación de esa pestaña (sin el cuadro de entrada ni la barra de
-  estado del agente) sin necesidad de cambiar a ella. La propia pestaña muestra también un
-  indicador. La detección se basa en el proceso en primer plano de cada terminal y en su actividad;
-  la salida que se produce justo al teclear no cuenta como trabajo del agente.
-- **Subagentes**: bajo cada sesión de Claude Code se listan los subagentes que lanza, con su
-  descripción, el tiempo en marcha y la última herramienta que están usando. Se obtienen, en modo
-  de solo lectura, de los archivos de sesión que Claude Code guarda en `~/.claude/projects`.
-- **Avisos**: cuando un agente termina y no estás viendo su pestaña, Garbo muestra un aviso del
-  escritorio ("Claude Code ha terminado", con el tema de la conversación, la carpeta y el tiempo que
-  trabajó). Al pulsarlo se vuelve a Garbo, en esa pestaña. En *Ajustes → Avisos* se elige cuándo
-  avisar (si no lo ves, siempre o nunca), el tiempo mínimo de trabajo y el sonido, y se puede
-  enviar uno de prueba. Usa `notify-send` (paquete `libnotify`).
-- **Puertos**: servidores web locales del usuario (detectados mediante una petición HTTP), con el
-  programa que los ejecuta; un clic los abre en el navegador. El resto de puertos en escucha se
-  agrupa en una lista desplegable. Esta sección solo consulta el sistema mientras está visible.
+**Avisos.** Cuando un agente termina y no estás viendo su pestaña, Garbo muestra un aviso del
+escritorio ("Claude Code ha terminado", con el tema de la conversación, la carpeta y el tiempo que
+trabajó). Al pulsarlo, Garbo se pone delante en esa pestaña. En *Ajustes → Avisos* se elige cuándo
+avisar, el tiempo mínimo de trabajo y el sonido, y se puede enviar uno de prueba.
+
+**Pegar capturas.** Si al pegar el portapapeles tiene una imagen (por ejemplo, tras `ImprPant`),
+Garbo la guarda en `~/.cache/garbo/capturas` y pega su ruta, que Claude Code y otros agentes
+adjuntan como imagen.
 
 ### Ajustes
 
-La ventana de ajustes se abre con `Ctrl+,` o con el botón de menú de la barra de pestañas. Muestra
-las categorías a la izquierda (Tema, Texto, Terminal, Bloques, Ventana y Actualizaciones) y sus
-opciones a la derecha. Los cambios se aplican de inmediato y se guardan en
-`~/.config/garbo/config.toml`, conservando el resto del archivo y sus comentarios.
-
-- **Tema**: cuadrícula de muestras con los colores de cada tema; un clic lo aplica.
-- **Actualizaciones**: botón *Buscar* para comprobar en el momento si hay una versión nueva (y, si
-  la hay, *Actualizar*), además de la búsqueda automática y la versión instalada.
-
-La rueda del ratón desplaza la lista sin cambiar el elemento seleccionado. Navegación con teclado:
-`Tab` / `Shift+Tab` para cambiar de categoría, `↑` `↓` para elegir, `←` `→` para cambiar el valor,
-`Intro` para activar y `Esc` para cerrar.
+`Ctrl+,` o el botón de menú abren los ajustes, por categorías: Tema, Texto, Terminal, Completado,
+Bloques, Avisos, Ventana y Actualizaciones. Los cambios se aplican al momento y se guardan en
+`~/.config/garbo/config.toml`, respetando el resto del archivo y sus comentarios. Se manejan con el
+ratón o con el teclado (`Tab` cambia de categoría, `↑` `↓` eligen, `←` `→` cambian el valor, `Esc`
+cierra).
 
 ## Configuración
 
-El archivo de configuración es `~/.config/garbo/config.toml`; todas las opciones están
-documentadas en [`config.example.toml`](config.example.toml). Los valores por defecto coinciden
-con los de GNOME Terminal (Adwaita Mono 11 e interlineado natural). El tema por defecto es
-`garbo-black` y la interfaz usa la misma fuente que el terminal (configurable con `ui_family`).
+El archivo es `~/.config/garbo/config.toml`; todas las opciones están explicadas en
+[`config.example.toml`](config.example.toml). Por defecto Garbo usa los valores de GNOME Terminal
+(Adwaita Mono 11), el tema `garbo-black` y la misma fuente en la interfaz (`ui_family` la cambia).
 
 ## Actualizaciones
 
-Garbo consulta las versiones publicadas en GitHub al iniciarse y cada 24 horas. Cuando existe una
-versión más reciente, la barra de pestañas muestra el aviso **Actualizar a X.Y.Z**. Al pulsarlo,
-descarga el paquete, verifica su suma SHA-256 e instala mediante `pkexec dnf`, que solicita la
-contraseña de administrador. La búsqueda de actualizaciones puede desactivarse en los ajustes.
+Garbo consulta las versiones publicadas en GitHub al iniciarse y cada 24 horas. Si hay una más
+reciente, la barra de pestañas muestra **Actualizar a X.Y.Z**: al pulsarlo descarga el paquete,
+comprueba su suma SHA-256 e instala con `pkexec dnf`, que pide la contraseña de administrador. Se
+puede desactivar en los ajustes.
 
 ## Rendimiento
 
 | Técnica | Efecto |
 |---|---|
-| Redibujado solo ante cambios (`ControlFlow::Wait`) | Consumo de CPU nulo en reposo |
-| Un único pipeline y una llamada de dibujo por fotograma | Fondos, texto, cursor e interfaz como instancias |
-| Fusión de fondos contiguos | Menos instancias; el fondo por defecto no se dibuja |
+| Redibujado solo ante cambios | CPU nula en reposo |
+| Un único *pipeline* y una llamada de dibujo por fotograma | Fondos, texto, cursor e interfaz como instancias |
 | Atlas de glifos | Cada glifo se rasteriza y se sube a la GPU una sola vez |
-| Pestañas inactivas sin renderizar | Su PTY sigue procesándose sin coste de GPU |
-| Fuentes mapeadas en memoria y cargadas bajo demanda | Las fuentes de respaldo no ocupan memoria hasta usarse |
-| Selección de controladores Vulkan por fabricante | Evita cargar controladores ajenos que arrastran libLLVM (~25 MB) |
-| Compilación con LTO, `codegen-units = 1` y `panic = abort` | Binario compacto y rápido |
+| Pestañas inactivas sin renderizar | Su terminal sigue al día sin gastar GPU |
+| Fuentes mapeadas en memoria y cargadas bajo demanda | Las de respaldo no ocupan memoria hasta usarse |
+| Controladores Vulkan solo del fabricante de la GPU | No se cargan otros que arrastran libLLVM (~25 MB) |
+| LTO, `codegen-units = 1` y `panic = abort` | Binario compacto y rápido |
 
-Mediciones en Fedora 45 con GPU Intel Arc integrada y Wayland (compilación release):
+Medido en Fedora 45 con GPU Intel Arc integrada y Wayland:
 
 | Métrica | Valor |
 |---|---|
 | Memoria residente al iniciar | ~30 MB (~11 MB privados) |
 | CPU en reposo | 0 % |
 | `seq 1 3000000` | ~2,2 s |
-| Tamaño del binario | ~8 MB |
+| Tamaño del binario | ~9 MB |
 
-## Arquitectura
+## Compilar desde el código
+
+```bash
+sudo dnf install gcc rustup && rustup-init -y
+cargo build --release
+./target/release/garbo
+```
+
+- `cargo test` ejecuta las pruebas.
+- `GARBO_SCREENSHOT=/ruta/captura.ppm` guarda cada fotograma en disco.
+- `GARBO_GPU_DEBUG=1` activa las capas de validación de la GPU.
+- `RUST_LOG=debug` aumenta el nivel de registro.
+- `scripts/publicar.sh X.Y.Z` publica una versión: GitHub Actions genera el paquete RPM.
+
+<details>
+<summary><strong>Estructura del código</strong></summary>
 
 ```
 src/
@@ -236,6 +275,7 @@ src/
   settings.rs     panel de ajustes y persistencia
   palette.rs      paleta de comandos y búsqueda
   input.rs        traducción de teclado y ratón a secuencias xterm
+  edit.rs         edición de la línea al estilo Warp (Shift+Intro, clic, palabras)
   keybindings.rs  atajos de teclado configurables
   config.rs       configuración y temas
   update.rs       comprobación e instalación de actualizaciones
@@ -246,22 +286,18 @@ src/
   ports.rs        puertos en escucha y detección de servidores web
   subagents.rs    subagentes de Claude Code a partir de sus archivos de sesión
   notify.rs       avisos del escritorio cuando un agente termina
+  activation.rs   traer la ventana al frente al pulsar un aviso (Wayland)
   panel.rs        panel lateral de agentes y puertos, con vista previa al pasar el ratón
 shell/            integración con bash
 packaging/        icono, entrada de escritorio y metadatos AppStream
+assets/           logo y capturas del README
 scripts/          publicación de versiones
-tools/            utilidades de prueba (capturas, sesiones simuladas)
+tools/            utilidades (capturas, sesiones simuladas, vectorizar el logo)
 ```
 
-## Desarrollo
-
-- `scripts/publicar.sh X.Y.Z` actualiza la versión, ejecuta las pruebas, crea la etiqueta y la
-  publica; GitHub Actions genera entonces el paquete RPM y la versión en GitHub.
-- `GARBO_SCREENSHOT=/ruta/captura.ppm` guarda cada fotograma en disco.
-- `GARBO_GPU_DEBUG=1` activa las capas de validación de la GPU.
-- `RUST_LOG=debug` aumenta el nivel de registro.
+</details>
 
 ## Licencia
 
-Distribuido bajo la licencia MIT (véase [`LICENSE`](LICENSE)). `src/pty_loop.rs` deriva de
+Distribuida bajo la licencia MIT (véase [`LICENSE`](LICENSE)). `src/pty_loop.rs` deriva de
 alacritty_terminal, distribuido bajo la licencia Apache 2.0 (véase [`NOTICE`](NOTICE)).

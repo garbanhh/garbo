@@ -1,6 +1,6 @@
 [package]
 name = "garbo"
-version = "0.6.0"
+version = "0.7.0"
 edition = "2021"
 description = "Terminal GPU ligera, rápida y personalizable con pestañas y bloques de comandos"
 license = "MIT"
@@ -37,6 +37,10 @@ log = "0.4"
 env_logger = { version = "0.11", default-features = false, features = ["auto-color"] }
 toml_edit = "0.25.19"
 serde_json = "1.0.154"
+# Traer la ventana al frente al pulsar un aviso (xdg-activation); ya están en el árbol vía winit
+wayland-client = "0.31"
+wayland-backend = { version = "0.3", features = ["client_system"] }
+wayland-protocols = { version = "0.32", features = ["client", "staging"] }
 
 # Empaquetado RPM con `cargo generate-rpm` (ver .github/workflows/release.yml)
 [package.metadata.generate-rpm]
@@ -53,9 +57,8 @@ assets = [
 
 [package.metadata.generate-rpm.requires]
 curl = "*"
-# notify-send (avisos) y gdbus (retirarlos)
+# notify-send (avisos)
 libnotify = "*"
-glib2 = "*"
 
 [profile.release]
 opt-level = 3

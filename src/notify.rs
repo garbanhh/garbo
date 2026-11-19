@@ -2,9 +2,10 @@
 //!
 //! Cada pestaña lleva un `Tracker`. Cuando su agente deja de trabajar se espera `CONFIRM` (por si
 //! solo era una pausa) y, si sigue parado, trabajó al menos lo configurado y el usuario no lo está
-//! viendo (o se eligió "Siempre"), se envía el aviso. Al pulsarlo, GNOME trae la ventana al frente
-//! (por la entrada `desktop-entry`) y Garbo cambia a esa pestaña. Nada de esto despierta la app en
-//! reposo: solo hay temporizador con un aviso pendiente.
+//! viendo (o se eligió "Siempre"), se envía el aviso. Al pulsarlo, el escritorio entrega un permiso
+//! de activación (`--activation-token-fd`), con el que Garbo se pone delante (ver `activation.rs`)
+//! en esa pestaña. Nada de esto despierta la app en reposo: solo hay temporizador con un aviso
+//! pendiente.
 //!
 //! `notify-send -A` se queda esperando a que se pulse o se cierre el aviso. Al mirar la pestaña (o
 //! al salir de Garbo) se termina ese proceso: GNOME 51 solo deja retirar un aviso a la conexión que
@@ -106,11 +107,12 @@ fn clean(s: &str) -> String {
 
 
 /// Envía el aviso en segundo plano. Avisa a la app del proceso (`NoticeShown`) y de si se pulsa
-/// (`NoticeClicked`).
+/// (`NoticeClicked`, con el permiso de activación si el escritorio lo da).
 pub fn send(n: Notice, proxy: EventLoopProxy<UserEvent>) {
     let mut cmd = Command::new("notify-send");
     cmd.args(["-a", "Garbo", "-i", APP_ID, "-h"]).arg(format!("string:desktop-entry:{APP_ID}"));
-    cmd.args(["-A", "default=Abrir", "-h"]);
+    // El permiso de activación sale por stdout justo antes del nombre de la acción.
+    cmd.args(["-A", "default=Abrir", "--activation-token-fd=1", "-h"]);
     cmd.arg(if n.sound { "string:sound-name:complete" } else { "boolean:suppress-sound:true" });
     cmd.arg("--").arg(clean(&n.title)).arg(escape_markup(&clean(&n.body)));
     cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null());
@@ -127,9 +129,10 @@ pub fn send(n: Notice, proxy: EventLoopProxy<UserEvent>) {
     let _ = proxy.send_event(UserEvent::NoticeShown(n.tab, pid));
     std::thread::spawn(move || {
         if let Some(out) = child.stdout.take() {
+            let mut token = None;
             for line in BufReader::new(out).lines().map_while(Result::ok) {
-                if line.trim() == "default" {
-                    let _ = proxy.send_event(UserEvent::NoticeClicked(n.tab));
+                if let Some(token) = clicked(&line, &mut token) {
+                    let _ = proxy.send_event(UserEvent::NoticeClicked(n.tab, token));
                 }
             }
         }
@@ -139,6 +142,19 @@ pub fn send(n: Notice, proxy: EventLoopProxy<UserEvent>) {
         }
         let _ = child.wait();
     });
+}
+
+/// Lee una línea de `notify-send`: el permiso de activación se guarda hasta que llega la acción
+/// `default` (aviso pulsado), que devuelve el permiso (o nada si el escritorio no lo dio).
+fn clicked(line: &str, token: &mut Option<String>) -> Option<Option<String>> {
+    let line = line.trim();
+    if line == "default" {
+        return Some(token.take());
+    }
+    if crate::activation::valid(line) {
+        *token = Some(line.to_string());
+    }
+    None
 }
 
 /// Retira el aviso de un `notify-send` (si sigue en marcha).
@@ -200,5 +216,15 @@ mod tests {
         assert!(wanted(&cfg, true));
         cfg.agents = NotifyWhen::Never;
         assert!(!wanted(&cfg, false));
+    }
+
+    #[test]
+    fn permiso_de_activacion_antes_del_clic() {
+        let mut token = None;
+        assert_eq!(clicked("2b1f6c0e-9a7d-4c1e-8f3a-5d6e7f8a9b0c", &mut token), None);
+        assert_eq!(clicked("default", &mut token), Some(Some("2b1f6c0e-9a7d-4c1e-8f3a-5d6e7f8a9b0c".into())));
+        assert_eq!(clicked("default", &mut token), Some(None), "sin permiso: se pulsa igual");
+        assert_eq!(clicked("con espacios raros", &mut token), None);
+        assert_eq!(token, None);
     }
 }

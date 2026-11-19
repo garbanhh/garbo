@@ -1,25 +1,7 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
-  <defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#2b303d"/>
-      <stop offset="1" stop-color="#14161c"/>
-    </linearGradient>
-    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#9dbcff"/>
-      <stop offset="1" stop-color="#6b8bf0"/>
-    </linearGradient>
-  </defs>
-  <!-- sombra -->
-  <rect x="10" y="14" width="108" height="104" rx="24" fill="#000" opacity="0.28"/>
-  <!-- cuerpo -->
-  <rect x="10" y="10" width="108" height="104" rx="24" fill="url(#bg)"/>
-  <rect x="10.75" y="10.75" width="106.5" height="102.5" rx="23.25" fill="none" stroke="#fff" stroke-opacity="0.10" stroke-width="1.5"/>
-  <!-- barras de bloque (verde = bien, azul = activo) -->
-  <rect x="24" y="30" width="5" height="20" rx="2.5" fill="#8fd18b"/>
-  <rect x="24" y="58" width="5" height="34" rx="2.5" fill="url(#accent)"/>
-  <!-- prompt y cursor -->
-  <path d="M42 62 L58 75 L42 88" fill="none" stroke="url(#accent)" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
-  <rect x="64" y="82" width="30" height="8" rx="4" fill="#e6e8ee"/>
-  <!-- línea de salida anterior -->
-  <rect x="42" y="36" width="44" height="7" rx="3.5" fill="#e6e8ee" opacity="0.35"/>
+<title>Garbo</title>
+<rect x="8" y="8" width="112" height="112" rx="24" fill="#05060e"/>
+<path fill="#ff7a06" fill-rule="evenodd" d="M70.0 20.3 76.4 20.5 76.7 20.9 77.8 24.4 78.6 26.3 78.9 27.7 79.2 28.0 80.5 28.1 81.0 28.3 81.6 28.3 89.5 30.0 93.3 35.3 58.3 35.4 57.7 35.6 55.6 37.5 43.6 49.7 41.3 52.0 41.1 52.6 41.1 76.7 41.3 77.4 57.8 93.8 58.4 94.0 90.9 94.0 88.6 97.6 88.1 98.0 87.0 98.1 81.2 99.5 77.1 100.3 76.7 100.9 74.4 107.5 72.5 107.7 66.2 107.7 66.1 107.6 63.6 107.5 63.4 107.3 61.6 100.5 61.4 100.0 59.3 99.6 53.4 97.5 47.7 101.6 47.3 101.6 45.2 100.3 42.2 98.0 39.0 95.2 41.1 89.5 41.4 88.2 39.4 85.6 37.2 82.1 29.7 81.7 29.4 81.3 28.2 77.4 26.6 71.8 26.5 70.9 32.3 66.5 32.4 61.8 32.8 58.4 26.8 54.1 26.6 54.0 26.6 53.6 28.3 48.8 30.6 43.6 30.9 43.5 38.3 43.5 41.1 39.9 42.3 38.7 42.4 38.0 42.1 37.2 40.5 31.5 40.7 31.2 42.8 29.5 45.3 27.7 49.0 25.4 49.6 25.6 55.3 30.0 58.9 28.9 63.0 27.8 65.6 20.7 65.7 20.5 69.9 20.4Z"/>
+<path fill="#ffffff" fill-rule="evenodd" d="M59.6 40.0 97.4 40.0 100.9 43.5 93.9 50.4 61.7 50.4 55.5 56.6 55.5 73.3 61.7 79.4 92.0 79.4 92.1 67.4 92.2 67.3 101.3 67.3 101.5 67.4 101.5 82.2 94.5 89.4 59.8 89.4 57.3 87.1 45.7 75.6 45.6 75.4 45.6 54.1 59.1 40.3Z"/>
+<path fill="#69fc09" fill-rule="evenodd" d="M62.8 56.4 75.0 64.4 73.5 65.6 62.9 72.3 62.8 72.3 62.8 68.0 68.8 64.4 62.8 60.8ZM74.5 70.3 87.0 70.3 87.0 73.7 76.2 73.8 75.7 73.7 74.6 73.8 74.4 73.6Z"/>
 </svg>

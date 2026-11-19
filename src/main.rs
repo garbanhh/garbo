@@ -19,6 +19,8 @@ mod settings;
 mod subagents;
 mod complete;
 mod notify;
+mod activation;
+mod edit;
 mod suggest;
 mod clipboard;
 mod terminal;

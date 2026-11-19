@@ -26,9 +26,10 @@ pub enum UserEvent {
     Ports(Vec<crate::ports::PortInfo>),
     /// Imagen del portapapeles guardada (o error) para pegar su ruta en la pestaña.
     PasteImage(u64, Result<PathBuf, String>),
-    /// Aviso mostrado (pestaña, proceso `notify-send`) y aviso pulsado (pestaña). Ver `notify.rs`.
+    /// Aviso mostrado (pestaña, proceso `notify-send`) y aviso pulsado (pestaña, permiso de
+    /// activación del escritorio). Ver `notify.rs` y `activation.rs`.
     NoticeShown(u64, u32),
-    NoticeClicked(u64),
+    NoticeClicked(u64, Option<String>),
 }
 
 /// Salida que llega justo después de que el usuario escriba es su eco (o el redibujado de la
@@ -243,6 +244,39 @@ impl Tab {
         let term = self.term.lock();
         let start = self.blocks.lock().unwrap().input_start;
         input_for(&term, start)
+    }
+
+    /// ¿Espera bash un comando (con la integración de Garbo)? Entre las marcas B y C.
+    pub fn at_prompt(&self) -> bool {
+        let waiting = self.blocks.lock().unwrap().input_start.is_some();
+        waiting && !self.term.lock().mode().contains(alacritty_terminal::term::TermMode::ALT_SCREEN)
+    }
+
+    /// A quién van los atajos de edición (ver `edit.rs`): el prompt, un agente o lo de siempre.
+    pub fn edit_context(&self) -> crate::edit::Context {
+        use std::os::fd::AsRawFd;
+        if self.at_prompt() {
+            return crate::edit::Context::Prompt;
+        }
+        let pgid = self.master.as_ref().and_then(|f| crate::sessions::foreground_pgid(f.as_raw_fd()));
+        match pgid.and_then(crate::sessions::identify_agent) {
+            Some(a) => crate::edit::Context::Agent(a.name),
+            None => crate::edit::Context::Other,
+        }
+    }
+
+    /// Flechas para llevar el cursor del prompt a la celda pulsada (`None`: no es lo escrito).
+    pub fn click_moves(&self, p: alacritty_terminal::index::Point, side: alacritty_terminal::index::Side) -> Option<Vec<u8>> {
+        let term = self.term.lock();
+        let start = self.blocks.lock().unwrap().input_start?;
+        crate::edit::click_moves(&term, start, p, side)
+    }
+
+    /// ↑ / ↓ dentro de un comando de varias líneas (`None`: las flechas recorren el historial).
+    pub fn vertical_moves(&self, up: bool) -> Option<Vec<u8>> {
+        let term = self.term.lock();
+        let start = self.blocks.lock().unwrap().input_start?;
+        crate::edit::vertical_moves(&term, start, up)
     }
 
     /// Candidatos del menú de completado para lo escrito en el prompt (y lo escrito).

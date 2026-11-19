@@ -95,6 +95,8 @@ impl ApplicationHandler<UserEvent> for App {
                 crate::notify::close(pid);
             }
         }
+        // Antes de soltar la ventana: winit cierra el display de Wayland con ella.
+        crate::activation::release();
         self.st = None;
     }
 
@@ -156,13 +158,14 @@ impl ApplicationHandler<UserEvent> for App {
                 }
                 return;
             }
-            UserEvent::NoticeClicked(tab) => {
+            UserEvent::NoticeClicked(tab, token) => {
+                log::info!("Aviso pulsado ({})", if token.is_some() { "con permiso de activación" } else { "sin permiso" });
                 let idx = self.st.as_ref().and_then(|st| st.tabs.iter().position(|t| t.id == tab));
                 if let Some(i) = idx {
                     self.select_tab(i);
                     let st = self.st();
                     st.tabs[i].notice.shown = None;
-                    st.window.focus_window();
+                    crate::activation::raise(&st.window, token.as_deref());
                     st.window.request_redraw();
                 }
                 return;
@@ -436,6 +439,25 @@ impl App {
         }
         let st = self.st();
         let Some(tab) = st.tabs.get(st.active) else { return false };
+        // Edición al estilo Warp (`edit.rs`): Shift+Intro, Ctrl+Retroceso/Supr, Ctrl+Z y ↑/↓ en
+        // un comando de varias líneas.
+        let vertical = plain && matches!(key, Key::Named(NamedKey::ArrowUp | NamedKey::ArrowDown));
+        if crate::edit::is_candidate(key, mods) || vertical {
+            let ctx = tab.edit_context();
+            let bytes = if vertical {
+                (ctx == crate::edit::Context::Prompt)
+                    .then(|| tab.vertical_moves(matches!(key, Key::Named(NamedKey::ArrowUp))))
+                    .flatten()
+            } else {
+                crate::edit::shortcut(key, mods, ctx).map(<[u8]>::to_vec)
+            };
+            if let Some(b) = bytes {
+                tab.term.lock().selection = None;
+                tab.input(b);
+                self.scroll_to_bottom();
+                return false;
+            }
+        }
         let mode = *tab.term.lock().mode();
         if let Some(bytes) = input::key_to_bytes(&ev, mods, mode) {
             {
@@ -842,6 +864,14 @@ impl App {
                     let empty = tab.term.lock().selection.as_ref().is_none_or(|s| s.is_empty());
                     if empty {
                         tab.term.lock().selection = None;
+                        // Un clic (sin arrastrar) en lo escrito en el prompt lleva el cursor ahí.
+                        if st.last_click.1 == 1 && st.mods.is_empty() {
+                            let offset = tab.term.lock().grid().display_offset() as i32;
+                            let point = Point::new(Line(row as i32 - offset), Column(col));
+                            if let Some(b) = tab.click_moves(point, side) {
+                                tab.input(b);
+                            }
+                        }
                     } else {
                         let to_clipboard = self.cfg.terminal.copy_on_select;
                         self.copy_selection(true);
