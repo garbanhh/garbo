@@ -6,10 +6,10 @@ theme = "garbo-black"
 
 [font]
 family = "Adwaita Mono"     # si no existe se usa la monoespaciada del sistema
-size = 11.0                  # puntos (como GNOME Terminal)
+size = 11.0                  # puntos (como GNOME Terminal; en Windows, 10)
 line_height = 1.0            # 1.0 = interlineado natural de la fuente
 ui_family = ""               # fuente de la interfaz; vacía = la misma del terminal
-ui_size = 10.5
+ui_size = 10.5               # en Windows, 9.5
 # Se buscan en orden cuando la fuente principal no tiene un carácter.
 # Solo se abren (mmap) cuando realmente hacen falta.
 fallback = ["JetBrains Mono", "Noto Sans Mono", "Symbols Nerd Font Mono", "Noto Sans Mono CJK SC", "Noto Color Emoji", "Noto Emoji"]

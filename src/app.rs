@@ -1349,6 +1349,7 @@ impl App {
         let toggles = ui::Toggles {
             agents: st.panel.agents,
             ports: st.panel.ports,
+            maximized: cfg!(windows) && st.window.is_maximized(),
         };
         let now = Instant::now();
         let phase = (now.duration_since(st.anim_epoch).as_millis() / 300) as usize;

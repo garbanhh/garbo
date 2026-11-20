@@ -54,34 +54,53 @@ pub enum TabHit {
     Empty,
 }
 
-/// Estado de los botones conmutables de la barra.
+/// Estado de los botones conmutables de la barra (y de la ventana, para el botón de maximizar).
 #[derive(Clone, Copy, Default)]
 pub struct Toggles {
     pub agents: bool,
     pub ports: bool,
+    /// Solo en Windows: el botón de maximizar pasa a ser el de restaurar.
+    pub maximized: bool,
 }
+
+/// Botones de ventana como los del sistema: en Windows, rectángulos de 46 px a toda la altura y
+/// pegados al borde; en Linux, los redondos de GNOME.
+const NATIVE_CONTROLS: bool = cfg!(windows);
+
+/// Alto de la barra de pestañas en píxeles lógicos. En Windows, más baja: la escala suele ser 1 y
+/// la barra de Linux se ve pesada.
+pub const BAR_HEIGHT: f32 = if NATIVE_CONTROLS { 34.0 } else { 40.0 };
 
 impl TabBar {
     pub fn layout(n: usize, width: f32, scale: f32, integrated: bool, has_update: bool) -> Self {
         let s = scale;
-        let height = (40.0 * s).round();
-        let tab_h = (28.0 * s).round();
+        let height = (BAR_HEIGHT * s).round();
+        let tab_h = ((if NATIVE_CONTROLS { 26.0 } else { 28.0 }) * s).round();
         let tab_y = ((height - tab_h) / 2.0).round();
         let margin = (8.0 * s).round();
         let gap = (4.0 * s).round();
         let btn = tab_h;
-        let ctl = (26.0 * s).round();
-        let ctl_gap = (8.0 * s).round();
+        let (ctl, ctl_gap) = if NATIVE_CONTROLS {
+            ((46.0 * s).round(), 0.0)
+        } else {
+            ((26.0 * s).round(), (8.0 * s).round())
+        };
 
         let controls = integrated.then(|| {
-            let x0 = width - margin - 3.0 * ctl - 2.0 * ctl_gap;
+            let x0 = if NATIVE_CONTROLS {
+                width - 3.0 * ctl
+            } else {
+                width - margin - 3.0 * ctl - 2.0 * ctl_gap
+            };
             [
                 (x0, ctl),
                 (x0 + ctl + ctl_gap, ctl),
                 (x0 + 2.0 * (ctl + ctl_gap), ctl),
             ]
         });
-        let right = controls.map_or(width - margin, |c| c[0].0 - (12.0 * s).round());
+        let right = controls.map_or(width - margin, |c| {
+            c[0].0 - ((if NATIVE_CONTROLS { 6.0 } else { 12.0 }) * s).round()
+        });
         let settings = (right - btn, btn);
         let ports_btn = (settings.0 - gap - btn, btn);
         let agents_btn = (ports_btn.0 - gap - btn, btn);
@@ -386,8 +405,12 @@ impl TabBar {
             p.ui_text_in(x + pad, self.tab_y, self.tab_h, &label, fg, tw + 1.0);
         }
 
-        // Botones de ventana estilo GNOME: círculos con iconos finos.
         if let Some(ctl) = &self.controls {
+            if NATIVE_CONTROLS {
+                self.draw_native_controls(p, theme, ctl, hover, s, toggles.maximized);
+                return;
+            }
+            // Botones de ventana estilo GNOME: círculos con iconos finos.
             let kinds = [TabHit::Minimize, TabHit::Maximize, TabHit::CloseWindow];
             for (i, &(bx, bw)) in ctl.iter().enumerate() {
                 let over = hover == Some(kinds[i]);
@@ -424,6 +447,61 @@ impl TabBar {
             }
         }
     }
+
+    /// Botones de ventana de Windows 11: iconos de 10 px con trazo de 1 px, fondo tenue al pasar
+    /// el ratón y rojo en el de cerrar.
+    fn draw_native_controls(
+        &self,
+        p: &mut Painter,
+        theme: &Theme,
+        ctl: &[(f32, f32); 3],
+        hover: Option<TabHit>,
+        s: f32,
+        maximized: bool,
+    ) {
+        let hair = s.round().max(1.0);
+        let k = (10.0 * s).round();
+        let cy = ((self.height - hair) / 2.0).floor();
+        let kinds = [TabHit::Minimize, TabHit::Maximize, TabHit::CloseWindow];
+        for (i, &(bx, bw)) in ctl.iter().enumerate() {
+            let over = hover == Some(kinds[i]);
+            let close = kinds[i] == TabHit::CloseWindow;
+            let mut c = theme.foreground;
+            if over && close {
+                p.rect(bx, 0.0, bw, self.height - hair, Rgb(0xc4, 0x2b, 0x1c), 1.0);
+                c = Rgb(0xff, 0xff, 0xff);
+            } else if over {
+                p.rect(bx, 0.0, bw, self.height - hair, theme.foreground, 0.08);
+            }
+            let x0 = (bx + (bw - k) / 2.0).round();
+            let y0 = (cy - k / 2.0).round();
+            match kinds[i] {
+                TabHit::Minimize => p.rect(x0, cy, k, hair, c, 1.0),
+                TabHit::Maximize if maximized => {
+                    // Restaurar: un cuadro delante y el borde del de detrás asomando.
+                    let d = (2.0 * s).round();
+                    square(p, x0, y0 + d, k - d, hair, c);
+                    p.rect(x0 + d, y0, k - d, hair, c, 1.0);
+                    p.rect(x0 + k - hair, y0, hair, k - d, c, 1.0);
+                }
+                TabHit::Maximize => square(p, x0, y0, k, hair, c),
+                _ => {
+                    let h = k / 2.0;
+                    let (cx, cyc) = (x0 + h, y0 + h);
+                    p.line(cx - h, cyc - h, cx + h, cyc + h, hair, c, 1.0);
+                    p.line(cx - h, cyc + h, cx + h, cyc - h, hair, c, 1.0);
+                }
+            }
+        }
+    }
+}
+
+/// Contorno de un cuadrado de lado `k` con trazo `t`, alineado a píxeles.
+fn square(p: &mut Painter, x: f32, y: f32, k: f32, t: f32, c: Rgb) {
+    p.rect(x, y, k, t, c, 1.0);
+    p.rect(x, y + k - t, k, t, c, 1.0);
+    p.rect(x, y, t, k, c, 1.0);
+    p.rect(x + k - t, y, t, k, c, 1.0);
 }
 
 pub fn cross(p: &mut Painter, cx: f32, cy: f32, k: f32, t: f32, c: Rgb) {

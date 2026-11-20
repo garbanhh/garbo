@@ -2,3 +2,5 @@
 # línea LF, también al clonar en Windows con core.autocrlf (bash, zsh y fish fallan con \r).
 shell/** text eol=lf
 *.sh text eol=lf
+# Fuentes incluidas en garbo.exe: binarias, sin conversión de saltos de línea.
+*.ttf binary

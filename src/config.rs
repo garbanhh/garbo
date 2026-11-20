@@ -113,16 +113,20 @@ impl Default for FontConfig {
         }
     }
 
-    /// Como Windows Terminal: Cascadia Mono de 12 puntos (viene con Windows Terminal; si no está,
-    /// Consolas, que trae el sistema). Símbolos, CJK y emoji con las fuentes de Windows.
+    /// La misma que en Linux, Adwaita Mono, que va dentro del ejecutable (ver `font::EMBEDDED`),
+    /// un poco más pequeña: en Windows la escala suele ser 1 y 11 puntos se ven grandes.
+    /// Símbolos, CJK y emoji con las fuentes de Windows.
     #[cfg(windows)]
     fn default() -> Self {
         Self {
-            family: "Cascadia Mono".into(),
-            size: 12.0,
+            family: "Adwaita Mono".into(),
+            size: 10.0,
             line_height: 1.0,
+            // Adwaita Mono también aquí: si la familia elegida no está (p. ej. "Cascadia Mono",
+            // que Ajustes guardaba hasta la 0.11.0), se usa la incluida y no Consolas.
             fallback: strings(&[
-                "Cascadia Code",
+                "Adwaita Mono",
+                "Cascadia Mono",
                 "Consolas",
                 "JetBrains Mono",
                 "Symbols Nerd Font Mono",
@@ -134,7 +138,7 @@ impl Default for FontConfig {
                 "Segoe UI Historic",
             ]),
             ui_family: String::new(),
-            ui_size: 11.0,
+            ui_size: 9.5,
         }
     }
 }

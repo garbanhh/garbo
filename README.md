@@ -294,8 +294,8 @@ puedas corregirlo.
 
 El archivo es `~/.config/garbo/config.toml` (en Windows, `%APPDATA%\garbo\config.toml`); todas
 las opciones están explicadas en [`config.example.toml`](config.example.toml). Por defecto Garbo
-usa los valores de GNOME Terminal (Adwaita Mono 11; en Windows, Cascadia Mono 12 o, si no está,
-Consolas), el tema `garbo-black` y la misma fuente en la interfaz (`ui_family` la cambia).
+usa los valores de GNOME Terminal (Adwaita Mono 11; en Windows, Adwaita Mono 10, que va incluida
+en `garbo.exe`), el tema `garbo-black` y la misma fuente en la interfaz (`ui_family` la cambia).
 
 ## Actualizaciones
 
@@ -452,5 +452,5 @@ tools/            utilidades (capturas, sesiones simuladas, vectorizar el logo)
 
 Distribuida bajo la licencia MIT (véase [`LICENSE`](LICENSE)). `src/pty_loop.rs` deriva de
 alacritty_terminal, distribuido bajo la licencia Apache 2.0, y la versión para Windows incluye
-`conpty.dll` y `OpenConsole.exe` de Windows Terminal, bajo la licencia MIT (véase
-[`NOTICE`](NOTICE)).
+`conpty.dll` y `OpenConsole.exe` de Windows Terminal, bajo la licencia MIT, y la fuente Adwaita
+Mono, bajo la SIL Open Font License 1.1 (véase [`NOTICE`](NOTICE)).

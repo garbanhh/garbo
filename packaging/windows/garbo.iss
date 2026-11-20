@@ -54,6 +54,8 @@ Source: "{#Fuente}\conpty.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#Fuente}\OpenConsole.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\..\LICENSE"; DestDir: "{app}"; DestName: "LICENSE.txt"
 Source: "..\..\NOTICE"; DestDir: "{app}"; DestName: "NOTICE.txt"
+; Licencia de Adwaita Mono, que va dentro de garbo.exe.
+Source: "..\..\assets\fuentes\OFL-AdwaitaMono.txt"; DestDir: "{app}"
 
 [Icons]
 ; Con el mismo identificador que fija Garbo al arrancar: sus ventanas y sus avisos se agrupan bajo

@@ -232,10 +232,14 @@ mod png {
         if width <= 0 || height == 0 || !(bpp == 24 || bpp == 32) {
             return None;
         }
-        // BI_RGB = 0, BI_BITFIELDS = 3 (con las máscaras tras la cabecera si es la clásica).
+        // BI_RGB = 0, BI_BITFIELDS = 3: con la cabecera clásica, las tres máscaras van detrás.
+        // Con la V4/V5 van dentro (bytes 40–51), pero el CF_DIBV5 que Windows crea a partir de
+        // una captura las repite también detrás: si no se saltan, salen tres píxeles rojo, verde
+        // y azul en una esquina y la imagen se corre tres píxeles. Se reconocen comparándolas.
         let masks = match compression {
             0 => 0,
             3 if header == 40 => 12,
+            3 if header >= 52 && dib.get(header..header + 12) == dib.get(40..52) => 12,
             3 => 0,
             _ => return None,
         };
@@ -330,6 +334,45 @@ mod png {
             assert_eq!(raw, [0, 255, 0, 0, 0, 255, 0, 0, 0, 0, 255, 255, 255, 255]);
             // El CRC de referencia de "IEND" sin datos.
             assert_eq!(crc32(b"IEND"), 0xAE42_6082);
+        }
+
+        /// Píxeles de un PNG de `from_dib` (filas filtradas, sin descomprimir la cabecera).
+        fn raw_pixels(png: &[u8]) -> Vec<u8> {
+            let idat_len = u32::from_be_bytes(png[33..37].try_into().unwrap()) as usize;
+            miniz_oxide::inflate::decompress_to_vec_zlib(&png[41..41 + idat_len]).unwrap()
+        }
+
+        /// DIB V5 de 2×1 y 32 bits con BI_BITFIELDS, con las máscaras repetidas tras la cabecera
+        /// (como el CF_DIBV5 de una captura de Windows) y sin repetir.
+        #[test]
+        fn dib_v5_con_mascaras_detras() {
+            let masks = [0x00FF_0000u32, 0x0000_FF00, 0x0000_00FF];
+            let mut head = Vec::new();
+            for v in [124u32, 2, 1] {
+                head.extend_from_slice(&v.to_le_bytes());
+            }
+            head.extend_from_slice(&1u16.to_le_bytes());
+            head.extend_from_slice(&32u16.to_le_bytes());
+            head.extend_from_slice(&3u32.to_le_bytes()); // BI_BITFIELDS
+            head.resize(40, 0);
+            for m in masks {
+                head.extend_from_slice(&m.to_le_bytes());
+            }
+            head.resize(124, 0);
+            // Azul y blanco (BGRA). Leídas como píxeles, las máscaras saldrían rojo y verde.
+            let pixels = [255, 0, 0, 255, 255, 255, 255, 255];
+            let esperado = [0, 0, 0, 255, 255, 255, 255];
+
+            let mut repetidas = head.clone();
+            for m in masks {
+                repetidas.extend_from_slice(&m.to_le_bytes());
+            }
+            repetidas.extend_from_slice(&pixels);
+            assert_eq!(raw_pixels(&from_dib(&repetidas).unwrap()), esperado);
+
+            let mut solas = head;
+            solas.extend_from_slice(&pixels);
+            assert_eq!(raw_pixels(&from_dib(&solas).unwrap()), esperado);
         }
     }
 }

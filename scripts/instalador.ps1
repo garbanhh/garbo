@@ -32,6 +32,7 @@ New-Item -ItemType Directory $stage | Out-Null
 Copy-Item target\release\garbo.exe, target\release\conpty.dll, target\release\OpenConsole.exe $stage
 Copy-Item LICENSE (Join-Path $stage "LICENSE.txt")
 Copy-Item NOTICE (Join-Path $stage "NOTICE.txt")
+Copy-Item assets\fuentes\OFL-AdwaitaMono.txt $stage
 if (Test-Path $zip) { Remove-Item $zip }
 Compress-Archive -Path "$stage\*" -DestinationPath $zip
 Remove-Item -Recurse -Force $stage

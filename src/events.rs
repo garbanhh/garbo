@@ -73,7 +73,7 @@ impl ApplicationHandler<UserEvent> for App {
         let cell_h = self.cfg.font.size * 4.0 / 3.0 * self.cfg.font.line_height * 1.25;
         let size = LogicalSize::new(
             w.columns as f32 * cell_w + 2.0 * w.padding,
-            w.lines as f32 * cell_h + 2.0 * w.padding + 40.0,
+            w.lines as f32 * cell_h + 2.0 * w.padding + crate::ui::BAR_HEIGHT,
         );
         let attrs = Window::default_attributes()
             .with_title("Garbo")
@@ -102,11 +102,17 @@ impl ApplicationHandler<UserEvent> for App {
             attrs
         };
         // Windows: el icono del recurso de garbo.exe (ver build.rs) en la ventana y en la barra
-        // de tareas.
+        // de tareas. Sin la barra del sistema, Windows 11 no redondea las esquinas si no se le
+        // pide (la sombra sí la pone winit).
         #[cfg(windows)]
         let attrs = {
-            use winit::platform::windows::{IconExtWindows, WindowAttributesExtWindows};
+            use winit::platform::windows::{
+                CornerPreference, IconExtWindows, WindowAttributesExtWindows,
+            };
             use winit::window::Icon;
+            let attrs = attrs
+                .with_corner_preference(CornerPreference::Round)
+                .with_undecorated_shadow(true);
             match Icon::from_resource(1, None) {
                 Ok(icon) => attrs
                     .with_window_icon(Some(icon.clone()))
