@@ -1239,7 +1239,7 @@ mod tests {
         assert!(text.contains("program = \"/bin/zsh\""), "{text}");
         let back = Config::load_at(&path);
         assert_eq!(back.theme, Theme::NAMES[1]);
-        assert_eq!(back.font.size, 11.5);
+        assert_eq!(back.font.size, Config::default().font.size + 0.5);
         assert!(!back.terminal.blocks);
         assert!(!back.terminal.autosuggest);
         assert_eq!(back.terminal.tab_key, TabKey::Accept);

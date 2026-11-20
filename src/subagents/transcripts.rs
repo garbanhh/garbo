@@ -95,7 +95,7 @@ impl Location {
         match provider {
             Provider::Claude => super::session_dir(pid).map(Self::Claude),
             Provider::Codex => {
-                let root = process_env_path(pid, b"CODEX_HOME=")
+                let root = process_env_path(pid, "CODEX_HOME")
                     .or_else(|| process_home(pid).map(|home| home.join(".codex")))?
                     .join("sessions")
                     .canonicalize()
@@ -107,7 +107,7 @@ impl Location {
                 let args = resume_args(pid)?;
                 let session = explicit_session(&args, &["--resume", "-r"])?;
                 let root =
-                    process_env_path(pid, b"GEMINI_CLI_HOME=").or_else(|| process_home(pid))?;
+                    process_env_path(pid, "GEMINI_CLI_HOME").or_else(|| process_home(pid))?;
                 gemini_session(&root.join(".gemini/tmp"), &session).map(Self::Gemini)
             }
         }
@@ -127,7 +127,7 @@ impl Location {
 }
 
 fn process_home(pid: i32) -> Option<PathBuf> {
-    process_env_path(pid, b"HOME=").or_else(dirs::home_dir)
+    process_env_path(pid, "HOME").or_else(dirs::home_dir)
 }
 
 fn read_header(path: &Path) -> Option<Value> {
@@ -165,19 +165,10 @@ fn rollout_path(path: &Path) -> bool {
 
 fn codex_open_rollouts(root: &Path, pid: i32) -> Vec<PathBuf> {
     // Las instalaciones con npm suelen ejecutar el binario nativo como hijo del lanzador.
-    let children =
-        fs::read_to_string(format!("/proc/{pid}/task/{pid}/children")).unwrap_or_default();
-    let pids = std::iter::once(pid).chain(
-        children
-            .split_whitespace()
-            .take(16)
-            .filter_map(|s| s.parse().ok()),
-    );
+    let children = crate::platform::children(pid);
+    let pids = std::iter::once(pid).chain(children.into_iter().take(16));
     let mut paths: Vec<_> = pids
-        .filter_map(|pid| fs::read_dir(format!("/proc/{pid}/fd")).ok())
-        .flatten()
-        .flatten()
-        .filter_map(|fd| fs::read_link(fd.path()).ok())
+        .flat_map(crate::platform::open_files)
         .filter(|path| path.starts_with(root) && rollout_path(path))
         .collect();
     paths.sort_unstable();
@@ -447,12 +438,15 @@ fn compact(text: &str) -> String {
 mod tests {
     use super::*;
     use serde_json::json;
+    #[cfg(target_os = "linux")]
     use std::io::Write;
 
     const MAIN: &str = "230899e2-1844-4dde-be21-0099e76c31c5";
     const OTHER: &str = "130899e2-1844-4dde-be21-0099e76c31c5";
     const CHILD: &str = "330899e2-1844-4dde-be21-0099e76c31c5";
 
+    // Vincula por los archivos abiertos del proceso, que solo se ven en Linux (`/proc/<pid>/fd`).
+    #[cfg(target_os = "linux")]
     #[test]
     fn codex_vincula_la_pestana_y_relee_la_actividad() {
         let temp = crate::temp_dir::TempDir::new_in(&std::env::temp_dir()).unwrap();

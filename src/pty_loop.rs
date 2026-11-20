@@ -27,13 +27,29 @@ const READ_BUFFER_SIZE: usize = 64 * 1024;
 /// rápido pero con casi la misma CPU. El búfer del PTY en el kernel es pequeño: desde ~0,5 ms
 /// se llena y frena al programa. Si las lecturas son grandes, el programa va más rápido que
 /// nosotros y no se espera. Ver docs/Rendimiento.md.
+#[cfg(not(windows))]
 const COALESCE: Duration = Duration::from_micros(200);
 /// Tamaño mínimo del bloque y tamaño medio de lectura por debajo del cual se considera migaja.
+#[cfg(not(windows))]
 const COALESCE_MIN_BATCH: usize = 4096;
+#[cfg(not(windows))]
 const CRUMB: usize = 1024;
-// Mismos valores que los tokens (privados) de alacritty_terminal::tty.
+/// Windows: un bloque que llega antes de este tiempo tras el anterior es salida en marcha.
+#[cfg(windows)]
+const STREAM_GAP: Duration = Duration::from_millis(2);
+/// Windows: espera para juntar migajas (ver `pty_read`). Con `type` de 3 millones de líneas la
+/// CPU de Garbo baja de 6–7 s a ~2 s y tarda menos (12 → 9 s, el límite ya es ConPTY). Con 250
+/// µs o 2 ms sale parecido; 1 ms retrasa poco a los programas que redibujan a ráfagas.
+#[cfg(windows)]
+const COALESCE: Duration = Duration::from_millis(1);
+// Mismos valores que los tokens (privados en Unix) de alacritty_terminal::tty.
+#[cfg(unix)]
 const PTY_READ_WRITE_TOKEN: usize = 0;
+#[cfg(unix)]
 const PTY_CHILD_EVENT_TOKEN: usize = 1;
+// En Windows son públicos (y distintos): la tubería de ConPTY y el aviso de salida del hijo.
+#[cfg(windows)]
+use tty::{PTY_CHILD_EVENT_TOKEN, PTY_READ_WRITE_TOKEN};
 
 #[derive(Clone)]
 pub struct PtySender {
@@ -60,6 +76,14 @@ pub struct PtyLoop<U: EventListener> {
     blocks: Arc<Mutex<BlockState>>,
 }
 
+/// Resultado de una lectura del PTY.
+struct Batch {
+    /// La salida llegó en migajas: conviene esperar `COALESCE` antes de volver a leer.
+    crumbs: bool,
+    /// Quedó salida por leer y no llegará otro aviso: volver a leer sin esperar.
+    more: bool,
+}
+
 #[derive(Default)]
 struct State {
     write_list: VecDeque<Cow<'static, [u8]>>,
@@ -67,6 +91,9 @@ struct State {
     parser: ansi::Processor,
     scanner: MarkScanner,
     marks: Vec<(usize, Mark)>,
+    /// Cuándo llegó el último bloque (Windows: para reconocer la salida en migajas).
+    #[cfg(windows)]
+    last_batch: Option<Instant>,
 }
 
 impl<U: EventListener + Send + 'static> PtyLoop<U> {
@@ -124,6 +151,15 @@ impl<U: EventListener + Send + 'static> PtyLoop<U> {
         blocks: &Mutex<BlockState>,
         proxy: &U,
     ) {
+        // ConPTY pide al empezar las teclas como eventos de Windows (`win32-input-mode`).
+        #[cfg(windows)]
+        if let Some(i) = memchr::memmem::find(bytes, b"\x1b[?9001") {
+            match bytes.get(i + 7) {
+                Some(b'h') => blocks.lock().unwrap().win32_input = true,
+                Some(b'l') => blocks.lock().unwrap().win32_input = false,
+                _ => {}
+            }
+        }
         let mut marks = std::mem::take(&mut state.marks);
         marks.clear();
         state.scanner.scan(bytes, &mut marks);
@@ -135,7 +171,13 @@ impl<U: EventListener + Send + 'static> PtyLoop<U> {
             for &(end, mark) in &marks {
                 state.parser.advance(term, &bytes[pos..end]);
                 pos = end;
-                bs.apply(mark, term);
+                if mark == Mark::Cwd {
+                    if let Some(path) = state.scanner.cwds.pop_front() {
+                        bs.set_cwd(path);
+                    }
+                } else {
+                    bs.apply(mark, term);
+                }
             }
             state.parser.advance(term, &bytes[pos..]);
         }
@@ -157,21 +199,28 @@ impl<U: EventListener + Send + 'static> PtyLoop<U> {
         }
     }
 
-    /// Devuelve `true` si la salida llegó en migajas y conviene esperar `COALESCE`.
-    fn pty_read(&mut self, state: &mut State, buf: &mut [u8]) -> io::Result<bool> {
+    /// Lee y procesa lo que haya (ver `Batch`).
+    fn pty_read(&mut self, state: &mut State, buf: &mut [u8]) -> io::Result<Batch> {
         // Lee hasta vaciar el PTY o llenar el búfer y lo procesa todo de una vez. Con salida
         // abundante el kernel entrega migajas de pocas decenas de bytes y procesarlas una a una
         // costaba el doble de CPU. El terminal solo se bloquea para procesar, no mientras se
         // lee, así que la UI puede dibujar entretanto.
         let (mut len, mut reads) = (0, 0);
         let mut error = None;
+        let mut drained = false;
         while len < buf.len() {
             reads += 1;
             match self.pty.reader().read(&mut buf[len..]) {
-                Ok(0) => break,
+                Ok(0) => {
+                    drained = true;
+                    break;
+                }
                 Ok(got) => len += got,
                 Err(err) if err.kind() == ErrorKind::Interrupted => {}
-                Err(err) if err.kind() == ErrorKind::WouldBlock => break,
+                Err(err) if err.kind() == ErrorKind::WouldBlock => {
+                    drained = true;
+                    break;
+                }
                 Err(err) => {
                     // Lo ya leído se procesa antes de informar del error (p. ej. EIO al salir).
                     error = Some(err);
@@ -194,9 +243,35 @@ impl<U: EventListener + Send + 'static> PtyLoop<U> {
                 self.event_proxy.send_event(Event::Wakeup);
             }
         }
+        // Windows: ConPTY entrega la salida abundante en trozos de ~75 bytes, unos 31 000 por
+        // segundo, uno por lectura: la regla de Linux (lecturas pequeñas dentro de un bloque grande)
+        // no salta nunca. Aquí cuenta como migaja un bloque que llega justo tras el anterior.
+        #[cfg(windows)]
+        let crumbs = {
+            let now = Instant::now();
+            let streaming = len > 0
+                && state
+                    .last_batch
+                    .is_some_and(|t| now.duration_since(t) < STREAM_GAP);
+            if len > 0 {
+                state.last_batch = Some(now);
+            }
+            streaming && len < READ_BUFFER_SIZE / 2
+        };
+        #[cfg(not(windows))]
+        let crumbs = len >= COALESCE_MIN_BATCH && len < reads * CRUMB;
+        #[cfg(windows)]
+        let _ = reads;
         match error {
             Some(err) => Err(err),
-            None => Ok(len >= COALESCE_MIN_BATCH && len < reads * CRUMB),
+            None => Ok(Batch {
+                crumbs,
+                // Windows: el lector de alacritty solo vuelve a avisar tras una lectura que
+                // encontró la tubería vacía. Si se paró con el búfer lleno, queda salida y hay
+                // que seguir leyendo sin esperar aviso (si no, se queda colgado con una escritura
+                // grande, p. ej. `[Console]::Write` de 21 MB). En Linux el aviso se repite solo.
+                more: cfg!(windows) && !drained,
+            }),
         }
     }
 
@@ -243,14 +318,21 @@ impl<U: EventListener + Send + 'static> PtyLoop<U> {
                 // Dos fuentes propias (PTY y señal del hijo) y dos internas de `polling`
                 // (notificador y temporizador), que también ocupan sitio en la lista.
                 let mut events = Events::with_capacity(NonZeroUsize::new(4).unwrap());
+                // Quedó salida por leer sin aviso pendiente (Windows, ver `Batch::more`).
+                let mut more = false;
 
                 'event_loop: loop {
-                    // Despertar si vence el plazo de una actualización sincronizada.
-                    let timeout = state
-                        .parser
-                        .sync_timeout()
-                        .sync_timeout()
-                        .map(|t| t.saturating_duration_since(Instant::now()));
+                    // Despertar si vence el plazo de una actualización sincronizada. Con salida
+                    // pendiente no se espera: solo se mira si hay algo más que atender.
+                    let timeout = if more {
+                        Some(Duration::ZERO)
+                    } else {
+                        state
+                            .parser
+                            .sync_timeout()
+                            .sync_timeout()
+                            .map(|t| t.saturating_duration_since(Instant::now()))
+                    };
 
                     events.clear();
                     if let Err(err) = self.poll.wait(&mut events, timeout) {
@@ -263,7 +345,7 @@ impl<U: EventListener + Send + 'static> PtyLoop<U> {
                         }
                     }
 
-                    if events.is_empty() && !self.has_pending() {
+                    if events.is_empty() && !self.has_pending() && !more {
                         state.parser.stop_sync(&mut *self.terminal.lock());
                         self.event_proxy.send_event(Event::Wakeup);
                         continue;
@@ -273,39 +355,21 @@ impl<U: EventListener + Send + 'static> PtyLoop<U> {
                         break;
                     }
 
-                    let mut coalesce = false;
+                    let (mut readable, mut exited) = (std::mem::take(&mut more), None);
                     for event in events.iter() {
                         match event.key {
                             PTY_CHILD_EVENT_TOKEN => {
                                 if let Some(tty::ChildEvent::Exited(status)) =
                                     self.pty.next_child_event()
                                 {
-                                    if let Some(status) = status {
-                                        self.event_proxy.send_event(Event::ChildExit(status));
-                                    }
-                                    self.terminal.lock().exit();
-                                    self.event_proxy.send_event(Event::Wakeup);
-                                    break 'event_loop;
+                                    exited = Some(status);
                                 }
                             }
                             PTY_READ_WRITE_TOKEN => {
                                 if event.is_interrupt() {
                                     continue;
                                 }
-                                if event.readable {
-                                    match self.pty_read(&mut state, &mut buf) {
-                                        Ok(crumbs) => coalesce |= crumbs,
-                                        Err(err) => {
-                                            // Linux: EIO cuando el hijo cuelga; llegará el evento de salida.
-                                            #[cfg(target_os = "linux")]
-                                            if err.raw_os_error() == Some(libc::EIO) {
-                                                continue;
-                                            }
-                                            log::error!("Error leyendo del PTY: {err}");
-                                            break 'event_loop;
-                                        }
-                                    }
-                                }
+                                readable |= event.readable;
                                 if event.writable {
                                     if let Err(err) = self.pty_write(&mut state) {
                                         log::error!("Error escribiendo en el PTY: {err}");
@@ -315,6 +379,30 @@ impl<U: EventListener + Send + 'static> PtyLoop<U> {
                             }
                             _ => {}
                         }
+                    }
+
+                    // Una lectura por vuelta, también si el hijo acaba de salir: así no se pierde
+                    // lo último que escribió.
+                    let mut coalesce = false;
+                    if readable {
+                        match self.pty_read(&mut state, &mut buf) {
+                            Ok(batch) => (coalesce, more) = (batch.crumbs, batch.more),
+                            // Linux: EIO cuando el hijo cuelga; llegará el evento de salida.
+                            #[cfg(target_os = "linux")]
+                            Err(err) if err.raw_os_error() == Some(libc::EIO) => {}
+                            Err(err) => {
+                                log::error!("Error leyendo del PTY: {err}");
+                                break 'event_loop;
+                            }
+                        }
+                    }
+                    if let Some(status) = exited {
+                        if let Some(status) = status {
+                            self.event_proxy.send_event(Event::ChildExit(status));
+                        }
+                        self.terminal.lock().exit();
+                        self.event_proxy.send_event(Event::Wakeup);
+                        break 'event_loop;
                     }
 
                     // Interés de escritura solo mientras haya algo pendiente.
@@ -352,9 +440,11 @@ mod tests {
     use alacritty_terminal::term::test::TermSize;
 
     /// Avisa cuando el terminal contesta a la consulta de posición del cursor del final.
+    #[cfg(unix)]
     #[derive(Clone)]
     struct Done(mpsc::Sender<Instant>);
 
+    #[cfg(unix)]
     impl EventListener for Done {
         fn send_event(&self, event: Event) {
             if let Event::PtyWrite(_) = event {
@@ -363,6 +453,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     fn cpu_time() -> f64 {
         let mut ru: libc::rusage = unsafe { std::mem::zeroed() };
         unsafe { libc::getrusage(libc::RUSAGE_SELF, &mut ru) };
@@ -374,6 +465,7 @@ mod tests {
     /// terminal, sin ventana. Con «UI» otro hilo bloquea el terminal cada 16 ms y lo recorre,
     /// como haría un fotograma.
     /// `cargo test --release bench_ -- --ignored --nocapture --test-threads=1`
+    #[cfg(unix)]
     #[test]
     #[ignore = "banco de medida"]
     fn bench_pty_seq() {
@@ -423,7 +515,9 @@ mod tests {
                 let cpu0 = cpu_time();
                 let t = Instant::now();
                 let pty = tty::new(&opts, ws, 0).unwrap();
-                let blocks = Arc::new(Mutex::new(BlockState::new(pty.child().id())));
+                let blocks = Arc::new(Mutex::new(BlockState::new(crate::platform::child_pid(
+                    &pty,
+                ))));
                 let lp = PtyLoop::new(term.clone(), Done(tx), pty, blocks).unwrap();
                 let sender = lp.sender();
                 lp.spawn();

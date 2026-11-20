@@ -3,8 +3,8 @@
 </p>
 
 <p align="center">
-  <strong>Terminal para Linux acelerada por GPU, con bloques de comandos, completado inteligente
-  y seguimiento de agentes de código.</strong><br>
+  <strong>Terminal para Linux y Windows acelerada por GPU, con bloques de comandos, completado
+  inteligente y seguimiento de agentes de código.</strong><br>
   Escrita en Rust. Ligera, rápida y en español.
 </p>
 
@@ -12,6 +12,7 @@
   <a href="https://github.com/garbanhh/garbo/releases/latest"><img alt="Última versión" src="https://img.shields.io/github/v/release/garbanhh/garbo?label=versi%C3%B3n&color=ff7a06"></a>
   <a href="LICENSE"><img alt="Licencia MIT" src="https://img.shields.io/badge/licencia-MIT-69fc09"></a>
   <img alt="Linux: Wayland y X11" src="https://img.shields.io/badge/Linux-Wayland%20%C2%B7%20X11-294172?logo=linux&logoColor=white">
+  <img alt="Windows 10 y 11" src="https://img.shields.io/badge/Windows-10%20%C2%B7%2011-0078D6">
   <img alt="Hecha con Rust" src="https://img.shields.io/badge/hecha%20con-Rust-b7410e?logo=rust&logoColor=white">
 </p>
 
@@ -29,9 +30,9 @@
 
 ## Características
 
-- **Rápida y ligera.** Dibuja con la GPU (wgpu: Vulkan u OpenGL) y solo cuando algo cambia: en
-  reposo no gasta CPU y arranca con unos 30 MB de memoria (más en equipos sin GPU: véase
-  [Rendimiento](#rendimiento)).
+- **Rápida y ligera.** Dibuja con la GPU (wgpu: Vulkan, DirectX 12 u OpenGL) y solo cuando algo
+  cambia: en reposo no gasta CPU y arranca con unos 30 MB de memoria en Linux (más en equipos sin
+  GPU) y menos de 10 MB en Windows (véase [Rendimiento](#rendimiento)).
 - **Bloques de comandos.** Cada comando y su salida forman un bloque con la carpeta, la duración y
   el resultado (en rojo si falla). Se seleccionan, se recorren con el teclado y se copian enteros o
   solo su salida.
@@ -61,7 +62,9 @@
 ## Instalación
 
 Descarga el paquete de la [última versión](https://github.com/garbanhh/garbo/releases/latest) para
-tu sistema e instálalo:
+tu sistema.
+
+### Linux
 
 ```bash
 # Fedora y derivadas (.rpm)
@@ -78,6 +81,23 @@ instala con el gestor de paquetes del sistema, tras comprobar la suma SHA-256 y 
 con Vulkan u OpenGL. Sin GPU también funciona, dibujando por software y con más memoria (véase
 [Rendimiento](#rendimiento)). Los bloques de comandos, las sugerencias y el completado funcionan
 con bash, zsh y fish.
+
+### Windows
+
+Descarga y ejecuta `garbo-X.Y.Z-x64-setup.exe`. Se instala para tu usuario, sin permisos de
+administrador, y aparece en el menú Inicio; se desinstala desde *Configuración → Aplicaciones*
+(la configuración se conserva). También hay una versión portátil, `garbo-X.Y.Z-x64.zip`: basta con
+descomprimirla y abrir `garbo.exe`.
+
+Los archivos de Windows no están firmados. Al abrirlos, Windows muestra «Windows protegió su PC»:
+se continúa con *Más información* → *Ejecutar de todas formas*. Con el Control inteligente de
+aplicaciones de Windows 11 activado, Windows no permite abrirlos.
+
+**Requisitos:** Windows 10 (versión 1809) o posterior, de 64 bits, y una GPU con DirectX 12, Vulkan
+u OpenGL. El shell es PowerShell (la versión 7 si está instalada y, si no, Windows PowerShell), con
+bloques de comandos, sugerencias y completado. Garbo incluye la ConPTY de Windows Terminal, que
+entrega la salida de los programas en orden y bastante más rápido que la de Windows. Garbo avisa
+de las versiones nuevas y abre su página para descargarlas.
 
 ## Uso
 
@@ -130,7 +150,9 @@ Todos los atajos de Garbo se cambian en la sección `[keybindings]` de la config
 - Doble clic selecciona una palabra; triple clic, una línea; `Ctrl+Alt` y arrastrar, un rectángulo.
 - `Ctrl`+clic abre lo que hay bajo el ratón: una URL en el navegador, o una ruta como
   `src/main.rs:42:5` en tu editor (`$EDITOR`) en esa línea; los editores de terminal, como nano o
-  vim, se abren en una pestaña nueva. Con `Ctrl` pulsado, lo que se puede abrir se subraya.
+  vim, se abren en una pestaña nueva. Con `Ctrl` pulsado, lo que se puede abrir se subraya. En
+  Windows también entiende `src\main.rs:42:5`, `C:\…` y `Programa.cs(12,5)`; sin `$EDITOR`, abre
+  los archivos en VS Code o en el Bloc de notas, y nunca ejecuta programas ni scripts.
 - El clic central pega la selección primaria; sobre una pestaña, la cierra.
 - `Shift` fuerza la selección local en programas que capturan el ratón.
 - Arrastrar un archivo a la ventana escribe su ruta.
@@ -178,6 +200,10 @@ Con un agente en primer plano, `Shift+Intro` también inserta un salto de línea
 Codex o Gemini CLI se envía `Ctrl+J`) y `Ctrl+Retroceso` borra la palabra anterior. En el resto de
 programas (vim, python…) las teclas funcionan como siempre.
 
+En Windows, PowerShell ya trae estos atajos (`Shift+Intro`, `Ctrl+Retroceso`, `Ctrl+Supr`,
+`Ctrl+Z`): Garbo le envía las teclas tal cual, como eventos de teclado de Windows, y con el prompt
+de Garbo las líneas añadidas con `Shift+Intro` empiezan también en la primera columna.
+
 ### Paneles divididos
 
 `Ctrl+Shift+D` divide el panel actual y abre otro a la derecha; `Ctrl+Shift+Alt+D`, debajo. El
@@ -216,7 +242,9 @@ La integración funciona con bash, zsh y fish sin tocar su configuración. Garbo
 archivos de siempre antes de [`shell/garbo.zsh`](shell/garbo.zsh); y fish, con `--init-command`,
 que carga [`shell/garbo.fish`](shell/garbo.fish) después de `config.fish`. Los tres marcan con
 OSC 133 el prompt, el comando y su salida (fish 4 ya lo hace por sí mismo), y también el prompt
-derecho de zsh y fish, para que no se tome por parte del comando. Cada bloque queda anclado al propio texto de la rejilla, así que
+derecho de zsh y fish, para que no se tome por parte del comando. En Windows, PowerShell carga
+[`shell/garbo.ps1`](shell/garbo.ps1) después de su perfil, sin cambiar la directiva de ejecución.
+Cada bloque queda anclado al propio texto de la rejilla, así que
 conserva su sitio al desplazarse, al recortarse el historial y al redimensionar. Se desactiva con
 `shell_integration = false`, o solo su aspecto con `blocks = false`.
 
@@ -248,23 +276,26 @@ protocolo de estado de programas (OSC 7501), que usa Claude Code desde la 2.1.29
 que no lo usan, el estado se deduce de su actividad.
 
 **Pegar capturas.** Si al pegar el portapapeles tiene una imagen (por ejemplo, tras `ImprPant`),
-Garbo la guarda en `~/.cache/garbo/capturas` y pega su ruta, que Claude Code y otros agentes
-adjuntan como imagen.
+Garbo la guarda en `~/.cache/garbo/capturas` (en Windows, `%LOCALAPPDATA%\garbo\capturas`) y pega
+su ruta, que Claude Code y otros agentes adjuntan como imagen. En Windows, los archivos copiados
+en el Explorador se pegan como rutas.
 
 ### Ajustes
 
 `Ctrl+,` o el botón de menú abren los ajustes, por categorías: Tema, Texto, Terminal, Completado,
 Bloques, Avisos, Ventana y Actualizaciones. Los cambios se aplican al momento y se guardan en
-`~/.config/garbo/config.toml`, respetando el resto del archivo y sus comentarios. Se manejan con el
+`~/.config/garbo/config.toml` (en Windows, `%APPDATA%\garbo\config.toml`), respetando el resto del
+archivo y sus comentarios. Se manejan con el
 ratón o con el teclado (`Tab` cambia de categoría, `↑` `↓` eligen, `←` `→` cambian el valor, `Esc`
 cierra). Si el archivo tiene errores, Ajustes muestra un aviso y conserva el archivo para que
 puedas corregirlo.
 
 ## Configuración
 
-El archivo es `~/.config/garbo/config.toml`; todas las opciones están explicadas en
-[`config.example.toml`](config.example.toml). Por defecto Garbo usa los valores de GNOME Terminal
-(Adwaita Mono 11), el tema `garbo-black` y la misma fuente en la interfaz (`ui_family` la cambia).
+El archivo es `~/.config/garbo/config.toml` (en Windows, `%APPDATA%\garbo\config.toml`); todas
+las opciones están explicadas en [`config.example.toml`](config.example.toml). Por defecto Garbo
+usa los valores de GNOME Terminal (Adwaita Mono 11; en Windows, Cascadia Mono 12 o, si no está,
+Consolas), el tema `garbo-black` y la misma fuente en la interfaz (`ui_family` la cambia).
 
 ## Actualizaciones
 
@@ -273,8 +304,8 @@ con la clave pública de Garbo, **Actualizar a X.Y.Z** descarga el paquete del s
 su suma SHA-256 y su firma antes de instalarlo: el RPM con `rpmkeys` y `pkexec dnf`, y el `.deb`
 con su firma aparte (`.sig`), `gpgv` y `pkexec apt-get`. En ambos casos solo se acepta la clave
 incorporada a la compilación. **Ver versión X.Y.Z** abre la página de GitHub para instalarla
-manualmente si faltan la clave, las herramientas o los archivos necesarios. La consulta
-automática se puede desactivar en Ajustes.
+manualmente si faltan la clave, las herramientas o los archivos necesarios; en Windows es siempre
+así. La consulta automática se puede desactivar en Ajustes.
 
 ## Rendimiento
 
@@ -327,6 +358,24 @@ reposo, con una pestaña de bash:
 Para saber cuál se usa, `RUST_LOG=garbo=info garbo` escribe al arrancar una línea `GPU:` con el
 nombre del dispositivo; `llvmpipe` indica dibujo por software.
 
+### Windows
+
+Medido en Windows 11 con una NVIDIA GeForce RTX 3070 Ti (DirectX 12) y una pestaña de PowerShell:
+
+| Métrica | Valor |
+|---|---|
+| Memoria (Administrador de tareas), en reposo | menos de 1 MB |
+| Memoria usándola | ~5–10 MB, más con el historial |
+| CPU en reposo | 0 % |
+| 3 millones de líneas en una sola escritura | ~2 s |
+| Tamaño del instalador | ~5 MB |
+
+- Pocos segundos después de arrancar, al minimizar y al cerrar pestañas, Garbo devuelve a Windows
+  la memoria que solo se usó para inicializar la GPU, compilar los shaders y buscar las fuentes.
+  El controlador de la GPU sigue reservando memoria comprometida (~120 MB con NVIDIA).
+- DirectX 12 va primero porque gasta bastante menos memoria que Vulkan u OpenGL.
+- PowerShell y la ConPTY son procesos aparte (unos 25 MB y 2 MB).
+
 ## Compilar desde el código
 
 ```bash
@@ -335,11 +384,23 @@ cargo build --release
 ./target/release/garbo
 ```
 
+En Windows hacen falta Rust con el destino MSVC y las herramientas de compilación de C++ de Visual
+Studio:
+
+```powershell
+cargo build --release
+powershell -ExecutionPolicy Bypass -File scripts\conpty.ps1   # ConPTY de Windows Terminal
+.\target\release\garbo.exe
+```
+
+`scripts\instalador.ps1` genera el instalador y la versión portátil (necesita Inno Setup 6).
+
 - `cargo test` ejecuta las pruebas.
 - `GARBO_SCREENSHOT=/ruta/captura.ppm` guarda cada fotograma en disco.
 - `GARBO_GPU_DEBUG=1` activa las capas de validación de la GPU.
 - `RUST_LOG=debug` aumenta el nivel de registro.
-- `scripts/publicar.sh X.Y.Z` publica una versión: GitHub Actions genera los paquetes RPM y `.deb`.
+- `scripts/publicar.sh X.Y.Z` publica una versión: GitHub Actions genera los paquetes RPM y `.deb`
+  y el instalador de Windows.
 
 <details>
 <summary><strong>Estructura del código</strong></summary>
@@ -374,10 +435,12 @@ src/
   ports.rs        puertos en escucha y detección de servidores web
   subagents.rs    subagentes a partir de los archivos locales de sesión
   notify.rs       avisos del escritorio cuando un agente termina
+  toast.rs        avisos del escritorio en Windows
   activation.rs   traer la ventana al frente al pulsar un aviso (Wayland)
   panel.rs        panel lateral de agentes y puertos, con vista previa al pasar el ratón
-shell/            integración con bash, zsh y fish
-packaging/        icono, entrada de escritorio y metadatos AppStream
+  platform/       lo que cambia entre Linux y Windows (procesos, carpeta del shell, abrir enlaces)
+shell/            integración con bash, zsh, fish y PowerShell
+packaging/        icono, entrada de escritorio, metadatos AppStream e instalador de Windows
 assets/           logo y capturas del README
 scripts/          publicación de versiones
 tools/            utilidades (capturas, sesiones simuladas, vectorizar el logo)
@@ -388,4 +451,6 @@ tools/            utilidades (capturas, sesiones simuladas, vectorizar el logo)
 ## Licencia
 
 Distribuida bajo la licencia MIT (véase [`LICENSE`](LICENSE)). `src/pty_loop.rs` deriva de
-alacritty_terminal, distribuido bajo la licencia Apache 2.0 (véase [`NOTICE`](NOTICE)).
+alacritty_terminal, distribuido bajo la licencia Apache 2.0, y la versión para Windows incluye
+`conpty.dll` y `OpenConsole.exe` de Windows Terminal, bajo la licencia MIT (véase
+[`NOTICE`](NOTICE)).

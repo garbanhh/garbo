@@ -6,6 +6,8 @@
 //!   `P;k=r` = empieza el prompt derecho (zsh, fish): sus celdas no son parte del comando.
 //! Si el shell vuelve a pintar el mismo prompt (fish al arrancar, zsh con `reset-prompt`), la
 //! nueva A sigue en el mismo bloque.
+//! Además, OSC 7 (`file://equipo/ruta`) y OSC 9;9 (`"ruta"`) informan de la carpeta del shell:
+//! en Windows es la única forma de saberla con PowerShell, que no cambia la del proceso con `cd`.
 //! Al ver una marca, el bucle del PTY "ancla" el bloque al propio texto: activa un hyperlink
 //! invisible (uri `garbo:block`) que se graba en las celdas del prompt y del comando.
 //! Así la posición de cada bloque viaja con el contenido: sobrevive al scroll, al recorte
@@ -33,7 +35,12 @@ pub enum Mark {
     CommandStart,
     OutputStart,
     CommandEnd(Option<i32>),
+    /// Carpeta del shell (OSC 7 u OSC 9;9): la siguiente de `MarkScanner::cwds`.
+    Cwd,
 }
+
+/// Longitud máxima de la carpeta que informa el shell (OSC 7, con su `file://equipo`).
+const MAX_CWD: usize = 4096;
 
 /// Escáner incremental de secuencias OSC 133 (y de los informes OSC 7501, ver `status.rs`).
 /// Mantiene estado entre lecturas, así que tolera secuencias partidas entre dos `read()` del PTY.
@@ -45,6 +52,8 @@ pub struct MarkScanner {
     overflow: bool,
     /// Informes y consultas OSC 7501 (`true` = acabó en ST, `false` = en BEL).
     pub status: Vec<(crate::status::Report, bool)>,
+    /// Carpetas informadas por el shell, una por cada `Mark::Cwd`, en orden.
+    pub cwds: VecDeque<PathBuf>,
 }
 
 #[derive(Default, Clone, Copy, PartialEq, Eq)]
@@ -98,9 +107,12 @@ impl MarkScanner {
                     0x1b => Scan::OscEsc,
                     0x18 | 0x1a => Scan::Ground, // CAN / SUB abortan la secuencia
                     _ => {
-                        // Las marcas caben en 32 bytes; un informe OSC 7501, en `status::MAX_REPORT`.
+                        // Las marcas caben en 32 bytes; un informe OSC 7501, en
+                        // `status::MAX_REPORT`; una carpeta, en `MAX_CWD`.
                         let cap = if self.buf.starts_with(b"7501;") {
                             crate::status::MAX_REPORT + 5
+                        } else if self.buf.starts_with(b"7;") || self.buf.starts_with(b"9;9;") {
+                            MAX_CWD
                         } else {
                             32
                         };
@@ -137,6 +149,18 @@ impl MarkScanner {
             }
             return;
         }
+        let cwd = if let Some(uri) = self.buf.strip_prefix(b"7;") {
+            Some(cwd_from_osc7(uri))
+        } else {
+            self.buf.strip_prefix(b"9;9;").map(cwd_from_osc9)
+        };
+        if let Some(cwd) = cwd {
+            if let Some(path) = cwd.filter(|_| !self.overflow) {
+                self.cwds.push_back(path);
+                out.push((end, Mark::Cwd));
+            }
+            return;
+        }
         let Some(rest) = self.buf.strip_prefix(b"133;") else {
             return;
         };
@@ -155,6 +179,63 @@ impl MarkScanner {
         };
         out.push((end, mark));
     }
+}
+
+/// Carpeta de un OSC 7 (`file://equipo/ruta`, con `%XX`). Solo de este equipo: con `ssh` el shell
+/// remoto informaría de rutas que aquí no existen.
+fn cwd_from_osc7(uri: &[u8]) -> Option<PathBuf> {
+    let uri = std::str::from_utf8(uri).ok()?;
+    let rest = uri.strip_prefix("file://")?;
+    let slash = rest.find('/')?;
+    let host = &rest[..slash];
+    if !(host.is_empty() || host.eq_ignore_ascii_case("localhost") || is_this_host(host)) {
+        return None;
+    }
+    native_path(&crate::links::percent_decode(&rest[slash..]))
+}
+
+/// Carpeta de un OSC 9;9 (ConEmu, Windows Terminal): la ruta tal cual, quizá entre comillas.
+fn cwd_from_osc9(path: &[u8]) -> Option<PathBuf> {
+    let path = std::str::from_utf8(path).ok()?;
+    let path = path
+        .strip_prefix('"')
+        .and_then(|p| p.strip_suffix('"'))
+        .unwrap_or(path);
+    native_path(path)
+}
+
+/// Ruta del sistema a partir de la de una URL: en Windows `/C:/Users/ana` -> `C:\Users\ana`.
+fn native_path(path: &str) -> Option<PathBuf> {
+    if path.is_empty() || path.contains(|c: char| c.is_control()) {
+        return None;
+    }
+    if cfg!(windows) {
+        let p = path.strip_prefix('/').unwrap_or(path);
+        let b = p.as_bytes();
+        let drive = b.len() >= 2 && b[0].is_ascii_alphabetic() && b[1] == b':';
+        let unc = p.starts_with("\\\\") || p.starts_with("//");
+        if !(drive || unc) {
+            return None;
+        }
+        let mut p = p.replace('/', "\\");
+        if p.len() == 2 {
+            p.push('\\');
+        }
+        Some(PathBuf::from(p))
+    } else {
+        path.starts_with('/').then(|| PathBuf::from(path))
+    }
+}
+
+/// ¿Es `host` el nombre de este equipo?
+fn is_this_host(host: &str) -> bool {
+    let name = if cfg!(windows) {
+        std::env::var("COMPUTERNAME").unwrap_or_default()
+    } else {
+        std::fs::read_to_string("/proc/sys/kernel/hostname").unwrap_or_default()
+    };
+    let name = name.trim();
+    !name.is_empty() && name.eq_ignore_ascii_case(host)
 }
 
 #[derive(Clone, Debug)]
@@ -204,10 +285,15 @@ pub struct BlockState {
     pending_cmd: Option<(String, Option<PathBuf>)>,
     /// Proceso del shell (para leer su carpeta actual).
     shell_pid: u32,
+    /// Última carpeta que informó el shell (OSC 7 u OSC 9;9).
+    reported_cwd: Option<PathBuf>,
     /// Carpeta del shell cuando empezó a escribirse el comando (marca B).
     input_cwd: Option<PathBuf>,
     /// Estado que informa el programa en marcha (OSC 7501, ver `status.rs`).
     pub program: crate::status::Records,
+    /// ConPTY pidió las teclas como eventos de Windows (`ESC[?9001h`, ver `input::win32_key`).
+    #[cfg(windows)]
+    pub win32_input: bool,
     /// Dónde estaba el cursor en la última marca A (para reconocer el mismo prompt repintado).
     prompt_at: Option<(i64, usize)>,
     /// Se está escribiendo el prompt derecho: la próxima B solo lo cierra.
@@ -222,11 +308,26 @@ impl BlockState {
         }
     }
 
-    /// Carpeta actual del shell (Linux: /proc/<pid>/cwd).
-    fn shell_cwd(&self) -> Option<PathBuf> {
-        (self.shell_pid != 0)
-            .then(|| std::fs::read_link(format!("/proc/{}/cwd", self.shell_pid)).ok())
-            .flatten()
+    /// Carpeta actual del shell. En Linux, la del proceso (`/proc/<pid>/cwd`), que siempre está al
+    /// día; si no se puede leer, la que informó. En Windows primero la informada: PowerShell no
+    /// cambia la del proceso con `cd`, y la de Git Bash es la de MSYS.
+    pub fn shell_cwd(&self) -> Option<PathBuf> {
+        let process = || {
+            (self.shell_pid != 0)
+                .then(|| crate::platform::process_cwd(self.shell_pid as i32))
+                .flatten()
+        };
+        let reported = || self.reported_cwd.clone().filter(|p| p.is_dir());
+        if cfg!(windows) {
+            reported().or_else(process)
+        } else {
+            process().or_else(reported)
+        }
+    }
+
+    /// El shell informó de su carpeta (OSC 7 u OSC 9;9).
+    pub fn set_cwd(&mut self, path: PathBuf) {
+        self.reported_cwd = Some(path);
     }
 
     pub fn info(&self, id: u32) -> Option<&BlockInfo> {
@@ -298,6 +399,11 @@ impl BlockState {
 
     /// Aplica una marca. Se llama con el terminal bloqueado y el parser justo en la marca.
     pub fn apply<T: EventListener>(&mut self, mark: Mark, term: &mut Term<T>) {
+        // La carpeta la aplica el bucle del PTY (`set_cwd`) y no dice si hay integración: fish
+        // y otros la informan por su cuenta.
+        if mark == Mark::Cwd {
+            return;
+        }
         self.active = true;
         let link = |kind: char, id: u32| Hyperlink {
             id: Some(format!("garbo:{kind}:{id}")),
@@ -385,6 +491,7 @@ impl BlockState {
                     }
                 }
             }
+            Mark::Cwd => {}
         }
     }
 }

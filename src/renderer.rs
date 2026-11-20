@@ -21,6 +21,7 @@ pub fn env_overrides() -> &'static [&'static str] {
 /// Una variable vacía cuenta como no puesta: es lo que Garbo deja a sus shells (ver
 /// `env_overrides`), y sin esto un Garbo abierto desde otro cargaría todos los drivers.
 pub fn limit_vulkan_drivers() {
+    #[cfg_attr(not(target_os = "linux"), allow(unused_mut))]
     let mut set = Vec::new();
     #[cfg(target_os = "linux")]
     if unset_or_empty("VK_LOADER_DRIVERS_SELECT") && unset_or_empty("VK_LOADER_DRIVERS_DISABLE") {
@@ -53,6 +54,28 @@ pub fn limit_vulkan_drivers() {
         }
     }
     let _ = ENV_OVERRIDES.set(set);
+}
+
+/// Descriptores (no samplers) que puede haber a la vez: el grupo de enlace de Garbo usa dos; el
+/// resto es margen por si se recrea alguno antes de soltar el anterior.
+const MAX_BINDINGS: u32 = 256;
+
+/// Orden en que se prueban las API gráficas: primero las nativas (Vulkan, Metal, DX12) y OpenGL
+/// solo si no hay otra (inicializar EGL cuesta RAM).
+#[cfg(not(windows))]
+fn backend_order() -> Vec<wgpu::Backends> {
+    vec![wgpu::Backends::PRIMARY, wgpu::Backends::GL]
+}
+
+/// En Windows, DX12 antes que Vulkan: con una NVIDIA RTX 3070 Ti, 55 MB privados frente a 85 MB
+/// (y 90 MB con OpenGL). Ver docs/Rendimiento.md.
+#[cfg(windows)]
+fn backend_order() -> Vec<wgpu::Backends> {
+    vec![
+        wgpu::Backends::DX12,
+        wgpu::Backends::VULKAN,
+        wgpu::Backends::GL,
+    ]
 }
 
 #[cfg(target_os = "linux")]
@@ -135,7 +158,12 @@ impl Renderer {
             wgpu::InstanceFlags::empty()
         };
         let mut found = None;
-        for backends in [wgpu::Backends::PRIMARY, wgpu::Backends::GL] {
+        // `WGPU_BACKEND=dx12|vulkan|gl` fuerza uno (para medir y por si un controlador falla).
+        let order = match wgpu::Backends::from_env() {
+            Some(forced) => vec![forced],
+            None => backend_order(),
+        };
+        for backends in order {
             let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
                 backends,
                 flags,
@@ -164,8 +192,14 @@ impl Renderer {
             .request_device(&wgpu::DeviceDescriptor {
                 label: Some("garbo"),
                 required_features: wgpu::Features::empty(),
-                required_limits: wgpu::Limits::downlevel_webgl2_defaults()
-                    .using_resolution(adapter.limits()),
+                required_limits: wgpu::Limits {
+                    // Con DX12, wgpu reserva un montón de descriptores visible para los shaders de
+                    // este tamaño (por defecto 1 000 000: ~30 MB con 32 bytes por descriptor en
+                    // NVIDIA). Garbo usa dos (uniformes y atlas) y un sampler.
+                    max_non_sampler_bindings: MAX_BINDINGS
+                        .min(adapter.limits().max_non_sampler_bindings),
+                    ..wgpu::Limits::downlevel_webgl2_defaults().using_resolution(adapter.limits())
+                },
                 memory_hints: wgpu::MemoryHints::MemoryUsage,
                 trace: wgpu::Trace::Off,
             })

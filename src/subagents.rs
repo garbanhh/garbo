@@ -14,7 +14,6 @@
 use std::collections::HashMap;
 use std::fs;
 use std::io::{Read, Seek, SeekFrom};
-use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime};
 
@@ -123,7 +122,7 @@ struct Meta {
 
 /// Carpeta `subagents` de la sesión que ejecuta el proceso `pid`.
 fn session_dir(pid: i32) -> Option<PathBuf> {
-    let cwd = fs::read_link(format!("/proc/{pid}/cwd")).ok()?;
+    let cwd = crate::platform::process_cwd(pid)?;
     let slug = project_slug(&cwd.to_string_lossy());
     let (slug, session) = match session_from_fds(pid) {
         Some(found) => found,
@@ -150,17 +149,12 @@ fn project_slug(path: &str) -> String {
 }
 
 fn config_dir(pid: i32) -> PathBuf {
-    process_env_path(pid, b"CLAUDE_CONFIG_DIR=")
+    process_env_path(pid, "CLAUDE_CONFIG_DIR")
         .unwrap_or_else(|| dirs::home_dir().unwrap_or_default().join(".claude"))
 }
 
-fn process_env_path(pid: i32, key: &[u8]) -> Option<PathBuf> {
-    let environ = fs::read(format!("/proc/{pid}/environ")).ok()?;
-    environ
-        .split(|&b| b == 0)
-        .find_map(|kv| kv.strip_prefix(key))
-        .filter(|v| !v.is_empty())
-        .map(|v| PathBuf::from(std::ffi::OsStr::from_bytes(v)))
+fn process_env_path(pid: i32, key: &str) -> Option<PathBuf> {
+    crate::platform::process_env(pid, key).map(PathBuf::from)
 }
 
 fn is_uuid(s: &str) -> bool {
@@ -176,10 +170,7 @@ fn is_uuid(s: &str) -> bool {
 
 /// Busca entre los archivos abiertos una ruta `…/claude-<uid>/<proyecto>/<sesión>/…`.
 fn session_from_fds(pid: i32) -> Option<(String, String)> {
-    for e in fs::read_dir(format!("/proc/{pid}/fd")).ok()?.flatten() {
-        let Ok(target) = fs::read_link(e.path()) else {
-            continue;
-        };
+    for target in crate::platform::open_files(pid) {
         let t = target.to_string_lossy();
         let parts: Vec<&str> = t.split('/').collect();
         for w in parts.windows(3) {
@@ -197,12 +188,7 @@ fn session_from_cmdline(pid: i32) -> Option<String> {
 }
 
 fn resume_args(pid: i32) -> Option<Vec<String>> {
-    let cmd = fs::read(format!("/proc/{pid}/cmdline")).ok()?;
-    Some(
-        cmd.split(|&b| b == 0)
-            .map(|a| String::from_utf8_lossy(a).into_owned())
-            .collect(),
-    )
+    crate::platform::process_args(pid)
 }
 
 fn explicit_session(args: &[String], flags: &[&str]) -> Option<String> {
@@ -344,7 +330,8 @@ fn describe_tool(name: &str, input: Option<&serde_json::Value>) -> String {
             .map(str::trim)
             .filter(|s| !s.is_empty())
     };
-    let base = |p: &str| p.rsplit('/').next().unwrap_or(p).to_string();
+    // Las rutas de un agente en Windows llevan `\`.
+    let base = |p: &str| p.rsplit(['/', '\\']).next().unwrap_or(p).to_string();
     let detail = match name {
         "Read" | "Edit" | "Write" | "MultiEdit" | "NotebookEdit" => field("file_path").map(base),
         "Bash" => field("description")

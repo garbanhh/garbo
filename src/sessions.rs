@@ -1,7 +1,8 @@
 //! Sesiones: qué se está ejecutando en cada pestaña.
 //!
-//! Se pregunta al PTY por su grupo de procesos en primer plano (`tcgetpgrp`) y se identifica
-//! si es un agente de código conocido. El estado se deduce de la actividad de la salida:
+//! Se averigua qué se ejecuta en primer plano (en Linux, el grupo de procesos del PTY con
+//! `tcgetpgrp`; en Windows, lo último que lanzó el shell: ver `platform`) y se identifica si es un
+//! agente de código conocido. El estado se deduce de la actividad de la salida:
 //!   - Trabajando: el agente ha escrito en la pantalla hace muy poco.
 //!   - Terminado: dejó de trabajar mientras no se miraba esa pestaña (pendiente de ver).
 //!   - Esperando: inactivo y ya visto, esperando un mensaje.
@@ -9,10 +10,9 @@
 //!
 //! Todo se recalcula solo cuando hay salida o mientras algún agente trabaja: en reposo, nada.
 
+use crate::platform::{base_name, Probe};
 use crate::status::{Kind, State, Summary};
 use crate::subagents::Provider;
-use std::os::fd::RawFd;
-use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 /// Sin salida durante este tiempo, el agente se considera parado.
@@ -40,6 +40,20 @@ const AGENTS: &[(&str, &str, Option<Provider>)] = &[
     ("goose", "Goose", None),
     ("amp", "Amp", None),
     ("crush", "Crush", None),
+];
+
+/// Paquetes de npm cuyo script no se llama como el agente. En Windows npm no crea un enlace con el
+/// nombre de la orden (`/usr/bin/claude`) sino un `.cmd` que ejecuta
+/// `node …\node_modules\@anthropic-ai\claude-code\cli.js`.
+const NPM_PACKAGES: &[(&str, &str)] = &[
+    ("node_modules/@anthropic-ai/claude-code/", "claude"),
+    ("node_modules/@openai/codex/", "codex"),
+    ("node_modules/@google/gemini-cli/", "gemini"),
+    ("node_modules/@qwen-code/qwen-code/", "qwen"),
+    ("node_modules/@github/copilot/", "copilot"),
+    ("node_modules/opencode-ai/", "opencode"),
+    ("node_modules/@sourcegraph/amp/", "amp"),
+    ("node_modules/@charmland/crush/", "crush"),
 ];
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -103,7 +117,7 @@ impl Session {
     /// Devuelve `true` si cambió algo visible.
     pub fn refresh(
         &mut self,
-        fd: Option<RawFd>,
+        probe: Option<&Probe>,
         last_output: Instant,
         viewing: bool,
         now: Instant,
@@ -116,7 +130,7 @@ impl Session {
         let mut changed = false;
         if identify {
             self.checked = Some(now);
-            let pgid = fd.and_then(foreground_pgid);
+            let pgid = probe.and_then(Probe::foreground);
             match pgid.and_then(identify_agent) {
                 Some(a) => {
                     self.pid = pgid;
@@ -199,30 +213,24 @@ impl Session {
     }
 }
 
-pub fn foreground_pgid(fd: RawFd) -> Option<i32> {
-    // SAFETY: tcgetpgrp solo lee el grupo de primer plano del terminal asociado al descriptor.
-    let p = unsafe { libc::tcgetpgrp(fd) };
-    (p > 0).then_some(p)
-}
-
 /// Identifica un agente por el nombre del proceso o de su script (node/python/bun…).
 pub fn identify_agent(pid: i32) -> Option<Agent> {
-    let comm = std::fs::read_to_string(format!("/proc/{pid}/comm")).unwrap_or_default();
-    let cmdline = std::fs::read(format!("/proc/{pid}/cmdline")).unwrap_or_default();
-    let mut names = vec![comm.trim().to_string()];
+    let args = crate::platform::process_args(pid).unwrap_or_default();
+    let mut names = vec![crate::platform::process_name(pid).unwrap_or_default()];
     names.extend(
-        cmdline
-            .split(|&b| b == 0)
+        args.iter()
             .take(3)
-            .filter(|a| !a.is_empty() && a[0] != b'-')
-            .map(|a| {
-                String::from_utf8_lossy(a)
-                    .rsplit('/')
-                    .next()
-                    .unwrap_or_default()
-                    .to_string()
-            }),
+            .filter(|a| !a.starts_with('-'))
+            .map(|a| base_name(a).to_string()),
     );
+    // Script de un paquete de npm (`…/node_modules/@anthropic-ai/claude-code/cli.js`).
+    names.extend(args.iter().take(3).filter_map(|a| {
+        let a = a.replace('\\', "/").to_lowercase();
+        NPM_PACKAGES
+            .iter()
+            .find(|(pkg, _)| a.contains(pkg))
+            .map(|(_, key)| key.to_string())
+    }));
     names.iter().find_map(|n| {
         let n = n
             .trim_end_matches(".js")
@@ -237,41 +245,24 @@ pub fn identify_agent(pid: i32) -> Option<Agent> {
 /// Orden que ejecuta un proceso, para mostrarla ("cargo build --release", "vite").
 /// Con intérpretes (python, node…) se muestra el script en lugar del intérprete.
 pub fn command_label(pid: i32) -> Option<String> {
-    let raw = std::fs::read(format!("/proc/{pid}/cmdline")).ok()?;
-    let mut args: Vec<String> = raw
-        .split(|&b| b == 0)
-        .filter(|a| !a.is_empty())
-        .map(|a| String::from_utf8_lossy(a).into_owned())
-        .collect();
+    let mut args = crate::platform::process_args(pid)?;
     if args.is_empty() {
         return None;
     }
-    let base = |s: &str| s.rsplit('/').next().unwrap_or(s).to_string();
     let interp = [
-        "python", "python3", "node", "bun", "deno", "perl", "ruby", "sh", "bash", "zsh", "fish",
+        "python", "python3", "py", "node", "bun", "deno", "perl", "ruby", "sh", "bash", "zsh",
+        "fish",
     ];
-    if args.len() > 1 && interp.contains(&base(&args[0]).as_str()) && !args[1].starts_with('-') {
+    let first = base_name(&args[0]).to_lowercase();
+    if args.len() > 1 && interp.contains(&first.as_str()) && !args[1].starts_with('-') {
         args.remove(0);
     }
-    args[0] = base(&args[0]);
+    args[0] = base_name(&args[0]).to_string();
     let mut out = args.join(" ");
     if out.chars().count() > 60 {
         out = out.chars().take(59).collect::<String>() + "…";
     }
     Some(out)
-}
-
-/// Directorio de trabajo de un proceso, abreviado con `~`.
-pub fn cwd_label(pid: u32) -> Option<String> {
-    let path: PathBuf = std::fs::read_link(format!("/proc/{pid}/cwd")).ok()?;
-    let s = path.to_string_lossy().to_string();
-    let home = std::env::var("HOME").unwrap_or_default();
-    Some(match s.strip_prefix(&home) {
-        Some(rest) if !home.is_empty() && (rest.is_empty() || rest.starts_with('/')) => {
-            format!("~{rest}")
-        }
-        _ => s,
-    })
 }
 
 /// "ahora", "hace 27 s", "hace 3 min", "hace 2 h"

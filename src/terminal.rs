@@ -25,8 +25,9 @@ pub enum UserEvent {
     /// Resultado de "Buscar actualizaciones" en Ajustes.
     UpdateCheck(crate::update::CheckState),
     Ports(Vec<crate::ports::PortInfo>),
-    /// Imagen del portapapeles guardada (o error) para pegar su ruta en la pestaña.
-    PasteImage(u64, Result<PathBuf, String>),
+    /// Imagen del portapapeles guardada (o archivos copiados, en Windows), o el error, para pegar
+    /// sus rutas en la pestaña.
+    PasteImage(u64, Result<Vec<PathBuf>, String>),
     /// Aviso mostrado (pestaña, proceso `notify-send`) y aviso pulsado (pestaña, permiso de
     /// activación del escritorio). Ver `notify.rs` y `activation.rs`.
     NoticeShown(u64, u32),
@@ -76,8 +77,8 @@ pub struct Tab {
     /// Bloque seleccionado (navegación con Ctrl+Shift+↑/↓ o clic en el margen).
     pub selected_block: Option<u32>,
     sender: PtySender,
-    /// Copia del descriptor maestro del PTY (para saber qué proceso está en primer plano).
-    master: Option<std::fs::File>,
+    /// Para saber qué se ejecuta en primer plano (ver `platform`).
+    probe: crate::platform::Probe,
     /// Última vez que el programa escribió en pantalla por su cuenta (sin contar el eco).
     pub last_output: std::time::Instant,
     /// Última vez que el usuario escribió en la pestaña (teclado, pegar, ratón).
@@ -117,13 +118,29 @@ pub fn term_config(cfg: &Config) -> TermConfig {
     }
 }
 
-/// Programa del shell: el de la configuración, `$SHELL` o bash.
+/// Programa del shell: el de la configuración o el del sistema (`$SHELL` o bash; en Windows,
+/// PowerShell).
 pub fn shell_program(cfg: &Config) -> String {
-    cfg.shell
-        .program
+    cfg.shell.program.clone().unwrap_or_else(default_shell)
+}
+
+#[cfg(unix)]
+fn default_shell() -> String {
+    std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".into())
+}
+
+/// PowerShell 7 (`pwsh`) si está instalado y, si no, Windows PowerShell, que viene con el sistema.
+/// `$SHELL` no se mira: si Garbo se abre desde Git Bash apunta a una ruta de MSYS (`/usr/bin/bash`).
+#[cfg(windows)]
+fn default_shell() -> String {
+    static SHELL: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    SHELL
+        .get_or_init(|| {
+            crate::platform::find_program("pwsh.exe")
+                .map(|p| p.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "powershell.exe".into())
+        })
         .clone()
-        .or_else(|| std::env::var("SHELL").ok())
-        .unwrap_or_else(|| "/bin/bash".into())
 }
 
 /// Shell a lanzar y variables que añadir a su entorno. Con bash, zsh y fish se inyecta la
@@ -206,21 +223,20 @@ impl Tab {
             working_directory: cwd,
             drain_on_exit: false,
             env,
+            // Rutas con espacios ("C:\Users\Ana López\…") entre comillas, como las espera el shell.
+            #[cfg(windows)]
+            escape_args: true,
         };
 
         let pty = tty::new(&opts, ws, id)?;
-        let child_pid = pty.child().id();
-        let master = pty.file().try_clone().ok();
+        let child_pid = crate::platform::child_pid(&pty);
+        let probe = crate::platform::Probe::new(&pty);
         let blocks = Arc::new(Mutex::new(BlockState::new(child_pid)));
         let pty_loop = PtyLoop::new(term.clone(), listener, pty, blocks.clone())?;
         let sender = pty_loop.sender();
         pty_loop.spawn();
 
-        let title = shell_program(cfg)
-            .rsplit('/')
-            .next()
-            .unwrap_or("shell")
-            .to_owned();
+        let title = crate::platform::base_name(&shell_program(cfg)).to_owned();
 
         Ok(Self {
             id,
@@ -229,7 +245,7 @@ impl Tab {
             blocks,
             selected_block: None,
             sender,
-            master,
+            probe,
             last_output: std::time::Instant::now(),
             last_input: std::cell::Cell::new(std::time::Instant::now()),
             task: String::new(),
@@ -268,11 +284,7 @@ impl Tab {
 
     /// Nuevo título (OSC 0/2): se recuerda qué proceso lo puso.
     pub fn set_title(&mut self, title: String) {
-        use std::os::fd::AsRawFd;
-        self.title_owner = self
-            .master
-            .as_ref()
-            .and_then(|f| crate::sessions::foreground_pgid(f.as_raw_fd()));
+        self.title_owner = self.probe.foreground();
         self.title = title;
         self.task = self.compute_task();
     }
@@ -305,15 +317,14 @@ impl Tab {
 
     /// A quién van los atajos de edición (ver `edit.rs`): el prompt, un agente o lo de siempre.
     pub fn edit_context(&self) -> crate::edit::Context {
-        use std::os::fd::AsRawFd;
         if self.at_prompt() {
             return crate::edit::Context::Prompt(self.shell);
         }
-        let pgid = self
-            .master
-            .as_ref()
-            .and_then(|f| crate::sessions::foreground_pgid(f.as_raw_fd()));
-        match pgid.and_then(crate::sessions::identify_agent) {
+        match self
+            .probe
+            .foreground()
+            .and_then(crate::sessions::identify_agent)
+        {
             Some(a) => crate::edit::Context::Agent(a.name),
             None => crate::edit::Context::Other,
         }
@@ -357,18 +368,16 @@ impl Tab {
 
     /// Actualiza sesión (agente y estado) y directorio. Devuelve `true` si cambió algo visible.
     pub fn refresh_session(&mut self, viewing: bool, now: std::time::Instant) -> bool {
-        use std::os::fd::AsRawFd;
-        let fd = self.master.as_ref().map(|f| f.as_raw_fd());
         let report = self.blocks.lock().unwrap().program.summary();
-        let mut changed = self
-            .session
-            .refresh(fd, self.last_output, viewing, now, report);
+        let mut changed =
+            self.session
+                .refresh(Some(&self.probe), self.last_output, viewing, now, report);
         if self
             .cwd_checked
             .is_none_or(|t| now.duration_since(t).as_millis() >= 1000)
         {
             self.cwd_checked = Some(now);
-            if let Some(l) = crate::sessions::cwd_label(self.child_pid) {
+            if let Some(l) = self.cwd().map(|p| crate::platform::tilde(&p)) {
                 if l != self.cwd_label {
                     self.cwd_label = l;
                     changed = true;
@@ -389,12 +398,7 @@ impl Tab {
     ///   - otro programa: su orden ("cargo build --release");
     ///   - el shell esperando: el nombre de la carpeta.
     fn compute_task(&self) -> String {
-        use std::os::fd::AsRawFd;
-        let fg = self
-            .master
-            .as_ref()
-            .and_then(|f| crate::sessions::foreground_pgid(f.as_raw_fd()));
-        match fg {
+        match self.probe.foreground() {
             Some(pg) if pg != self.child_pid as i32 => {
                 let title = clean_title(&self.title);
                 if self.title_owner == Some(pg) && !title.is_empty() {
@@ -441,16 +445,9 @@ impl Tab {
         }
     }
 
-    /// Directorio actual del shell (Linux: /proc/<pid>/cwd). Las pestañas nuevas lo heredan.
+    /// Directorio actual del shell (ver `BlockState::shell_cwd`). Las pestañas nuevas lo heredan.
     pub fn cwd(&self) -> Option<PathBuf> {
-        #[cfg(target_os = "linux")]
-        {
-            std::fs::read_link(format!("/proc/{}/cwd", self.child_pid)).ok()
-        }
-        #[cfg(not(target_os = "linux"))]
-        {
-            None
-        }
+        self.blocks.lock().unwrap().shell_cwd()
     }
 }
 
@@ -491,12 +488,15 @@ pub fn clean_title(t: &str) -> String {
         .to_string()
 }
 
-/// Última carpeta de una ruta abreviada ("~/Documentos/Proyectos/GRBTER" -> "GRBTER").
+/// Última carpeta de una ruta abreviada ("~/Documentos/Proyectos/GRBTER" -> "GRBTER"). En
+/// Windows separa también con `\` y la raíz de una unidad se queda entera ("C:\").
 pub fn short_dir(path: &str) -> String {
-    match path.trim_end_matches('/') {
-        "" if path.starts_with('/') => "/".into(),
+    use crate::platform::is_separator;
+    match path.trim_end_matches(is_separator) {
+        "" if path.starts_with(is_separator) => path[..1].into(),
         "" => String::new(),
-        p => p.rsplit('/').next().unwrap_or(p).to_string(),
+        p if cfg!(windows) && p.len() == 2 && p.ends_with(':') => format!("{p}\\"),
+        p => p.rsplit(is_separator).next().unwrap_or(p).to_string(),
     }
 }
 

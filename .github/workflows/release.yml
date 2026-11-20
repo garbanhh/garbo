@@ -1,9 +1,9 @@
 name: Release
 
-# Al subir una etiqueta vX.Y.Z al repositorio público se compilan el RPM (en Fedora) y el .deb
-# (en Ubuntu 22.04) y se publican en la release. La app consulta estas releases para avisar de
-# versiones nuevas. La release se crea como borrador y solo se publica cuando están los dos
-# paquetes: la app nunca ve una a medias (los borradores no cuentan como la última).
+# Al subir una etiqueta vX.Y.Z al repositorio público se compilan el RPM (en Fedora), el .deb
+# (en Ubuntu 22.04) y el instalador y la versión portátil de Windows, y se publican en la release. La app consulta estas releases para avisar de
+# versiones nuevas. La release se crea como borrador y solo se publica cuando están todos
+# los paquetes: la app nunca ve una a medias (los borradores no cuentan como la última).
 # También se puede lanzar a mano para una etiqueta existente (Actions → Release → Run workflow).
 # Este flujo tiene permiso de escritura y sus paquetes se instalan como root: solo usa la CLI
 # oficial de GitHub (gh) y Actions fijadas a un commit concreto.
@@ -157,8 +157,48 @@ jobs:
           gh release upload "$TAG" target/debian/*.deb target/debian/*.deb.sha256 \
             $(ls target/debian/*.deb.sig 2>/dev/null) --repo "$GITHUB_REPOSITORY" --clobber
 
+  windows:
+    needs: draft
+    runs-on: windows-latest
+    env:
+      TAG: ${{ inputs.tag || github.ref_name }}
+      GARBO_RPM_PUBLIC_KEY: ${{ vars.GARBO_RPM_PUBLIC_KEY }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+      - uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # master
+        with:
+          toolchain: 1.100.0
+      - name: Comprobar versión
+        shell: bash
+        run: |
+          VERSION=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+          test "v$VERSION" = "$TAG" || { echo "La etiqueta $TAG no coincide con Cargo.toml ($VERSION)"; exit 1; }
+      - name: Inno Setup
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe")) {
+            choco install innosetup --no-progress -y
+          }
+      # Instalador y portátil con la ConPTY de Windows Terminal, firmados si están los secretos
+      # GARBO_WINDOWS_CERT (el .pfx en base64) y GARBO_WINDOWS_CERT_PASSWORD.
+      - name: Compilar, empaquetar y firmar
+        shell: pwsh
+        env:
+          GARBO_WINDOWS_CERT: ${{ secrets.GARBO_WINDOWS_CERT }}
+          GARBO_WINDOWS_CERT_PASSWORD: ${{ secrets.GARBO_WINDOWS_CERT_PASSWORD }}
+        run: ./scripts/instalador.ps1
+      - name: Subir a la release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $files = Get-ChildItem target/windows -File | ForEach-Object { $_.FullName }
+          gh release upload $env:TAG @files --repo $env:GITHUB_REPOSITORY --clobber
+
   publish:
-    needs: [rpm, deb]
+    needs: [rpm, deb, windows]
     runs-on: ubuntu-latest
     env:
       TAG: ${{ inputs.tag || github.ref_name }}

@@ -36,3 +36,52 @@ jobs:
           sudo apt-get install -y xvfb xauth xdotool mesa-vulkan-drivers fonts-dejavu-core \
             libxkbcommon-x11-0 libx11-xcb1 libxcursor1 libxrandr2 libxi6
           xvfb-run -a -s '-screen 0 1920x1080x24' python3 tools/prueba_paneles.py target/debug/garbo
+
+  # Windows: compilar, pruebas y clippy (el formato ya lo comprueba el de Linux). Las pruebas usan
+  # la ConPTY de Windows Terminal, la que se distribuye con Garbo (la del sistema del runner puede
+  # no dejar pasar las secuencias OSC).
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # master
+        with:
+          toolchain: 1.100.0
+          components: clippy
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+      - name: ConPTY de Windows Terminal
+        shell: pwsh
+        run: |
+          ./scripts/conpty.ps1 -Destino "$env:RUNNER_TEMP\conpty"
+          "$env:RUNNER_TEMP\conpty" | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
+      - name: Compilar
+        run: cargo build --locked
+      - name: Tests
+        run: cargo test --locked
+      - name: Clippy
+        run: cargo clippy --locked --all-targets -- -D warnings
+
+  # Instalador y versión portátil de Windows, para probarlos antes de publicar (Actions → la
+  # ejecución → Artifacts). Sin firmar.
+  instalador:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # master
+        with:
+          toolchain: 1.100.0
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+      - name: Inno Setup
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe")) {
+            choco install innosetup --no-progress -y
+          }
+      - name: Instalador y portátil
+        shell: pwsh
+        run: ./scripts/instalador.ps1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: garbo-windows
+          path: target/windows/
+          retention-days: 14

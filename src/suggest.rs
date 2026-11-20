@@ -251,6 +251,19 @@ const FISH_BUILTINS: &[&str] = &[
 ];
 
 /// Órdenes internas y palabras clave de bash.
+/// PowerShell: palabras clave y alias de serie (en minúsculas: no distingue). Los cmdlets
+/// (`Get-ChildItem`) se reconocen por su forma (`is_cmdlet`).
+const POWERSHELL_BUILTINS: &[&str] = &[
+    "%", ".", "&", "?", "break", "cat", "cd", "chdir", "class", "clc", "clear", "cls", "copy",
+    "cp", "cpi", "cvpa", "del", "dir", "do", "echo", "enum", "erase", "exit", "filter", "for",
+    "foreach", "function", "gc", "gci", "gcm", "gi", "gl", "gm", "gp", "gps", "gu", "gv", "h",
+    "history", "icm", "if", "iex", "ii", "irm", "iwr", "kill", "ls", "md", "measure", "mi",
+    "mkdir", "mount", "move", "mv", "ni", "nv", "ogv", "param", "popd", "ps", "pushd", "pwd", "r",
+    "rd", "ren", "return", "ri", "rm", "rmdir", "rni", "rp", "saps", "select", "set", "si", "sl",
+    "sleep", "sort", "sp", "start", "sv", "switch", "tee", "throw", "trap", "try", "type", "where",
+    "while", "write",
+];
+
 const BUILTINS: &[&str] = &[
     ".", ":", "[", "[[", "alias", "bg", "bind", "break", "builtin", "case", "cd", "command",
     "compgen", "complete", "continue", "declare", "dirs", "disown", "echo", "enable", "eval",
@@ -312,6 +325,21 @@ fn history_file(shell: Shell) -> Option<PathBuf> {
                 .map(|(_, p)| p)
         }
         Shell::Fish => Some(dirs::data_dir()?.join("fish").join("fish_history")),
+        // PSReadLine: `(Get-PSReadLineOption).HistorySavePath`, el mismo para las dos versiones.
+        Shell::PowerShell if cfg!(windows) => Some(
+            dirs::config_dir()?
+                .join("Microsoft")
+                .join("Windows")
+                .join("PowerShell")
+                .join("PSReadLine")
+                .join("ConsoleHost_history.txt"),
+        ),
+        Shell::PowerShell => Some(
+            dirs::data_dir()?
+                .join("powershell")
+                .join("PSReadLine")
+                .join("ConsoleHost_history.txt"),
+        ),
     }
 }
 
@@ -326,7 +354,22 @@ fn parse_shell_history(shell: Shell, bytes: &[u8]) -> Vec<String> {
             .collect(),
         Shell::Zsh => parse_zsh_history(bytes),
         Shell::Fish => parse_fish_history(&String::from_utf8_lossy(bytes)),
+        Shell::PowerShell => parse_powershell_history(&String::from_utf8_lossy(bytes)),
     }
+}
+
+/// PSReadLine: una línea por comando; un acento grave al final sigue el comando en la siguiente.
+fn parse_powershell_history(text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut continued = false;
+    for line in text.lines() {
+        let multi = continued;
+        continued = line.ends_with('`');
+        if !(multi || continued) {
+            out.push(line.to_string());
+        }
+    }
+    out
 }
 
 /// zsh: una línea por comando, con `: inicio:duración;` delante si usa EXTENDED_HISTORY; una
@@ -562,15 +605,142 @@ impl History {
 /// ¿Cambia el comando a una carpeta relativa (`cd Proyectos`)? Su destino depende de dónde se
 /// ejecutó. `cd`, `cd -`, `cd ..`, `cd ~/x`, `cd /x` y con variables valen en cualquier sitio.
 fn relative_cd(cmd: &str) -> bool {
+    use crate::platform::is_separator;
     let toks: Vec<&str> = cmd.split_whitespace().collect();
     toks.windows(2).any(|w| {
         let t = w[1].trim_end_matches([';', '&']).trim_matches(['\'', '"']);
-        matches!(w[0], "cd" | "pushd")
-            && !(t.is_empty()
-                || t.starts_with(['-', '/', '~'])
-                || t.contains('$')
-                || t.split('/').all(|c| c.is_empty() || c == "." || c == ".."))
+        // En Windows, `C:\x` y `\x` no dependen de la carpeta, y PowerShell también tiene `sl`
+        // y `Set-Location` (sin distinguir mayúsculas).
+        let absolute = cfg!(windows) && (t.starts_with('\\') || t.as_bytes().get(1) == Some(&b':'));
+        let verb = w[0].to_lowercase();
+        let cd = matches!(verb.as_str(), "cd" | "pushd")
+            || (cfg!(windows)
+                && matches!(
+                    verb.as_str(),
+                    "sl" | "set-location" | "push-location" | "chdir"
+                ));
+        cd && !(t.is_empty()
+            || absolute
+            || t.starts_with(['-', '/', '~'])
+            || t.contains('$')
+            || t.split(is_separator)
+                .all(|c| c.is_empty() || c == "." || c == ".."))
     })
+}
+
+/// ¿Es un cmdlet de PowerShell (`Get-ChildItem`, `invoke-webrequest`)? Verbo aprobado, guion y
+/// nombre: así no hace falta conocerlos todos (cada módulo añade los suyos).
+fn is_cmdlet(word: &str) -> bool {
+    const VERBS: &[&str] = &[
+        "add",
+        "approve",
+        "assert",
+        "backup",
+        "block",
+        "build",
+        "checkpoint",
+        "clear",
+        "close",
+        "compare",
+        "complete",
+        "compress",
+        "confirm",
+        "connect",
+        "convert",
+        "convertfrom",
+        "convertto",
+        "copy",
+        "debug",
+        "deny",
+        "deploy",
+        "disable",
+        "disconnect",
+        "dismount",
+        "edit",
+        "enable",
+        "enter",
+        "exit",
+        "expand",
+        "export",
+        "find",
+        "format",
+        "get",
+        "grant",
+        "group",
+        "hide",
+        "import",
+        "initialize",
+        "install",
+        "invoke",
+        "join",
+        "limit",
+        "lock",
+        "measure",
+        "merge",
+        "mount",
+        "move",
+        "new",
+        "open",
+        "optimize",
+        "out",
+        "ping",
+        "pop",
+        "protect",
+        "publish",
+        "push",
+        "read",
+        "receive",
+        "redo",
+        "register",
+        "remove",
+        "rename",
+        "repair",
+        "request",
+        "reset",
+        "resize",
+        "resolve",
+        "restart",
+        "restore",
+        "resume",
+        "revoke",
+        "save",
+        "search",
+        "select",
+        "send",
+        "set",
+        "show",
+        "skip",
+        "sort",
+        "split",
+        "start",
+        "step",
+        "stop",
+        "submit",
+        "suspend",
+        "switch",
+        "sync",
+        "test",
+        "trace",
+        "unblock",
+        "undo",
+        "uninstall",
+        "unlock",
+        "unprotect",
+        "unpublish",
+        "unregister",
+        "update",
+        "use",
+        "wait",
+        "watch",
+        "where",
+        "write",
+    ];
+    let Some((verb, noun)) = word.split_once('-') else {
+        return false;
+    };
+    VERBS.contains(&verb.to_ascii_lowercase().as_str())
+        && !noun.is_empty()
+        && noun.chars().all(|c| c.is_ascii_alphanumeric())
 }
 
 struct Known {
@@ -587,6 +757,7 @@ fn build_known() -> HashMap<String, Kind> {
     let builtins = match shell {
         Shell::Zsh => ZSH_BUILTINS,
         Shell::Fish => FISH_BUILTINS,
+        Shell::PowerShell => POWERSHELL_BUILTINS,
         Shell::Bash | Shell::Other => BUILTINS,
     };
     let mut names: HashMap<String, Kind> = builtins
@@ -605,9 +776,8 @@ fn build_known() -> HashMap<String, Kind> {
     for d in dirs {
         if let Ok(rd) = std::fs::read_dir(d) {
             for e in rd.flatten() {
-                names
-                    .entry(e.file_name().to_string_lossy().into_owned())
-                    .or_insert(Kind::Command);
+                let name = e.file_name().to_string_lossy().into_owned();
+                names.entry(command_name(name)).or_insert(Kind::Command);
             }
         }
     }
@@ -654,6 +824,19 @@ fn build_known() -> HashMap<String, Kind> {
                 vec![conf.join("conf.d"), PathBuf::from("/etc/fish/conf.d")],
             )
         }
+        // Perfiles de Windows PowerShell y de PowerShell 7 (`$PROFILE`): `function x`,
+        // `Set-Alias x …`, `New-Alias x …`.
+        Shell::PowerShell => {
+            let docs = dirs::document_dir().unwrap_or_else(|| home.join("Documents"));
+            let mut files = Vec::new();
+            for dir in [docs.join("WindowsPowerShell"), docs.join("PowerShell")] {
+                for f in ["Microsoft.PowerShell_profile.ps1", "profile.ps1"] {
+                    files.push(dir.join(f));
+                }
+            }
+            files.push(home.join(".config/powershell/Microsoft.PowerShell_profile.ps1"));
+            (files, Vec::new())
+        }
         Shell::Bash | Shell::Other => (
             [".bashrc", ".bash_aliases", ".bash_profile", ".profile"]
                 .iter()
@@ -672,6 +855,8 @@ fn build_known() -> HashMap<String, Kind> {
     for f in rc {
         if let Ok(text) = std::fs::read_to_string(f) {
             for n in text.lines().filter_map(defined_name) {
+                // En Windows se guardan en minúsculas (ver `runnable`).
+                let n = if cfg!(windows) { n.to_lowercase() } else { n };
                 names.insert(n, Kind::Alias);
             }
         }
@@ -713,6 +898,16 @@ fn defined_name(line: &str) -> Option<String> {
     };
     if let Some(rest) = l.strip_prefix("alias ") {
         return first_arg(rest);
+    }
+    // PowerShell: `Set-Alias ll Get-ChildItem`, `New-Alias -Name ll -Value …` (sin distinguir
+    // mayúsculas).
+    let lower = l.to_ascii_lowercase();
+    if let Some(n) = ["set-alias ", "new-alias "]
+        .iter()
+        .find(|p| lower.starts_with(*p))
+        .map(|p| p.len())
+    {
+        return first_arg(&l[n..]);
     }
     if let Some(rest) = l.strip_prefix("abbr ") {
         // `abbr -a x …`; `abbr -e x` borra y `abbr --list` no define nada.
@@ -766,11 +961,19 @@ fn runnable(cmd: &str, known: &HashMap<String, Kind>, cwd: Option<&Path>) -> boo
     let Some(w) = first_word(cmd) else {
         return false;
     };
-    if w.contains('/') {
+    if w.contains(crate::platform::is_separator) {
         return expand(w, cwd).is_none_or(|p| p.exists());
     }
+    // En Windows las órdenes no distinguen mayúsculas (`Git`, `GIT`) y se guardan en minúsculas.
+    let lower;
+    let w = if cfg!(windows) {
+        lower = w.to_lowercase();
+        lower.as_str()
+    } else {
+        w
+    };
     if !known.contains_key(w) {
-        return false;
+        return crate::shell::current() == Shell::PowerShell && is_cmdlet(w);
     }
     if w == "cd" {
         // El destino tiene que existir desde aquí (sin destino, "-" o con variables: vale).
@@ -782,6 +985,21 @@ fn runnable(cmd: &str, known: &HashMap<String, Kind>, cwd: Option<&Path>) -> boo
         };
     }
     true
+}
+
+/// Nombre con el que se escribe un programa del PATH. En Windows, en minúsculas y sin la extensión
+/// ejecutable (`Git.EXE` -> `git`, `code.cmd` -> `code`); el resto, tal cual.
+fn command_name(file: String) -> String {
+    if !cfg!(windows) {
+        return file;
+    }
+    let lower = file.to_lowercase();
+    let exts = std::env::var("PATHEXT").unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".into());
+    exts.split(';')
+        .map(str::to_lowercase)
+        .filter(|e| e.starts_with('.') && e.len() > 1)
+        .find_map(|e| lower.strip_suffix(e.as_str()).map(str::to_string))
+        .unwrap_or(lower)
 }
 
 /// Las marcas de tiempo de bash (`HISTTIMEFORMAT`) son líneas `#1700000000`.
@@ -1256,7 +1474,12 @@ mod tests {
             !runnable("cd /no/existe/garbo", &known, cwd),
             "destino inexistente"
         );
-        assert!(runnable("/bin/sh -c x", &known, cwd));
+        let sh = if cfg!(windows) {
+            r"C:\Windows\System32\cmd.exe /c x"
+        } else {
+            "/bin/sh -c x"
+        };
+        assert!(runnable(sh, &known, cwd));
         assert!(!runnable("/no/existe/x", &known, cwd));
         assert_eq!(
             defined_name("alias servidor='ssh x'").as_deref(),

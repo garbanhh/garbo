@@ -9,6 +9,7 @@
 //!   entiende cada shell. En bash y zsh, `Alt+Retroceso` y `Alt+D`; fish recibe las teclas tal cual
 //!   y actúan sus propias acciones.
 //! - **Ctrl+Z**: deshacer (`Ctrl+_` en bash y zsh; fish ya deshace con Ctrl+Z).
+//! - En PowerShell, PSReadLine ya tiene todos estos atajos con las mismas teclas: se le dejan.
 //! - **Clic en lo escrito**: lleva el cursor ahí, con flechas, como si se pulsaran.
 //! - **↑ / ↓ en un comando de varias líneas**: cambian de línea en vez de recorrer el historial.
 //!
@@ -47,6 +48,10 @@ pub fn shortcut(key: &Key, mods: ModifiersState, ctx: Context) -> Option<&'stati
     let shift = mods == ModifiersState::SHIFT;
     let ctrl = mods == ModifiersState::CONTROL;
     let bytes: &[u8] = match (ctx, key) {
+        // PSReadLine ya hace todo esto con sus teclas de Windows (Shift+Intro: nueva línea;
+        // Ctrl+Retroceso / Ctrl+Supr: borrar palabra; Ctrl+Z: deshacer), que le llegan tal cual
+        // con `win32-input-mode` (ver `input::win32_key`).
+        (Context::Prompt(Shell::PowerShell), _) => return None,
         (Context::Prompt(Shell::Fish), Key::Named(NamedKey::Enter)) if shift => b"\x1b\r",
         (Context::Prompt(_), Key::Named(NamedKey::Enter)) if shift => b"\x16\n",
         // Por palabras, como las entiende cada shell (no se cambia nada dentro de ninguno). fish:

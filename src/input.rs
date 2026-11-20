@@ -110,6 +110,57 @@ pub fn key_to_bytes(ev: &KeyEvent, m: ModifiersState, mode: TermMode) -> Option<
         .map(|t| alt(t.as_bytes().to_vec()))
 }
 
+/// Tecla como evento de teclado de Windows (`win32-input-mode`, el que pide ConPTY al empezar):
+/// `ESC [ Vk ; Sc ; Uc ; Kd ; Cs ; Rc _`, con la tecla virtual, el código de exploración, el
+/// carácter (UTF-16), pulsada, los modificadores y las repeticiones. Así el programa recibe la
+/// tecla exacta (PSReadLine distingue Shift+Intro, Ctrl+Retroceso, Ctrl+Z…), como en Windows
+/// Terminal. Un carácter fuera del plano básico va en dos eventos, uno por mitad.
+#[cfg(windows)]
+pub fn win32_key(ev: &KeyEvent, m: ModifiersState) -> Option<Vec<u8>> {
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{MapVirtualKeyW, MAPVK_VSC_TO_VK_EX};
+    use winit::platform::modifier_supplement::KeyEventExtModifierSupplement;
+    use winit::platform::scancode::PhysicalKeyExtScancode;
+    let scancode = ev.physical_key.to_scancode().unwrap_or(0);
+    // SAFETY: MapVirtualKeyW solo consulta la distribución de teclado activa.
+    let vk = if scancode == 0 {
+        0
+    } else {
+        unsafe { MapVirtualKeyW(scancode, MAPVK_VSC_TO_VK_EX) }
+    };
+    let text = ev.text_with_all_modifiers().unwrap_or_default();
+    if vk == 0 && text.is_empty() {
+        return None;
+    }
+    // Modificadores como los da Windows (sin distinguir izquierda y derecha: la izquierda).
+    let mut state = 0u32;
+    if m.alt_key() {
+        state |= 0x02; // LEFT_ALT_PRESSED
+    }
+    if m.control_key() {
+        state |= 0x08; // LEFT_CTRL_PRESSED
+    }
+    if m.shift_key() {
+        state |= 0x10; // SHIFT_PRESSED
+    }
+    if scancode & 0xE000 != 0 {
+        state |= 0x100; // ENHANCED_KEY (flechas, Insert, Supr, Inicio, Fin…)
+    }
+    Some(win32_sequence(vk, scancode & 0xFF, text, state))
+}
+
+/// `ESC [ Vk ; Sc ; Uc ; 1 ; Cs ; 1 _` para una tecla pulsada (y uno más por cada mitad de un
+/// carácter fuera del plano básico).
+#[cfg(windows)]
+pub fn win32_sequence(vk: u32, sc: u32, text: &str, state: u32) -> Vec<u8> {
+    let units: Vec<u16> = text.encode_utf16().collect();
+    let first = units.first().copied().unwrap_or(0);
+    let mut out = format!("\x1b[{vk};{sc};{first};1;{state};1_").into_bytes();
+    for unit in units.iter().skip(1) {
+        out.extend(format!("\x1b[0;0;{unit};1;{state};1_").into_bytes());
+    }
+    out
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum MouseButtonCode {
     Left = 0,

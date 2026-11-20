@@ -1,6 +1,6 @@
 [package]
 name = "garbo"
-version = "0.10.2"
+version = "0.11.0"
 edition = "2021"
 description = "Terminal GPU ligera, rápida y personalizable con pestañas y bloques de comandos"
 license = "MIT"
@@ -18,7 +18,6 @@ rustc-hash = "1.1"
 # Clave de firma en armadura ASCII a binario para gpgv (ya está en el árbol vía alacritty_terminal)
 base64 = "0.22"
 polling = "3"
-libc = "0.2"
 # Ventana y eventos
 winit = "0.30"
 # Render GPU (Vulkan/Metal/DX12/GL)
@@ -42,10 +41,56 @@ log = "0.4"
 env_logger = { version = "0.11", default-features = false, features = ["auto-color"] }
 toml_edit = "0.25.19"
 serde_json = "1.0.154"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(target_os = "linux")'.dependencies]
 # Traer la ventana al frente al pulsar un aviso (xdg-activation); ya están en el árbol vía winit
 wayland-client = "0.31"
 wayland-backend = { version = "0.3", features = ["client_system"] }
 wayland-protocols = { version = "0.32", features = ["client", "staging"] }
+
+# Windows: procesos de cada pestaña, puertos, portapapeles y ventana (ya está en el árbol vía
+# polling, miow y dirs). Solo las API necesarias, sin el crate `windows` (COM/WinRT) completo.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Wdk_System_Threading",
+    "Win32_Foundation",
+    "Win32_Graphics_Dwm",
+    "Win32_Graphics_Gdi",
+    "Win32_NetworkManagement_IpHelper",
+    "Win32_Networking_WinSock",
+    "Win32_Security",
+    "Win32_Storage_FileSystem",
+    "Win32_System_DataExchange",
+    "Win32_System_Diagnostics_Debug",
+    "Win32_System_Diagnostics_ToolHelp",
+    "Win32_System_Kernel",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Memory",
+    "Win32_System_ProcessStatus",
+    "Win32_System_Registry",
+    "Win32_System_RemoteDesktop",
+    "Win32_System_Threading",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+] }
+# Avisos del escritorio (notificaciones de Windows, WinRT). La misma versión que ya trae wgpu (DX12):
+# solo se compilan estos módulos.
+windows = { version = "0.58", features = [
+    "Data_Xml_Dom",
+    "Foundation",
+    "Foundation_Collections",
+    "UI_Notifications",
+] }
+# Comprimir las capturas que llegan como mapa de bits al pegarlas (PNG). Rust puro.
+miniz_oxide = "0.8"
+
+# Icono y datos de versión de garbo.exe (recurso de Windows, ver build.rs).
+[target.'cfg(windows)'.build-dependencies]
+embed-resource = "3"
 
 # Empaquetado RPM con `cargo generate-rpm` (ver .github/workflows/release.yml)
 [package.metadata.generate-rpm]

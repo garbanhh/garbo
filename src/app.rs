@@ -15,10 +15,16 @@ use alacritty_terminal::grid::{Dimensions, Scroll};
 use alacritty_terminal::term::TermMode;
 use copypasta::ClipboardProvider;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use winit::event_loop::EventLoopProxy;
 use winit::keyboard::ModifiersState;
 use winit::window::Window;
+
+/// Tras arrancar, cuándo devolver al sistema la memoria de la inicialización (ver
+/// `platform::trim_memory`): ya hay ventana, fuentes, shaders y el primer prompt.
+const TRIM_AFTER_START: Duration = Duration::from_secs(4);
+/// Tras cerrar una pestaña o un panel.
+const TRIM_AFTER_CLOSE: Duration = Duration::from_secs(2);
 
 pub fn pt_to_px(pt: f32, scale: f32) -> f32 {
     pt * scale * 4.0 / 3.0
@@ -104,6 +110,9 @@ pub struct State {
     pub focused: bool,
     pub cursor_on: bool,
     pub next_blink: Instant,
+    /// Cuándo devolver al sistema la memoria que ya no se usa (`platform::trim_memory`): una vez
+    /// tras arrancar y tras cerrar pestañas o paneles. Solo en Windows.
+    pub trim_at: Option<Instant>,
     pub scroll_accum: f32,
     pub last_ws: WindowSize,
     out: Vec<Instance>,
@@ -193,6 +202,7 @@ impl App {
             focused: true,
             cursor_on: true,
             next_blink: now,
+            trim_at: cfg!(windows).then(|| now + TRIM_AFTER_START),
             scroll_accum: 0.0,
             last_ws: WindowSize {
                 num_lines: 0,
@@ -225,9 +235,7 @@ impl App {
                     });
                     st.window.request_redraw();
                 } else {
-                    let _ = std::process::Command::new("xdg-open")
-                        .arg(&rel.page)
-                        .spawn();
+                    crate::platform::open(&rel.page);
                 }
             }
             Some(U::Installed(_)) => {
@@ -240,7 +248,7 @@ impl App {
             }
             Some(U::Failed(_)) => {
                 let url = format!("https://github.com/{}/releases/latest", update::REPO);
-                let _ = std::process::Command::new("xdg-open").arg(url).spawn();
+                crate::platform::open(&url);
                 st.update = None;
                 st.last_ws.num_cols = 0;
                 self.relayout();
@@ -500,11 +508,23 @@ impl App {
         if st.tabs.is_empty() || st.groups.is_empty() {
             return true;
         }
+        // Lo que ocupaba (historial, PTY) ya está libre: se devuelve al sistema poco después.
+        self.schedule_trim(TRIM_AFTER_CLOSE);
         self.sync_active();
         self.st().last_ws.num_cols = 0;
         self.relayout();
         self.update_title();
         false
+    }
+
+    /// Devuelve al sistema la memoria que no se usa dentro de `delay` (solo en Windows, ver
+    /// `platform::trim_memory`). Si ya había un aviso antes, se mantiene.
+    pub fn schedule_trim(&mut self, delay: std::time::Duration) {
+        if cfg!(windows) {
+            let at = Instant::now() + delay;
+            let st = self.st();
+            st.trim_at = Some(st.trim_at.map_or(at, |t| t.min(at)));
+        }
     }
 
     /// Cierra una pestaña de la barra con todos sus paneles.
@@ -597,18 +617,23 @@ impl App {
         use crate::links::{Open, Target};
         let cwd = self.active_tab().and_then(Tab::cwd);
         let open = match target {
-            Target::Url(url) => Open::Spawn(vec!["xdg-open".into(), url]),
+            Target::Url(url) => Open::System(url),
             Target::File { path, line, col } => {
                 let editor = std::env::var("VISUAL")
                     .ok()
                     .filter(|e| !e.is_empty())
-                    .or_else(|| std::env::var("EDITOR").ok());
+                    .or_else(|| std::env::var("EDITOR").ok().filter(|e| !e.is_empty()))
+                    .or_else(crate::platform::default_editor);
                 crate::links::open_file(&path, line, col, editor.as_deref())
             }
         };
         match open {
+            Open::System(target) => crate::platform::open(&target),
             Open::Spawn(cmd) => {
-                let mut c = std::process::Command::new(&cmd[0]);
+                // En Windows, `code` es `code.cmd`: se busca con las extensiones de PATHEXT.
+                let program = crate::platform::find_program(&cmd[0])
+                    .map_or_else(|| cmd[0].clone().into(), std::ffi::OsString::from);
+                let mut c = std::process::Command::new(program);
                 c.args(&cmd[1..])
                     .stdin(std::process::Stdio::null())
                     .stdout(std::process::Stdio::null())
@@ -1067,9 +1092,7 @@ impl App {
                     .iter()
                     .any(|p| p.port == port && p.web)
                 {
-                    let _ = std::process::Command::new("xdg-open")
-                        .arg(format!("http://localhost:{port}"))
-                        .spawn();
+                    crate::platform::open(&format!("http://localhost:{port}"));
                 }
             }
             Hit::MorePorts => {
@@ -1170,7 +1193,17 @@ impl App {
                     if !path.exists() {
                         let _ = self.cfg.save();
                     }
-                    let _ = std::process::Command::new("xdg-open").arg(&path).spawn();
+                    // En Windows un `.toml` no suele tener programa asociado: va al editor, como
+                    // un Ctrl+clic en un archivo.
+                    if cfg!(windows) {
+                        self.open_link(crate::links::Target::File {
+                            path,
+                            line: None,
+                            col: None,
+                        });
+                    } else {
+                        crate::platform::open(&path.to_string_lossy());
+                    }
                 }
                 return false;
             }
@@ -1367,7 +1400,7 @@ impl App {
                 let branch = bs
                     .idle_current()
                     .filter(|id| bs.styled(*id))
-                    .and_then(|_| tab.cwd())
+                    .and_then(|_| bs.shell_cwd())
                     .and_then(|d| crate::complete::git_branch(&d));
                 view::draw_prompts(&mut p, &term, theme, &v, &bs, branch.as_deref(), st.scale);
                 let search = st.search.as_mut().filter(|s| s.tab == tab.id);
@@ -1388,7 +1421,7 @@ impl App {
                 // Menú de completado: se refina con lo que se escribe y se cierra si deja de aplicar.
                 if is_focus && (st.menu.is_some() || st.menu_auto.is_some()) {
                     let input = crate::terminal::input_for(&term, start);
-                    let cwd = input.as_ref().and_then(|_| tab.cwd());
+                    let cwd = input.as_ref().and_then(|_| bs.shell_cwd());
                     if let Some(menu) = st.menu.as_mut() {
                         let keep = menu.tab == tab.id
                             && input
@@ -1417,7 +1450,7 @@ impl App {
                 }
                 // Sugerencia en gris tras el cursor (no con el menú abierto).
                 if cfg.terminal.autosuggest && v.focused && st.menu.is_none() {
-                    let cwd = start.and_then(|_| tab.cwd());
+                    let cwd = start.and_then(|_| bs.shell_cwd());
                     if let Some(rest) =
                         crate::terminal::suggestion_for(&term, start, cwd.as_deref())
                     {

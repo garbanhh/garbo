@@ -1,5 +1,9 @@
 //! Garbo — terminal GPU ligera con pestañas.
 
+// Sin consola propia en Windows (la ventana es la terminal); con `cargo test` sí.
+#![cfg_attr(all(windows, not(test)), windows_subsystem = "windows")]
+
+#[cfg(target_os = "linux")]
 mod activation;
 mod app;
 mod atlas;
@@ -18,6 +22,7 @@ mod notify;
 mod palette;
 mod panel;
 mod panes;
+mod platform;
 mod ports;
 mod pty_loop;
 mod renderer;
@@ -30,9 +35,31 @@ mod subagents;
 mod suggest;
 mod temp_dir;
 mod terminal;
+#[cfg(windows)]
+mod toast;
 mod ui;
 mod update;
 mod view;
+
+/// Traer la ventana al frente al pulsar un aviso. Solo Wayland necesita un permiso de activación
+/// (`activation.rs`); en el resto basta con pedírselo a la ventana.
+#[cfg(not(target_os = "linux"))]
+mod activation {
+    /// Minimizada, `focus_window` no hace nada: primero se restaura.
+    pub fn raise(window: &winit::window::Window, _token: Option<&str>) {
+        if window.is_minimized() == Some(true) {
+            window.set_minimized(false);
+        }
+        window.focus_window();
+    }
+
+    pub fn release() {}
+
+    #[allow(dead_code)]
+    pub fn valid(token: &str) -> bool {
+        !token.is_empty() && token.len() <= 1024 && token.bytes().all(|b| b.is_ascii_graphic())
+    }
+}
 
 use winit::event_loop::EventLoop;
 
@@ -40,6 +67,11 @@ use winit::event_loop::EventLoop;
 pub const APP_ID: &str = "io.github.garbanhh.Garbo";
 
 fn main() {
+    #[cfg(windows)]
+    {
+        platform::harden_dll_search();
+        platform::set_app_user_model_id(APP_ID);
+    }
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn,garbo=info"))
         .init();
 

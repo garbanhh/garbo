@@ -1,17 +1,22 @@
-//! Shells con integración (bash, zsh y fish): cuál es, cómo se le inyecta el script que emite las
-//! marcas de los bloques (`shell/`) y qué cambia entre ellos para las sugerencias y los atajos.
+//! Shells con integración (bash, zsh, fish y PowerShell): cuál es, cómo se le inyecta el script que
+//! emite las marcas de los bloques (`shell/`) y qué cambia entre ellos para las sugerencias y los
+//! atajos.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU8, Ordering};
 
+// `PowerShell` acaba como el enum, pero es su nombre.
+#[allow(clippy::enum_variant_names)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Shell {
     #[default]
     Bash,
     Zsh,
     Fish,
-    /// Sin integración (sh, nu, xonsh…).
+    /// Sin integración (sh, nu, xonsh, cmd…).
     Other,
+    /// Windows PowerShell 5.1 (`powershell`) y PowerShell 7 (`pwsh`).
+    PowerShell,
 }
 
 /// Lo que hay que añadir al arranque del shell para cargar la integración.
@@ -22,12 +27,13 @@ pub struct Injection {
 }
 
 impl Shell {
-    /// Por el nombre del programa (`/usr/bin/zsh` -> zsh).
+    /// Por el nombre del programa (`/usr/bin/zsh` -> zsh; en Windows, `C:\…\pwsh.exe` -> PowerShell).
     pub fn from_program(program: &str) -> Shell {
-        match program.rsplit('/').next().unwrap_or(program) {
+        match crate::platform::base_name(program).to_lowercase().as_str() {
             "bash" => Shell::Bash,
             "zsh" => Shell::Zsh,
             "fish" => Shell::Fish,
+            "pwsh" | "powershell" => Shell::PowerShell,
             _ => Shell::Other,
         }
     }
@@ -38,6 +44,7 @@ impl Shell {
             Shell::Zsh => "zsh",
             Shell::Fish => "fish",
             Shell::Other => "shell",
+            Shell::PowerShell => "powershell",
         }
     }
 
@@ -74,6 +81,20 @@ impl Shell {
                     env: Vec::new(),
                 })
             }
+            Shell::PowerShell => {
+                let script = write_script("garbo.ps1", include_str!("../shell/garbo.ps1"))?;
+                // Como bloque de código y no con `. archivo.ps1`: la directiva de ejecución de serie
+                // de Windows PowerShell (`Restricted`) no deja cargar archivos de script, y así no
+                // hace falta cambiarla (ni se cambia para los del usuario).
+                let load = format!(
+                    ". ([scriptblock]::Create([IO.File]::ReadAllText('{}')))",
+                    path_str(&script).replace('\'', "''")
+                );
+                Some(Injection {
+                    args: vec!["-NoLogo".into(), "-NoExit".into(), "-Command".into(), load],
+                    env: Vec::new(),
+                })
+            }
             Shell::Other => None,
         }
     }
@@ -92,6 +113,7 @@ pub fn current() -> Shell {
         1 => Shell::Zsh,
         2 => Shell::Fish,
         3 => Shell::Other,
+        4 => Shell::PowerShell,
         _ => Shell::Bash,
     }
 }
@@ -226,9 +248,13 @@ mod tests {
             working_directory: Some(home.clone()),
             drain_on_exit: false,
             env,
+            #[cfg(windows)]
+            escape_args: true,
         };
         let pty = tty::new(&opts, ws, 0).unwrap();
-        let blocks = Arc::new(Mutex::new(BlockState::new(pty.child().id())));
+        let blocks = Arc::new(Mutex::new(BlockState::new(crate::platform::child_pid(
+            &pty,
+        ))));
         let lp =
             crate::pty_loop::PtyLoop::new(term.clone(), responder.clone(), pty, blocks.clone())
                 .unwrap();
@@ -365,6 +391,200 @@ mod tests {
     #[test]
     fn bash_real() {
         prueba_real(Shell::Bash, ".bashrc", "PS1='\\u \\w \\$ '\n", false);
+    }
+
+    /// PowerShell de verdad por ConPTY, con la integración y sin el perfil del usuario: bloques con
+    /// su código (programa que falla y error de PowerShell), la carpeta tras `cd` (OSC 9;9) y el
+    /// comando guardado. Con y sin el prompt de Garbo.
+    #[cfg(windows)]
+    fn prueba_powershell(program: &str, garbo_prompt: bool) {
+        use crate::blocks::BlockState;
+        use alacritty_terminal::event::WindowSize;
+        use alacritty_terminal::event_loop::Msg;
+        use alacritty_terminal::sync::FairMutex;
+        use alacritty_terminal::term::{test::TermSize, Term};
+        use alacritty_terminal::tty;
+        use std::sync::{Arc, Mutex};
+        use std::time::{Duration, Instant};
+
+        let Some(exe) = crate::platform::find_program(program) else {
+            eprintln!("{program} no está instalado: se omite");
+            return;
+        };
+        let mut inj = Shell::PowerShell.injection(None).unwrap();
+        inj.args.insert(0, "-NoProfile".into());
+        let env = [
+            ("TERM", "xterm-256color"),
+            ("GARBO_AUTOSUGGEST", "1"),
+            ("GARBO_PROMPT", if garbo_prompt { "1" } else { "" }),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+        let responder = Responder(Default::default());
+        let term = Arc::new(FairMutex::new(Term::new(
+            Default::default(),
+            &TermSize::new(100, 30),
+            responder.clone(),
+        )));
+        let ws = WindowSize {
+            num_lines: 30,
+            num_cols: 100,
+            cell_width: 10,
+            cell_height: 20,
+        };
+        let home = dirs::home_dir().unwrap();
+        let opts = tty::Options {
+            shell: Some(tty::Shell::new(path_str(&exe), inj.args)),
+            working_directory: Some(home.clone()),
+            drain_on_exit: false,
+            env,
+            escape_args: true,
+        };
+        let pty = tty::new(&opts, ws, 0).unwrap();
+        let blocks = Arc::new(Mutex::new(BlockState::new(crate::platform::child_pid(
+            &pty,
+        ))));
+        let lp =
+            crate::pty_loop::PtyLoop::new(term.clone(), responder.clone(), pty, blocks.clone())
+                .unwrap();
+        let tx = lp.sender();
+        *responder.0.lock().unwrap() = Some(tx.clone());
+        lp.spawn();
+
+        let wait = |what: &str, ok: &dyn Fn() -> bool| {
+            let end = Instant::now() + Duration::from_secs(20);
+            while !ok() {
+                if Instant::now() > end {
+                    let t = term.lock();
+                    let screen: Vec<String> = (0..30)
+                        .map(|l| {
+                            let row = &t.grid()[alacritty_terminal::index::Line(l)];
+                            row[..]
+                                .iter()
+                                .map(|c| c.c)
+                                .collect::<String>()
+                                .trim_end()
+                                .to_string()
+                        })
+                        .collect();
+                    panic!(
+                        "{program}: no llegó «{what}». Bloques: {:?}\n{}",
+                        blocks.lock().unwrap().summary(),
+                        screen.join("\n")
+                    );
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+        };
+        let typed = || {
+            let t = term.lock();
+            let start = blocks.lock().unwrap().input_start;
+            crate::terminal::input_for(&t, start)
+        };
+        let send = |s: &str| tx.send(Msg::Input(s.as_bytes().to_vec().into()));
+        let codes = || -> Vec<Option<i32>> {
+            blocks
+                .lock()
+                .unwrap()
+                .summary()
+                .iter()
+                .map(|b| b.2)
+                .collect()
+        };
+
+        wait("el prompt", &|| typed().as_deref() == Some(""));
+        assert!(
+            blocks.lock().unwrap().win32_input,
+            "{program}: ConPTY pide win32-input-mode"
+        );
+        if garbo_prompt {
+            let start = blocks.lock().unwrap().input_start;
+            assert_eq!(start.map(|s| s.1), Some(0), "{program}: desde la columna 0");
+        }
+        // Shift+Intro como evento de Windows (lo que manda `input::win32_key`): nueva línea sin
+        // ejecutar; Intro ejecuta las dos líneas en un solo bloque.
+        let shift_enter = crate::input::win32_sequence(0x0D, 0x1C, "\r", 0x10);
+        let cursor_line = || {
+            let t = term.lock();
+            let row = &t.grid()[t.grid().cursor.point.line];
+            row[..]
+                .iter()
+                .map(|c| c.c)
+                .collect::<String>()
+                .trim_end()
+                .to_string()
+        };
+        send("echo uno");
+        wait("la primera línea", &|| {
+            typed().as_deref() == Some("echo uno")
+        });
+        tx.send(Msg::Input(shift_enter.into()));
+        send("echo dos");
+        // Con el prompt de Garbo, la segunda línea desde la primera columna; si no, tras ">> ".
+        let second = if garbo_prompt {
+            "echo dos"
+        } else {
+            ">> echo dos"
+        };
+        wait("la segunda línea", &|| cursor_line() == second);
+        assert!(
+            codes().iter().all(|c| c.is_none()),
+            "{program}: Shift+Intro ejecutó el comando: {:?}",
+            blocks.lock().unwrap().summary()
+        );
+        send("\r");
+        wait("las dos líneas", &|| codes().contains(&Some(0)));
+        wait("el prompt tras las dos líneas", &|| {
+            typed().as_deref() == Some("")
+        });
+        assert_eq!(blocks.lock().unwrap().shell_cwd(), Some(home.clone()));
+        send("echo garbo-");
+        wait("lo escrito", &|| typed().as_deref() == Some("echo garbo-"));
+        let tag = format!("ps{}", garbo_prompt as u8);
+        send(&format!("{tag}\r"));
+        wait("el código 0", &|| {
+            codes().iter().filter(|c| **c == Some(0)).count() >= 2
+        });
+        wait("el segundo prompt", &|| typed().as_deref() == Some(""));
+        send("cmd /c exit 3\r");
+        wait("el código de un programa", &|| codes().contains(&Some(3)));
+        wait("el tercer prompt", &|| typed().as_deref() == Some(""));
+        send("Get-Item C:\\garbo-no-existe\r");
+        wait("el código de un error de PowerShell", &|| {
+            codes().contains(&Some(1))
+        });
+        wait("el cuarto prompt", &|| typed().as_deref() == Some(""));
+        send("cd C:\\Windows\r");
+        wait("la carpeta nueva", &|| {
+            blocks.lock().unwrap().shell_cwd() == Some(std::path::PathBuf::from(r"C:\Windows"))
+        });
+        wait("el quinto prompt", &|| typed().as_deref() == Some(""));
+        let summary = blocks.lock().unwrap().summary();
+        tx.send(Msg::Shutdown);
+
+        let ran: Vec<_> = summary.iter().filter(|b| b.1).map(|b| b.2).collect();
+        assert_eq!(
+            ran,
+            [Some(0), Some(0), Some(3), Some(1), Some(0)],
+            "{program}: {summary:?}"
+        );
+        assert!(summary.iter().all(|b| b.0 == garbo_prompt), "{summary:?}");
+        let hist = std::fs::read_to_string(crate::suggest::history_path_for_tests()).unwrap();
+        let home_s = home.to_string_lossy();
+        assert!(
+            hist.lines()
+                .any(|l| l.contains(&*home_s) && l.ends_with(&format!("\techo garbo-{tag}"))),
+            "{program}: {hist}"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn powershell_real() {
+        prueba_powershell("powershell.exe", false);
+        prueba_powershell("powershell.exe", true);
+        prueba_powershell("pwsh.exe", false);
     }
 
     #[test]

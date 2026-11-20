@@ -101,6 +101,22 @@ impl ApplicationHandler<UserEvent> for App {
             startup_notify::reset_activation_token_env();
             attrs
         };
+        // Windows: el icono del recurso de garbo.exe (ver build.rs) en la ventana y en la barra
+        // de tareas.
+        #[cfg(windows)]
+        let attrs = {
+            use winit::platform::windows::{IconExtWindows, WindowAttributesExtWindows};
+            use winit::window::Icon;
+            match Icon::from_resource(1, None) {
+                Ok(icon) => attrs
+                    .with_window_icon(Some(icon.clone()))
+                    .with_taskbar_icon(Some(icon)),
+                Err(e) => {
+                    log::warn!("Sin icono de la ventana: {e}");
+                    attrs
+                }
+            }
+        };
         let window = match el.create_window(attrs) {
             Ok(w) => Arc::new(w),
             Err(e) => {
@@ -148,6 +164,13 @@ impl ApplicationHandler<UserEvent> for App {
 
     fn about_to_wait(&mut self, el: &ActiveEventLoop) {
         self.refresh_sessions();
+        // Devolver al sistema la memoria que ya no se usa, si toca (una sola vez por aviso).
+        if let Some(st) = self.st.as_mut() {
+            if st.trim_at.is_some_and(|t| Instant::now() >= t) {
+                st.trim_at = None;
+                crate::platform::trim_memory();
+            }
+        }
         let blink = self.cfg.terminal.cursor_blink;
         let tick = self.next_tick();
         let blink_at = self
@@ -155,11 +178,11 @@ impl ApplicationHandler<UserEvent> for App {
             .as_ref()
             .filter(|st| blink && st.focused)
             .map(|st| st.next_blink);
-        // Sin animaciones ni parpadeo pendientes, la app duerme hasta el siguiente evento.
-        match (blink_at, tick) {
-            (Some(a), Some(b)) => el.set_control_flow(ControlFlow::WaitUntil(a.min(b))),
-            (Some(t), None) | (None, Some(t)) => el.set_control_flow(ControlFlow::WaitUntil(t)),
-            (None, None) => el.set_control_flow(ControlFlow::Wait),
+        let trim_at = self.st.as_ref().and_then(|st| st.trim_at);
+        // Sin animaciones, parpadeo ni avisos pendientes, la app duerme hasta el siguiente evento.
+        match [blink_at, tick, trim_at].into_iter().flatten().min() {
+            Some(t) => el.set_control_flow(ControlFlow::WaitUntil(t)),
+            None => el.set_control_flow(ControlFlow::Wait),
         }
     }
 
@@ -218,8 +241,11 @@ impl ApplicationHandler<UserEvent> for App {
             }
             UserEvent::PasteImage(id, result) => {
                 match result {
-                    Ok(path) => {
-                        let text = crate::clipboard::shell_path(&path) + " ";
+                    Ok(paths) => {
+                        let text: String = paths
+                            .iter()
+                            .map(|p| crate::clipboard::shell_path(p) + " ")
+                            .collect();
                         self.paste_text_to(id, &text);
                     }
                     Err(e) => log::info!("Pegar: {e}"),
@@ -355,6 +381,8 @@ impl ApplicationHandler<UserEvent> for App {
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
                 self.set_scale(scale_factor as f32)
             }
+            // Minimizada no se dibuja nada: lo que no se usa se devuelve al sistema (Windows).
+            WindowEvent::Occluded(true) => self.schedule_trim(std::time::Duration::ZERO),
             WindowEvent::Focused(f) => {
                 let st = self.st();
                 st.focused = f;
@@ -401,8 +429,8 @@ impl ApplicationHandler<UserEvent> for App {
             }
             WindowEvent::MouseWheel { delta, .. } => self.on_wheel(delta),
             WindowEvent::DroppedFile(path) => {
-                let s = path.to_string_lossy();
-                let quoted = format!("'{}' ", s.replace('\'', "'\\''"));
+                // Entre comillas como las entiende el shell (en Windows, PowerShell).
+                let quoted = crate::clipboard::shell_path(&path) + " ";
                 self.paste_text(&quoted);
             }
             _ => {}
@@ -581,7 +609,16 @@ impl App {
             }
         }
         let mode = *tab.term.lock().mode();
-        if let Some(bytes) = input::key_to_bytes(&ev, mods, mode) {
+        // En Windows, si ConPTY lo pidió, la tecla exacta como evento de Windows.
+        #[cfg(windows)]
+        let encoded = if tab.blocks.lock().unwrap().win32_input {
+            input::win32_key(&ev, mods)
+        } else {
+            input::key_to_bytes(&ev, mods, mode)
+        };
+        #[cfg(not(windows))]
+        let encoded = input::key_to_bytes(&ev, mods, mode);
+        if let Some(bytes) = encoded {
             {
                 let mut term = tab.term.lock();
                 term.selection = None;

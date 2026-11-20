@@ -113,13 +113,47 @@ pub struct Item {
     score: i32,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct Completions {
     /// Dónde empieza la palabra (en caracteres de la entrada).
     pub start: usize,
     /// La palabra tal cual está escrita (con comillas y escapes).
     pub word: String,
     pub items: Vec<Item>,
+    /// Carácter de escape del shell (`\`; en PowerShell, `` ` ``).
+    pub esc: char,
+}
+
+thread_local! {
+    /// El completado en curso es para PowerShell: `` ` `` escapa y `\` separa carpetas.
+    static POWERSHELL: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+fn powershell() -> bool {
+    POWERSHELL.with(std::cell::Cell::get)
+}
+
+/// Carácter de escape del shell para el que se completa.
+fn esc() -> char {
+    if powershell() {
+        '`'
+    } else {
+        '\\'
+    }
+}
+
+/// ¿Separa carpetas? En PowerShell también `\`.
+fn is_sep(c: char) -> bool {
+    c == '/' || (powershell() && c == '\\')
+}
+
+/// Separador que se añade a las carpetas completadas (en PowerShell en Windows, `\`).
+fn dir_sep() -> char {
+    if powershell() && cfg!(windows) {
+        '\\'
+    } else {
+        '/'
+    }
 }
 
 impl Completions {
@@ -155,8 +189,8 @@ impl Completions {
             n = n.min(common_prefix(first, &it.insert));
         }
         let mut lcp = &first[..n];
-        // No dejar un escape a medias ("Mi\").
-        if lcp.chars().rev().take_while(|&c| c == '\\').count() % 2 == 1 {
+        // No dejar un escape a medias ("Mi\"; en PowerShell, "Mi`").
+        if lcp.chars().rev().take_while(|&c| c == self.esc).count() % 2 == 1 {
             lcp = &lcp[..lcp.len() - 1];
         }
         let rest = lcp.strip_prefix(self.word.as_str())?;
@@ -263,6 +297,8 @@ fn lex(input: &str) -> Lexed {
         redirect: false,
     };
     let (mut sq, mut dq, mut esc) = (false, false, false);
+    // En PowerShell escapa `` ` `` y `\` es un carácter más (separa carpetas).
+    let escape = self::esc();
     let mut i = 0;
     while i < chars.len() {
         let c = chars[i];
@@ -281,7 +317,7 @@ fn lex(input: &str) -> Lexed {
             lx.out.raw.push(c);
             match c {
                 '"' => dq = false,
-                '\\' => esc = true,
+                c if c == escape => esc = true,
                 '$' | '`' => {
                     lx.out.dynamic = true;
                     lx.out.value.push(c);
@@ -291,6 +327,11 @@ fn lex(input: &str) -> Lexed {
         } else {
             match c {
                 ' ' | '\t' => lx.finish(),
+                '`' if escape == '`' => {
+                    lx.begin(i);
+                    lx.out.raw.push(c);
+                    esc = true;
+                }
                 ';' | '|' | '&' | '(' | ')' | '`' => lx.boundary(),
                 '<' | '>' => {
                     lx.finish();
@@ -305,7 +346,7 @@ fn lex(input: &str) -> Lexed {
                     lx.begin(i);
                     lx.out.raw.push(c);
                     match c {
-                        '\\' => esc = true,
+                        c if c == escape => esc = true,
                         '\'' => sq = true,
                         '"' => dq = true,
                         '$' => {
@@ -385,6 +426,12 @@ fn split_command(words: &[String]) -> Option<(&str, &[String])> {
 /// Candidatos para lo escrito hasta el cursor. `None` si no se sabe completar esa palabra (tiene
 /// variables, o está vacía en la posición de orden).
 pub fn complete(input: &str, cwd: Option<&Path>) -> Option<Completions> {
+    POWERSHELL.with(|p| p.set(crate::shell::current() == crate::shell::Shell::PowerShell));
+    complete_here(input, cwd)
+}
+
+/// `complete` con el shell ya elegido (`POWERSHELL`).
+fn complete_here(input: &str, cwd: Option<&Path>) -> Option<Completions> {
     let lx = lex(input);
     if lx.dynamic {
         return None;
@@ -395,7 +442,7 @@ pub fn complete(input: &str, cwd: Option<&Path>) -> Option<Completions> {
         paths(q, cwd, Filter::All, &mut cands);
     } else {
         match split_command(&lx.words) {
-            None if q.contains('/') || q.starts_with('.') || q.starts_with('~') => {
+            None if q.contains(is_sep) || q.starts_with('.') || q.starts_with('~') => {
                 paths(q, cwd, Filter::Exec, &mut cands)
             }
             None if q.is_empty() => return None,
@@ -408,14 +455,22 @@ pub fn complete(input: &str, cwd: Option<&Path>) -> Option<Completions> {
         start: lx.start,
         word: lx.raw,
         items: rank(q, cands),
+        esc: esc(),
     })
 }
 
 fn arguments(cmd: &str, args: &[String], q: &str, cwd: Option<&Path>, out: &mut Vec<Cand>) {
-    let name = cmd.rsplit('/').next().unwrap_or(cmd);
+    let lower = crate::platform::base_name(cmd).to_lowercase();
+    let name = if powershell() {
+        lower.as_str()
+    } else {
+        cmd.rsplit('/').next().unwrap_or(cmd)
+    };
     let positional = args.iter().filter(|a| !a.starts_with('-')).count();
     match name {
-        "cd" | "pushd" | "rmdir" => paths(q, cwd, Filter::Dirs, out),
+        "cd" | "pushd" | "rmdir" | "sl" | "set-location" | "push-location" | "chdir" => {
+            paths(q, cwd, Filter::Dirs, out)
+        }
         "git" => git(args, q, cwd, out),
         "cargo" if positional == 0 => cargo(out),
         "cargo" => {}
@@ -434,12 +489,18 @@ fn arguments(cmd: &str, args: &[String], q: &str, cwd: Option<&Path>, out: &mut 
     }
 }
 
-/// Escapa un nombre para bash (`Mi carpeta` -> `Mi\ carpeta`).
+/// Escapa un nombre para bash (`Mi carpeta` -> `Mi\ carpeta`) o, en PowerShell, con su acento
+/// grave (`` Mi` carpeta ``).
 fn escape(s: &str) -> String {
+    let (e, special) = if powershell() {
+        ('`', " \t'\"$`&;|(){}<>@#,")
+    } else {
+        ('\\', " \t'\"\\$`&;|()<>*?[]!#{}")
+    };
     let mut o = String::with_capacity(s.len() + 4);
     for (i, c) in s.chars().enumerate() {
-        if " \t'\"\\$`&;|()<>*?[]!#{}".contains(c) || (i == 0 && c == '~') {
-            o.push('\\');
+        if special.contains(c) || (i == 0 && c == '~') {
+            o.push(e);
         }
         o.push(c);
     }
@@ -447,8 +508,8 @@ fn escape(s: &str) -> String {
 }
 
 fn expand(p: &str, cwd: Option<&Path>) -> Option<PathBuf> {
-    if p == "~" || p.starts_with("~/") {
-        return Some(dirs::home_dir()?.join(p[1..].trim_start_matches('/')));
+    if p == "~" || p.starts_with('~') && p[1..].starts_with(is_sep) {
+        return Some(dirs::home_dir()?.join(p[1..].trim_start_matches(is_sep)));
     }
     let path = Path::new(p);
     if path.is_absolute() {
@@ -467,9 +528,9 @@ enum Filter {
 }
 
 fn paths(q: &str, cwd: Option<&Path>, filter: Filter, out: &mut Vec<Cand>) {
-    use std::os::unix::fs::PermissionsExt;
-    if q.starts_with('~') && !q.contains('/') {
-        let label = "~/".to_string();
+    let sep = dir_sep();
+    if q.starts_with('~') && !q.contains(is_sep) {
+        let label = format!("~{sep}");
         out.push(Cand {
             key: "~".into(),
             insert: label.clone(),
@@ -480,7 +541,7 @@ fn paths(q: &str, cwd: Option<&Path>, filter: Filter, out: &mut Vec<Cand>) {
         });
         return;
     }
-    let cut = q.rfind('/').map_or(0, |i| i + 1);
+    let cut = q.rfind(is_sep).map_or(0, |i| i + 1);
     let (dir_part, base) = q.split_at(cut);
     let Some(dir) = (if dir_part.is_empty() {
         cwd.map(Path::to_path_buf)
@@ -492,8 +553,9 @@ fn paths(q: &str, cwd: Option<&Path>, filter: Filter, out: &mut Vec<Cand>) {
     let Ok(rd) = std::fs::read_dir(&dir) else {
         return;
     };
-    let prefix = match dir_part.strip_prefix("~/") {
-        Some(rest) => format!("~/{}", escape(rest)),
+    // La carpeta se reescribe tal cual se tecleó (sus separadores), escapada.
+    let prefix = match dir_part.strip_prefix('~').filter(|r| r.starts_with(is_sep)) {
+        Some(rest) => format!("~{}{}", &rest[..1], escape(&rest[1..])),
         None => escape(dir_part),
     };
     let hidden = base.starts_with('.');
@@ -509,7 +571,7 @@ fn paths(q: &str, cwd: Option<&Path>, filter: Filter, out: &mut Vec<Cand>) {
             continue;
         };
         let is_dir = meta.is_dir();
-        let exec = !is_dir && meta.permissions().mode() & 0o111 != 0;
+        let exec = !is_dir && crate::platform::is_executable(&meta, &e.path());
         match filter {
             Filter::Dirs if !is_dir => continue,
             Filter::Exec if !is_dir && !exec => continue,
@@ -523,9 +585,9 @@ fn paths(q: &str, cwd: Option<&Path>, filter: Filter, out: &mut Vec<Cand>) {
             Kind::File
         };
         let (label, end) = if is_dir {
-            (format!("{name}/"), "/")
+            (format!("{name}{sep}"), sep.to_string())
         } else {
-            (name.clone(), " ")
+            (name.clone(), " ".to_string())
         };
         out.push(Cand {
             insert: format!("{prefix}{}{end}", escape(&name)),
@@ -1285,6 +1347,32 @@ impl Menu {
 mod tests {
     use super::*;
 
+    /// PowerShell: `\` separa carpetas, `` ` `` escapa, las carpetas se completan con su
+    /// separador y los espacios se escapan con `` ` ``.
+    #[test]
+    fn powershell() {
+        POWERSHELL.with(|p| p.set(true));
+        let l = lex(r"cd src\ma");
+        assert_eq!((l.raw.as_str(), l.value.as_str()), (r"src\ma", r"src\ma"));
+        let l = lex("cd Mi` car");
+        assert_eq!((l.raw.as_str(), l.value.as_str()), ("Mi` car", "Mi car"));
+        let l = lex("echo \"a`\"b");
+        assert_eq!(l.value, "a\"b");
+
+        let dir = std::env::temp_dir().join(format!("garbo-ps-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("Mi carpeta").join("sub")).unwrap();
+        let sep = dir_sep();
+        let c = complete_here("cd Mi", Some(&dir)).unwrap();
+        assert_eq!(c.esc, '`');
+        assert_eq!(c.items[0].insert, format!("Mi` carpeta{sep}"));
+        let c = complete_here(&format!("cd Mi` carpeta{sep}s"), Some(&dir)).unwrap();
+        assert_eq!(c.items[0].insert, format!("Mi` carpeta{sep}sub{sep}"));
+        // `Set-Location` también completa solo carpetas.
+        assert!(complete_here("Set-Location Mi", Some(&dir)).is_some_and(|c| !c.items.is_empty()));
+        POWERSHELL.with(|p| p.set(false));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     #[test]
     fn lectura_de_la_linea() {
         let l = lex("git checkout ma");
@@ -1374,8 +1462,12 @@ mod tests {
             std::fs::create_dir_all(dir.join(d)).unwrap();
         }
         std::fs::write(dir.join("notas.txt"), "").unwrap();
-        std::fs::write(dir.join("nota\nrm -rf x"), "").unwrap();
-        std::fs::write(dir.join("nota\u{1b}[A"), "").unwrap();
+        // Nombres con caracteres de control (Windows no los admite).
+        #[cfg(unix)]
+        {
+            std::fs::write(dir.join("nota\nrm -rf x"), "").unwrap();
+            std::fs::write(dir.join("nota\u{1b}[A"), "").unwrap();
+        }
         std::fs::create_dir_all(dir.join("Documentos/Proyectos")).unwrap();
         let cwd = Some(dir.as_path());
         let labels = |c: &Completions| c.items.iter().map(|i| i.label.clone()).collect::<Vec<_>>();
@@ -1494,6 +1586,7 @@ mod tests {
             start: 3,
             word: "pro".into(),
             items: vec![item("proyecto-a"), item("proyecto-b")],
+            esc: '\\',
         };
         assert_eq!(c.common_extension().unwrap(), b"yecto-");
         let mut m = Menu::new(1, "cd pro".into(), c);

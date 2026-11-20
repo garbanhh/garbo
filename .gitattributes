@@ -1,0 +1,4 @@
+# Los scripts de integración se incrustan en el binario (`include_str!`): siempre con saltos de
+# línea LF, también al clonar en Windows con core.autocrlf (bash, zsh y fish fallan con \r).
+shell/** text eol=lf
+*.sh text eol=lf

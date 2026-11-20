@@ -13,16 +13,27 @@
 //! el aviso ya no lleva a ninguna pestaña.
 
 use crate::config::{NotifyConfig, NotifyWhen};
+#[cfg(not(windows))]
 use crate::terminal::UserEvent;
+#[cfg(not(windows))]
 use std::collections::HashSet;
+#[cfg(not(windows))]
 use std::io::{BufRead, BufReader};
+#[cfg(not(windows))]
 use std::process::{Command, Stdio};
+#[cfg(not(windows))]
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
+#[cfg(not(windows))]
 use winit::event_loop::EventLoopProxy;
+
+/// En Windows, notificaciones del sistema (ver `toast.rs`) en lugar de `notify-send`.
+#[cfg(windows)]
+pub use crate::toast::{close, send};
 
 /// Silencio que confirma que el agente terminó (no solo que se paró a pensar).
 pub const CONFIRM: Duration = Duration::from_millis(2500);
+#[cfg(not(windows))]
 const APP_ID: &str = "io.github.garbanhh.Garbo";
 
 /// Qué hace el agente, para decidir el aviso.
@@ -153,6 +164,7 @@ pub struct Notice {
 
 /// Procesos `notify-send` sin recoger. Se recogen con este cerrojo tomado y solo se terminan los que
 /// siguen aquí: su pid no puede haberse reutilizado para otro proceso.
+#[cfg(not(windows))]
 static LIVE: Mutex<Option<HashSet<u32>>> = Mutex::new(None);
 
 /// Texto del aviso cuando el agente espera al usuario: "Claude Code necesita tu permiso" y, debajo,
@@ -200,12 +212,14 @@ pub fn notice_text(agent: &str, task: &str, dir: &str, worked: Duration) -> (Str
 }
 
 /// El cuerpo admite marcas (negrita…) en GNOME: lo que venga del agente se escapa.
+#[cfg(not(windows))]
 fn escape_markup(s: &str) -> String {
     s.replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")
 }
 
+#[cfg(not(windows))]
 fn clean(s: &str) -> String {
     s.chars()
         .map(|c| if c.is_control() && c != '\n' { ' ' } else { c })
@@ -214,6 +228,7 @@ fn clean(s: &str) -> String {
 
 /// Envía el aviso en segundo plano. Avisa a la app del proceso (`NoticeShown`) y de si se pulsa
 /// (`NoticeClicked`, con el permiso de activación si el escritorio lo da).
+#[cfg(not(windows))]
 pub fn send(n: Notice, proxy: EventLoopProxy<UserEvent>) {
     let mut cmd = Command::new("notify-send");
     cmd.args(["-a", "Garbo", "-i", APP_ID, "-h"])
@@ -266,6 +281,7 @@ pub fn send(n: Notice, proxy: EventLoopProxy<UserEvent>) {
 
 /// Lee una línea de `notify-send`: el permiso de activación se guarda hasta que llega la acción
 /// `default` (aviso pulsado), que devuelve el permiso (o nada si el escritorio no lo dio).
+#[cfg(not(windows))]
 fn clicked(line: &str, token: &mut Option<String>) -> Option<Option<String>> {
     let line = line.trim();
     if line == "default" {
@@ -278,11 +294,11 @@ fn clicked(line: &str, token: &mut Option<String>) -> Option<Option<String>> {
 }
 
 /// Retira el aviso de un `notify-send` (si sigue en marcha).
+#[cfg(not(windows))]
 pub fn close(pid: u32) {
     let live = LIVE.lock().unwrap_or_else(|e| e.into_inner());
     if live.as_ref().is_some_and(|l| l.contains(&pid)) {
-        // SAFETY: kill solo manda una señal; el pid es de un hijo nuestro aún sin recoger.
-        unsafe { libc::kill(pid as i32, libc::SIGTERM) };
+        crate::platform::terminate(pid);
     }
 }
 
@@ -386,8 +402,11 @@ mod tests {
                 "trust this folder\nGRBTER"
             )
         );
-        assert_eq!(escape_markup("a <b> & c"), "a &lt;b&gt; &amp; c");
-        assert_eq!(clean("x\u{1b}[31my"), "x [31my");
+        #[cfg(not(windows))]
+        {
+            assert_eq!(escape_markup("a <b> & c"), "a &lt;b&gt; &amp; c");
+            assert_eq!(clean("x\u{1b}[31my"), "x [31my");
+        }
         let mut cfg = NotifyConfig::default();
         assert!(
             wanted(&cfg, false) && !wanted(&cfg, true),
@@ -399,6 +418,7 @@ mod tests {
         assert!(!wanted(&cfg, false));
     }
 
+    #[cfg(not(windows))]
     #[test]
     fn permiso_de_activacion_antes_del_clic() {
         let mut token = None;

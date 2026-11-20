@@ -5,7 +5,6 @@ use serde::Deserialize;
 use std::collections::HashMap;
 use std::fs;
 use std::io::{self, Write};
-use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Deserialize)]
@@ -90,42 +89,74 @@ pub struct FontConfig {
 }
 
 impl Default for FontConfig {
+    #[cfg(not(windows))]
     fn default() -> Self {
         Self {
             // Mismos valores por defecto que GNOME Terminal.
             family: "Adwaita Mono".into(),
             size: 11.0,
             line_height: 1.0,
-            fallback: vec![
-                "JetBrains Mono".into(),
-                "Noto Sans Mono".into(),
-                "DejaVu Sans Mono".into(),
-                "Liberation Mono".into(),
-                "Symbols Nerd Font Mono".into(),
-                "Noto Sans Symbols 2".into(),
-                "Noto Sans Mono CJK SC".into(),
-                "Noto Color Emoji".into(),
-                "Noto Emoji".into(),
-                "Symbola".into(),
-            ],
+            fallback: strings(&[
+                "JetBrains Mono",
+                "Noto Sans Mono",
+                "DejaVu Sans Mono",
+                "Liberation Mono",
+                "Symbols Nerd Font Mono",
+                "Noto Sans Symbols 2",
+                "Noto Sans Mono CJK SC",
+                "Noto Color Emoji",
+                "Noto Emoji",
+                "Symbola",
+            ]),
             ui_family: String::new(),
             ui_size: 10.5,
         }
     }
+
+    /// Como Windows Terminal: Cascadia Mono de 12 puntos (viene con Windows Terminal; si no está,
+    /// Consolas, que trae el sistema). Símbolos, CJK y emoji con las fuentes de Windows.
+    #[cfg(windows)]
+    fn default() -> Self {
+        Self {
+            family: "Cascadia Mono".into(),
+            size: 12.0,
+            line_height: 1.0,
+            fallback: strings(&[
+                "Cascadia Code",
+                "Consolas",
+                "JetBrains Mono",
+                "Symbols Nerd Font Mono",
+                "Segoe UI Symbol",
+                "MS Gothic",
+                "Microsoft YaHei",
+                "Malgun Gothic",
+                "Segoe UI Emoji",
+                "Segoe UI Historic",
+            ]),
+            ui_family: String::new(),
+            ui_size: 11.0,
+        }
+    }
+}
+
+fn strings(names: &[&str]) -> Vec<String> {
+    names.iter().map(|s| s.to_string()).collect()
 }
 
 impl FontConfig {
     pub fn ui_fallback(&self) -> Vec<String> {
-        let mut v: Vec<String> = [
-            "Cantarell",
-            "Inter",
-            "Noto Sans",
-            "DejaVu Sans",
-            "Liberation Sans",
-        ]
-        .iter()
-        .map(|s| s.to_string())
-        .collect();
+        let names: &[&str] = if cfg!(windows) {
+            &["Segoe UI Variable Text", "Segoe UI"]
+        } else {
+            &[
+                "Cantarell",
+                "Inter",
+                "Noto Sans",
+                "DejaVu Sans",
+                "Liberation Sans",
+            ]
+        };
+        let mut v = strings(names);
         v.extend(self.fallback.iter().cloned());
         v
     }
@@ -244,7 +275,13 @@ pub struct ColorOverrides {
 }
 
 impl Config {
+    /// `~/.config/garbo/config.toml` (en Windows, `%APPDATA%\garbo\config.toml`). `GARBO_CONFIG`
+    /// apunta a otro archivo: sirve para probar sin tocar el real (en Windows no hay
+    /// `XDG_CONFIG_HOME`).
     pub fn path() -> Option<PathBuf> {
+        if let Some(p) = std::env::var_os("GARBO_CONFIG").filter(|p| !p.is_empty()) {
+            return Some(PathBuf::from(p));
+        }
         dirs::config_dir().map(|d| d.join("garbo").join("config.toml"))
     }
 
@@ -353,11 +390,12 @@ impl Config {
         fs::create_dir_all(parent)?;
         let dir = crate::temp_dir::TempDir::new_in(parent)?;
         let staged = dir.path().join("config.toml");
-        let mut file = fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(&staged)?;
+        let mut options = fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        // Solo para el usuario. En Windows lo da la carpeta (`%APPDATA%`, privada de cada usuario).
+        #[cfg(unix)]
+        std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+        let mut file = options.open(&staged)?;
         file.write_all(doc.to_string().as_bytes())?;
         if let Some(permissions) = permissions {
             file.set_permissions(permissions)?;
@@ -421,11 +459,12 @@ mod tests {
 
     #[test]
     fn guardar_respeta_un_archivo_de_solo_lectura() {
-        use std::os::unix::fs::PermissionsExt;
         let dir = crate::temp_dir::TempDir::new_in(&std::env::temp_dir()).unwrap();
         let path = dir.path().join("config.toml");
         fs::write(&path, "theme = \"garbo-black\"\n").unwrap();
-        fs::set_permissions(&path, fs::Permissions::from_mode(0o444)).unwrap();
+        let mut ro = fs::metadata(&path).unwrap().permissions();
+        ro.set_readonly(true);
+        fs::set_permissions(&path, ro).unwrap();
         let mut cfg = Config::load_at(&path);
         cfg.theme = "otro".into();
         let err = cfg.save_at(&path).unwrap_err();
@@ -435,12 +474,11 @@ mod tests {
             "theme = \"garbo-black\"\n",
             "sin tocar"
         );
-        assert_eq!(
-            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
-            0o444
-        );
+        assert!(fs::metadata(&path).unwrap().permissions().readonly());
     }
 
+    // Los enlaces simbólicos de Windows necesitan permisos especiales.
+    #[cfg(unix)]
     #[test]
     fn guardar_conserva_el_enlace_al_archivo() {
         let dir = crate::temp_dir::TempDir::new_in(&std::env::temp_dir()).unwrap();
