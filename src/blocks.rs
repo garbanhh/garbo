@@ -1,8 +1,11 @@
 //! Bloques de comandos: cada comando y su salida forman una unidad con estado y duración.
 //!
-//! El shell (con el script de integración) emite marcas OSC 133 invisibles:
+//! El shell (con el script de integración, `shell/`) emite marcas OSC 133 invisibles:
 //!   A = empieza el prompt, B = empieza el comando, C = empieza la salida, D;código = terminó.
 //!   `A;garbo` = el prompt es el de Garbo (se dibuja como etiqueta, ver `view::draw_prompts`).
+//!   `P;k=r` = empieza el prompt derecho (zsh, fish): sus celdas no son parte del comando.
+//! Si el shell vuelve a pintar el mismo prompt (fish al arrancar, zsh con `reset-prompt`), la
+//! nueva A sigue en el mismo bloque.
 //! Al ver una marca, el bucle del PTY "ancla" el bloque al propio texto: activa un hyperlink
 //! invisible (uri `garbo:block`) que se graba en las celdas del prompt y del comando.
 //! Así la posición de cada bloque viaja con el contenido: sobrevive al scroll, al recorte
@@ -25,6 +28,8 @@ const MAX_BLOCKS: usize = 4096;
 pub enum Mark {
     /// `true` = prompt de Garbo.
     PromptStart(bool),
+    /// Prompt derecho; lo cierra la siguiente `CommandStart`.
+    RightPrompt,
     CommandStart,
     OutputStart,
     CommandEnd(Option<i32>),
@@ -54,10 +59,30 @@ enum Scan {
 impl MarkScanner {
     /// Añade a `out` cada marca completada como (offset justo tras la secuencia, marca).
     pub fn scan(&mut self, bytes: &[u8], out: &mut Vec<(usize, Mark)>) {
-        for (i, &b) in bytes.iter().enumerate() {
+        let mut i = 0;
+        while i < bytes.len() {
+            if self.state == Scan::Ground {
+                // Fuera de un OSC solo importa ESC ]: se salta hasta el siguiente ']' (el
+                // estado solo cambia si el byte anterior, ya dentro de este tramo, es ESC).
+                // Sin ']', se conserva un ESC final por si la secuencia sigue en otra lectura.
+                let Some(k) = memchr::memchr(b']', &bytes[i..]) else {
+                    if bytes.last() == Some(&0x1b) {
+                        self.state = Scan::Esc;
+                    }
+                    return;
+                };
+                let at = i + k;
+                if k > 0 && bytes[at - 1] == 0x1b {
+                    self.buf.clear();
+                    self.overflow = false;
+                    self.state = Scan::Osc;
+                }
+                i = at + 1;
+                continue;
+            }
+            let b = bytes[i];
             self.state = match self.state {
-                Scan::Ground if b == 0x1b => Scan::Esc,
-                Scan::Ground => Scan::Ground,
+                Scan::Ground => Scan::Ground, // se trata arriba
                 Scan::Esc if b == b']' => {
                     self.buf.clear();
                     self.overflow = false;
@@ -98,6 +123,7 @@ impl MarkScanner {
                 }
                 Scan::OscEsc => Scan::Ground,
             };
+            i += 1;
         }
     }
 
@@ -117,6 +143,7 @@ impl MarkScanner {
         let mark = match rest.first() {
             Some(b'A') => Mark::PromptStart(rest[1..].split(|&b| b == b';').any(|p| p == b"garbo")),
             Some(b'B') => Mark::CommandStart,
+            Some(b'P') if rest[1..].split(|&b| b == b';').any(|p| p == b"k=r") => Mark::RightPrompt,
             Some(b'C') => Mark::OutputStart,
             Some(b'D') => {
                 let code = std::str::from_utf8(&rest[1..])
@@ -181,6 +208,10 @@ pub struct BlockState {
     input_cwd: Option<PathBuf>,
     /// Estado que informa el programa en marcha (OSC 7501, ver `status.rs`).
     pub program: crate::status::Records,
+    /// Dónde estaba el cursor en la última marca A (para reconocer el mismo prompt repintado).
+    prompt_at: Option<(i64, usize)>,
+    /// Se está escribiendo el prompt derecho: la próxima B solo lo cierra.
+    right_prompt: bool,
 }
 
 impl BlockState {
@@ -203,6 +234,21 @@ impl BlockState {
         self.infos.get(i)
     }
 
+    /// Bloque anterior a `id`.
+    fn prev_id(&self, id: u32) -> Option<u32> {
+        let i = self.infos.partition_point(|b| b.id < id);
+        Some(self.infos.get(i.checked_sub(1)?)?.id)
+    }
+
+    /// Para las pruebas: (prompt de Garbo, se ejecutó, código) de cada bloque.
+    #[cfg(test)]
+    pub fn summary(&self) -> Vec<(bool, bool, Option<i32>)> {
+        self.infos
+            .iter()
+            .map(|b| (b.styled, b.started.is_some(), b.exit))
+            .collect()
+    }
+
     /// ¿Usa el bloque el prompt de Garbo?
     pub fn styled(&self, id: u32) -> bool {
         self.info(id).is_some_and(|b| b.styled)
@@ -223,6 +269,27 @@ impl BlockState {
             .map(|b| b.id)
     }
 
+    /// El bloque actual, si una A en `here` es solo el mismo prompt pintado otra vez: aún no se
+    /// ha ejecutado nada y el cursor sigue donde la A anterior (nada escrito entre las dos) o en
+    /// una línea con celdas de su prompt (volvió al principio para repintarlo). Un Intro en vacío
+    /// deja el prompt viejo en la línea de arriba, así que ese sí abre otro bloque.
+    fn repainted<T>(&mut self, term: &Term<T>, here: (i64, usize)) -> Option<&mut BlockInfo> {
+        let same_spot = self.prompt_at == Some(here);
+        let info = self.current_mut().filter(|b| b.started.is_none())?;
+        let id = info.id;
+        let row = &term.grid()[term.grid().cursor.point.line];
+        let on_prompt = || {
+            row[..]
+                .iter()
+                .filter(|c| c.extra.is_some())
+                .any(|c| cell_link(c) == Some((b'p', id)))
+        };
+        if !same_spot && !on_prompt() {
+            return None;
+        }
+        self.current_mut()
+    }
+
     fn current_mut(&mut self) -> Option<&mut BlockInfo> {
         let id = self.current?;
         let i = self.infos.binary_search_by_key(&id, |b| b.id).ok()?;
@@ -240,21 +307,47 @@ impl BlockState {
             Mark::PromptStart(styled) => {
                 // Vuelve el prompt: el programa que informaba ya no está en marcha.
                 self.program.drop_live();
-                self.next_id += 1;
-                let id = self.next_id;
-                self.infos.push_back(BlockInfo {
-                    id,
-                    styled,
-                    started: None,
-                    duration: None,
-                    exit: None,
-                });
-                if self.infos.len() > MAX_BLOCKS {
-                    self.infos.pop_front();
-                }
+                self.right_prompt = false;
+                let here = crate::suggest::cursor_mark(term);
+                let id = match self.repainted(term, here) {
+                    Some(info) => {
+                        info.styled = styled;
+                        info.id
+                    }
+                    None => {
+                        self.next_id += 1;
+                        let id = self.next_id;
+                        self.infos.push_back(BlockInfo {
+                            id,
+                            styled,
+                            started: None,
+                            duration: None,
+                            exit: None,
+                        });
+                        if self.infos.len() > MAX_BLOCKS {
+                            self.infos.pop_front();
+                        }
+                        id
+                    }
+                };
+                self.prompt_at = Some(here);
                 self.current = Some(id);
                 self.input_start = None;
                 term.set_hyperlink(Some(link('p', id)));
+            }
+            Mark::RightPrompt => {
+                if let Some(id) = self.current {
+                    term.set_hyperlink(Some(link('r', id)));
+                    self.right_prompt = true;
+                }
+            }
+            Mark::CommandStart if self.right_prompt => {
+                // Fin del prompt derecho: lo que se escriba vuelve a ser el comando, que empieza
+                // donde dijo la B del prompt.
+                self.right_prompt = false;
+                if let Some(id) = self.current {
+                    term.set_hyperlink(Some(link('c', id)));
+                }
             }
             Mark::CommandStart => {
                 if let Some(id) = self.current {
@@ -265,6 +358,7 @@ impl BlockState {
                 self.input_cwd = self.shell_cwd();
             }
             Mark::OutputStart => {
+                self.right_prompt = false;
                 term.set_hyperlink(None);
                 // El comando aceptado pasará al historial de sugerencias cuando termine.
                 let dir = self.input_cwd.take();
@@ -278,6 +372,7 @@ impl BlockState {
                 }
             }
             Mark::CommandEnd(code) => {
+                self.right_prompt = false;
                 term.set_hyperlink(None);
                 self.input_start = None;
                 if let Some((cmd, dir)) = self.pending_cmd.take() {
@@ -294,7 +389,13 @@ impl BlockState {
     }
 }
 
-/// (tipo, id) del ancla de bloque de una celda: tipo `p` = prompt, `c` = comando.
+/// ¿Es la celda parte de un prompt derecho? No cuenta como texto escrito.
+pub fn is_right_prompt(cell: &Cell) -> bool {
+    cell.extra.is_some() && matches!(cell_link(cell), Some((b'r', _)))
+}
+
+/// (tipo, id) del ancla de bloque de una celda: tipo `p` = prompt, `c` = comando, `r` = prompt
+/// derecho.
 pub fn cell_link(cell: &Cell) -> Option<(u8, u32)> {
     let h = cell.hyperlink()?;
     if h.uri() != LINK_URI {
@@ -306,11 +407,38 @@ pub fn cell_link(cell: &Cell) -> Option<(u8, u32)> {
 }
 
 fn line_anchor<T>(term: &Term<T>, line: Line) -> Option<u32> {
-    let row = &term.grid()[line];
-    (0..term.columns()).find_map(|c| match cell_link(&row[Column(c)]) {
-        Some((b'p', id)) => Some(id),
-        _ => None,
-    })
+    term.grid()[line][..]
+        .iter()
+        .take(term.columns())
+        .filter(|cell| cell.extra.is_some())
+        .find_map(|cell| match cell_link(cell) {
+            Some((b'p', id)) => Some(id),
+            _ => None,
+        })
+}
+
+/// Bloque que empieza por encima de `top` (para decorar su parte visible); `first` es la
+/// primera ancla de la pantalla. Los bloques aparecen en la rejilla en el orden de sus ids, así
+/// que casi siempre se deduce sin recorrer el historial: es el anterior a `first` o, al final
+/// del historial y sin anclas a la vista, el actual. Solo con el historial desplazado y sin
+/// anclas a la vista se busca hacia arriba.
+pub fn block_above<T>(
+    term: &Term<T>,
+    bs: &BlockState,
+    top: Line,
+    first: Option<&Anchor>,
+) -> Option<Anchor> {
+    use alacritty_terminal::term::TermMode;
+    if term.mode().contains(TermMode::ALT_SCREEN) {
+        return None;
+    }
+    let id = match first {
+        Some(a) => bs.prev_id(a.id)?,
+        None if term.grid().display_offset() == 0 => bs.current?,
+        None => return anchor_at(term, top, 2000),
+    };
+    // La línea solo indica que empieza fuera de la pantalla.
+    Some(Anchor { line: top - 1, id })
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -455,21 +583,123 @@ pub fn format_duration(d: Duration) -> String {
     }
 }
 
-/// Escribe el script de integración de bash y devuelve su ruta.
-pub fn bash_integration_path() -> Option<String> {
-    const SCRIPT: &str = include_str!("../shell/garbo.bash");
-    let dir = dirs::runtime_dir().or_else(dirs::cache_dir)?.join("garbo");
-    let path = dir.join("garbo.bash");
-    if std::fs::read_to_string(&path).ok().as_deref() != Some(SCRIPT) {
-        std::fs::create_dir_all(&dir).ok()?;
-        std::fs::write(&path, SCRIPT).ok()?;
-    }
-    Some(path.to_string_lossy().into_owned())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn conserva_marcas_y_offsets_entre_lecturas() {
+        let mut bytes = vec![b'x'; 100];
+        bytes.extend_from_slice(b"\x1b[32mtexto\x1b[0m\x1b]133;B\x07");
+        let command_end = bytes.len();
+        bytes.extend_from_slice(b"\x1b]7501;?\x1b\\");
+        bytes.extend_from_slice(&[b' '; 128]);
+        bytes.extend_from_slice(b"]literal\x1b]133;D;2\x1b\\");
+
+        // Prueba cada corte, incluidos ESC al final de un lote y ST partido.
+        for cut in 0..=bytes.len() {
+            let mut scanner = MarkScanner::default();
+            let mut marks = Vec::new();
+            scanner.scan(&bytes[..cut], &mut marks);
+            let first = marks.len();
+            scanner.scan(&bytes[cut..], &mut marks);
+            for (end, _) in &mut marks[first..] {
+                *end += cut;
+            }
+            assert_eq!(
+                marks,
+                [
+                    (command_end, Mark::CommandStart),
+                    (bytes.len(), Mark::CommandEnd(Some(2)))
+                ],
+                "corte {cut}"
+            );
+            assert_eq!(scanner.status, [(crate::status::Report::Query, true)]);
+        }
+    }
+
+    #[test]
+    fn el_bloque_de_arriba_coincide_con_la_busqueda_completa() {
+        use alacritty_terminal::event::VoidListener;
+        use alacritty_terminal::grid::Scroll;
+        use alacritty_terminal::term::test::TermSize;
+        use alacritty_terminal::term::TermMode;
+
+        let mut term = Term::new(
+            alacritty_terminal::term::Config::default(),
+            &TermSize::new(40, 10),
+            VoidListener,
+        );
+        let blocks = std::sync::Mutex::new(BlockState::new(0));
+        let mut feed = |s: &str| {
+            crate::pty_loop::feed_for_tests(&mut term, &blocks, s.as_bytes(), &VoidListener)
+        };
+        // Salida previa sin bloque y tres comandos con salidas de distinta longitud; el último
+        // sigue en marcha.
+        feed("arranque\r\nbanner\r\n");
+        for n in [3, 25, 60] {
+            feed("\x1b]133;A\x07$ \x1b]133;B\x07orden\r\n\x1b]133;C\x07");
+            for i in 0..n {
+                feed(&format!("línea {i}\r\n"));
+            }
+            if n != 60 {
+                feed("\x1b]133;D;0\x07");
+            }
+        }
+        let bs = blocks.lock().unwrap();
+        let mut checked = 0;
+        for delta in 0..term.history_size() as i32 {
+            term.scroll_display(Scroll::Bottom);
+            term.scroll_display(Scroll::Delta(delta));
+            let top = Line(-(term.grid().display_offset() as i32));
+            let bottom = top + 9;
+            let anchors = anchors(&term, top, bottom);
+            if anchors.first().is_some_and(|a| a.line == top) {
+                continue;
+            }
+            let fast = block_above(&term, &bs, top, anchors.first()).map(|a| a.id);
+            let slow = anchor_at(&term, top, usize::MAX).map(|a| a.id);
+            assert_eq!(fast, slow, "desplazamiento {delta}");
+            checked += 1;
+        }
+        assert!(checked > 50);
+        // Con la pantalla alternativa no se decora nada.
+        term.scroll_display(Scroll::Bottom);
+        drop(bs);
+        crate::pty_loop::feed_for_tests(&mut term, &blocks, b"\x1b[?1049h", &VoidListener);
+        assert!(term.mode().contains(TermMode::ALT_SCREEN));
+        let bs = blocks.lock().unwrap();
+        assert_eq!(block_above(&term, &bs, Line(0), None).map(|a| a.id), None);
+    }
+
+    #[test]
+    fn mismo_resultado_entero_que_byte_a_byte() {
+        // Varios ']' sueltos, ESC ESC ], un OSC cortado por otro y marcas con BEL y con ST.
+        let bytes =
+            b"a]b\x1b\x1b]133;A\x07 ]] \x1b[1m]\x1b]133;B\x1b\\ x]\x1b]133;C\x1b]133;D;0\x07]\x1b";
+        let mut whole = MarkScanner::default();
+        let mut marks = Vec::new();
+        whole.scan(bytes, &mut marks);
+        let mut single = MarkScanner::default();
+        let mut by_byte = Vec::new();
+        for (i, b) in bytes.iter().enumerate() {
+            let first = by_byte.len();
+            single.scan(std::slice::from_ref(b), &mut by_byte);
+            for (end, _) in &mut by_byte[first..] {
+                *end += i;
+            }
+        }
+        assert_eq!(marks, by_byte);
+        assert_eq!(
+            marks.iter().map(|m| m.1).collect::<Vec<_>>(),
+            [
+                Mark::PromptStart(false),
+                Mark::CommandStart,
+                Mark::CommandEnd(Some(0))
+            ]
+        );
+        assert!(whole.state == Scan::Esc && single.state == Scan::Esc);
+    }
 
     #[test]
     fn marcas_del_prompt() {

@@ -3,7 +3,7 @@
 //! así una fuente de emoji de 10 MB no cuesta nada hasta que aparece un emoji.
 
 use memmap2::Mmap;
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 use std::fs::File;
 use std::path::PathBuf;
 use swash::scale::{image::Content, Render, ScaleContext, Source, StrikeWith};
@@ -99,7 +99,7 @@ pub struct FontSet {
     pub size_px: f32,
     pub metrics: CellMetrics,
     line_height: f32,
-    lookup: HashMap<(char, Style, bool), (u16, u16)>,
+    lookup: FxHashMap<(char, Style, bool), (u16, u16)>,
 }
 
 impl FontSet {
@@ -216,7 +216,7 @@ impl FontSet {
                 stroke: 1.0,
             },
             line_height,
-            lookup: HashMap::new(),
+            lookup: FxHashMap::default(),
         };
         set.metrics = set.compute_metrics(line_height);
         log::info!("Celda: {:?} ({size_px:.1} px)", set.metrics);

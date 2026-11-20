@@ -248,7 +248,7 @@ pub fn command_label(pid: i32) -> Option<String> {
     }
     let base = |s: &str| s.rsplit('/').next().unwrap_or(s).to_string();
     let interp = [
-        "python", "python3", "node", "bun", "deno", "perl", "ruby", "sh", "bash",
+        "python", "python3", "node", "bun", "deno", "perl", "ruby", "sh", "bash", "zsh", "fish",
     ];
     if args.len() > 1 && interp.contains(&base(&args[0]).as_str()) && !args[1].starts_with('-') {
         args.remove(0);

@@ -1,10 +1,12 @@
 name: Release
 
-# Al subir una etiqueta vX.Y.Z al repositorio público se compila el RPM en Fedora
-# y se publica como release. La app consulta estas releases para avisar de versiones nuevas.
+# Al subir una etiqueta vX.Y.Z al repositorio público se compilan el RPM (en Fedora) y el .deb
+# (en Ubuntu 22.04) y se publican en la release. La app consulta estas releases para avisar de
+# versiones nuevas. La release se crea como borrador y solo se publica cuando están los dos
+# paquetes: la app nunca ve una a medias (los borradores no cuentan como la última).
 # También se puede lanzar a mano para una etiqueta existente (Actions → Release → Run workflow).
-# Este flujo tiene permiso de escritura y su RPM se instala como root: solo usa la CLI
-# oficial de GitHub (gh) y una Action de GitHub fijada a un commit concreto.
+# Este flujo tiene permiso de escritura y sus paquetes se instalan como root: solo usa la CLI
+# oficial de GitHub (gh) y Actions fijadas a un commit concreto.
 on:
   push:
     tags: ["v*"]
@@ -18,8 +20,21 @@ permissions:
   contents: write
 
 jobs:
-  rpm:
+  draft:
     if: github.repository == 'garbanhh/garbo'
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ inputs.tag || github.ref_name }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Crear la release como borrador
+        run: |
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 ||
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --draft --verify-tag \
+              --title "Garbo ${TAG#v}" --generate-notes
+
+  rpm:
+    needs: draft
     runs-on: ubuntu-latest
     container: fedora:45
     env:
@@ -71,9 +86,83 @@ jobs:
           cd target/generate-rpm
           for f in *.rpm; do sha256sum "$f" > "$f.sha256"; done
           ls -la
-      - name: Publicar release
+      - name: Subir a la release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$TAG" target/generate-rpm/*.rpm target/generate-rpm/*.rpm.sha256 \
-            --repo "$GITHUB_REPOSITORY" --title "Garbo ${TAG#v}" --generate-notes
+          gh release upload "$TAG" target/generate-rpm/*.rpm target/generate-rpm/*.rpm.sha256 \
+            --repo "$GITHUB_REPOSITORY" --clobber
+
+  deb:
+    needs: draft
+    # La más antigua admitida: el binario pide la glibc de Ubuntu 22.04 (2.35), que también cumplen
+    # Debian 12 y todas las versiones posteriores. Cuando GitHub retire esta imagen, ubuntu-24.04
+    # (glibc 2.39) deja fuera a Ubuntu 22.04 y Debian 12.
+    runs-on: ubuntu-22.04
+    env:
+      TAG: ${{ inputs.tag || github.ref_name }}
+      GARBO_RPM_PUBLIC_KEY: ${{ vars.GARBO_RPM_PUBLIC_KEY }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+      - uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # master
+        with:
+          toolchain: 1.100.0
+      - name: Comprobar versión
+        run: |
+          VERSION=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+          test "v$VERSION" = "$TAG" || { echo "La etiqueta $TAG no coincide con Cargo.toml ($VERSION)"; exit 1; }
+      - name: Herramienta de empaquetado
+        run: cargo install cargo-deb --version 3.8.0 --locked
+      - name: Compilar y generar .deb
+        run: cargo deb --locked
+      - name: Firmar .deb
+        env:
+          GARBO_RPM_SIGNING_KEY: ${{ secrets.GARBO_RPM_SIGNING_KEY }}
+        run: |
+          if [ -z "$GARBO_RPM_PUBLIC_KEY" ] && [ -z "$GARBO_RPM_SIGNING_KEY" ]; then
+            echo 'Publicación para instalación manual. La firma aún no está configurada.'
+            exit 0
+          fi
+          test -n "$GARBO_RPM_PUBLIC_KEY" && test -n "$GARBO_RPM_SIGNING_KEY" || {
+            echo 'Configura GARBO_RPM_PUBLIC_KEY y GARBO_RPM_SIGNING_KEY juntas.'
+            exit 1
+          }
+          umask 077
+          work=$(mktemp -d)
+          trap 'rm -rf -- "$work"' EXIT
+          export GNUPGHOME="$work/gnupg"
+          mkdir "$GNUPGHOME"
+          printf '%s\n' "$GARBO_RPM_SIGNING_KEY" | gpg --batch --import
+          printf '%s\n' "$GARBO_RPM_PUBLIC_KEY" > "$work/garbo.asc"
+          key=$(gpg --batch --show-keys --with-colons "$work/garbo.asc" | awk -F: '$1 == "fpr" && !seen++ { print $10 }')
+          test -n "$key"
+          # Firma aparte (.sig) y comprobación con gpgv y solo la clave pública, como hace la app.
+          gpg --batch --dearmor < "$work/garbo.asc" > "$work/garbo.gpg"
+          for f in target/debian/*.deb; do
+            gpg --batch --yes --local-user "$key" --detach-sign --output "$f.sig" "$f"
+            gpgv --keyring "$work/garbo.gpg" "$f.sig" "$f"
+          done
+      - name: Calcular SHA-256
+        run: |
+          cd target/debian
+          for f in *.deb; do sha256sum "$f" > "$f.sha256"; done
+          ls -la
+          dpkg-deb --info *.deb
+      - name: Subir a la release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "$TAG" target/debian/*.deb target/debian/*.deb.sha256 \
+            $(ls target/debian/*.deb.sig 2>/dev/null) --repo "$GITHUB_REPOSITORY" --clobber
+
+  publish:
+    needs: [rpm, deb]
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ inputs.tag || github.ref_name }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Publicar la release
+        run: gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false

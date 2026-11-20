@@ -4,7 +4,7 @@
 #   2. Pasa los tests, crea el commit "Versión X.Y.Z" y la etiqueta vX.Y.Z en el repo privado.
 #   3. Genera para el repo público un commit con el mismo contenido SIN docs/ (la documentación
 #      interna nunca se publica), encima del último commit público, y lo sube con su etiqueta.
-#      Allí GitHub Actions genera el RPM y la release, y las apps instaladas avisan.
+#      Allí GitHub Actions genera el RPM, el .deb y la release, y las apps instaladas avisan.
 # Uso: scripts/publicar.sh 0.2.0
 set -euo pipefail
 

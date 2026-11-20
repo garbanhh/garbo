@@ -1,12 +1,22 @@
 #!/usr/bin/env python3
-# Uso: tools/driver.py shell/garbo.bash "comando 1" "comando 2" ...
+# Uso: tools/driver.py <bash|zsh|fish> "comando 1" "comando 2" ...
+#      (o, como antes, tools/driver.py shell/garbo.bash "comando 1" ...)
 # Se usa como [shell] program de una config de prueba para verificar los bloques de comandos.
-# Usuario simulado: bash real (con la integración de Garbo) en un PTY interno,
-# teclea comandos y reenvía la salida tal cual a Garbo.
+# Usuario simulado: el shell real (con la integración de Garbo de este repositorio, shell/) en un
+# PTY interno, teclea comandos y reenvía la salida tal cual a Garbo.
 import os, pty, sys, time, select, signal, fcntl, termios, tty
-rc = sys.argv[1]; cmds = sys.argv[2:]
+here = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "shell")
+which = sys.argv[1]; cmds = sys.argv[2:]
 pid, fd = pty.fork()
 if pid == 0:
+    if which == "zsh":
+        if "ZDOTDIR" in os.environ:
+            os.environ["GARBO_ZSH_ZDOTDIR"] = os.environ["ZDOTDIR"]
+        os.environ["ZDOTDIR"] = os.path.join(here, "zsh")
+        os.execvp("zsh", ["zsh", "-i"])
+    if which == "fish":
+        os.execvp("fish", ["fish", "-i", "--init-command", "source " + os.path.join(here, "garbo.fish")])
+    rc = which if which.endswith(".bash") else os.path.join(here, "garbo.bash")
     os.environ["PS1"] = r"\u@\h:\w$ "
     os.execvp("bash", ["bash", "--rcfile", rc, "-i"])
 def sync_size(*_):

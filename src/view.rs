@@ -463,9 +463,11 @@ pub fn draw_ghost<T: EventListener>(
     let cols = term.columns();
     let color = theme.foreground.lerp(theme.background, 0.55);
     let y = v.y + row as f32 * m.height;
+    let line = &term.grid()[cur.line];
     for (k, ch) in text.chars().enumerate() {
         let col = cur.column.0 + k;
-        if col >= cols {
+        // Sin pisar lo que ya hay en la línea (un prompt derecho).
+        if col >= cols || !matches!(line[Column(col)].c, ' ' | '\0') {
             break;
         }
         if ch != ' ' {
@@ -483,7 +485,7 @@ pub fn draw_ghost<T: EventListener>(
     }
 }
 
-/// Prompt de Garbo (la línea de la carpeta, que pone la integración de bash). En el prompt actual
+/// Prompt de Garbo (la línea de la carpeta, que pone la integración del shell). En el prompt actual
 /// se dibuja como una etiqueta con borde, icono de carpeta y, al lado, la rama de git; en los
 /// comandos ya ejecutados, el icono en gris y tras la ruta la duración (o el código si falló).
 /// Va antes que `draw_terminal`: los fondos de la selección quedan por encima de la etiqueta.
@@ -845,6 +847,14 @@ pub fn draw_terminal<T: EventListener>(
         }
     };
 
+    // Atajo para la mayoría de celdas: un espacio sobre el fondo por defecto no dibuja nada.
+    // Con selección o búsqueda activas se recorre todo por el camino normal.
+    let default_bg = AnsiColor::Named(NamedColor::Background);
+    let skip_blank = selection.is_none()
+        && hl.is_none()
+        && resolve(default_bg, theme, colors) == theme.background;
+    let visible = Flags::INVERSE | Flags::ALL_UNDERLINES | Flags::STRIKEOUT;
+
     for indexed in content.display_iter {
         let point = indexed.point;
         let row = point.line.0 + offset;
@@ -853,6 +863,14 @@ pub fn draw_terminal<T: EventListener>(
         }
         let cell = indexed.cell;
         let flags = cell.flags;
+        if skip_blank
+            && (cell.c == ' ' || cell.c == '\t')
+            && cell.bg == default_bg
+            && !flags.intersects(visible)
+            && !(block_cursor && point == cursor.point)
+        {
+            continue;
+        }
         if flags.intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER) {
             continue;
         }
@@ -1054,7 +1072,7 @@ pub fn draw_blocks<T: EventListener>(
     let mut anchors = blocks::anchors(term, top, bottom);
     // El bloque que empieza por encima de la pantalla también se decora.
     if anchors.first().is_none_or(|a| a.line > top) {
-        if let Some(a) = blocks::anchor_at(term, top, 2000) {
+        if let Some(a) = blocks::block_above(term, bs, top, anchors.first()) {
             anchors.insert(0, a);
         }
     }
@@ -1172,6 +1190,10 @@ fn is_cjk(c: char) -> bool {
 /// aunque se use interlineado (las fuentes los diseñan para su propia altura de línea).
 /// Devuelve `false` si el carácter no se gestiona aquí.
 fn draw_special(p: &mut Painter, c: char, x: f32, y: f32, w: f32, h: f32, fg: Rgb) -> bool {
+    // Todo lo que se dibuja con primitivas está en los bloques de caja y de elementos de bloque.
+    if !('\u{2500}'..='\u{259F}').contains(&c) {
+        return false;
+    }
     let col = fg.to_f32(1.0);
     let (x1, y1) = (x + w, y + h);
     let mx = (x + w / 2.0).round();
@@ -1406,6 +1428,117 @@ fn draw_special(p: &mut Painter, c: char, x: f32, y: f32, w: f32, h: f32, fg: Rg
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Banco de medida del coste de construir un fotograma: prompts, rejilla y bloques (CPU, sin
+    /// ventana).
+    /// `cargo test --release bench_ -- --ignored --nocapture --test-threads=1`
+    #[test]
+    #[ignore = "banco de medida"]
+    fn bench_frame() {
+        use alacritty_terminal::event::VoidListener;
+        use alacritty_terminal::term::test::TermSize;
+
+        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+            backends: wgpu::Backends::PRIMARY,
+            ..Default::default()
+        });
+        let Ok(adapter) = pollster::block_on(instance.request_adapter(&Default::default())) else {
+            eprintln!("sin GPU: se omite");
+            return;
+        };
+        let (device, queue) =
+            pollster::block_on(adapter.request_device(&Default::default())).unwrap();
+        let atlas = device.create_texture(&wgpu::TextureDescriptor {
+            label: None,
+            size: wgpu::Extent3d {
+                width: crate::atlas::ATLAS_SIZE,
+                height: crate::atlas::ATLAS_SIZE,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let cfg = crate::config::Config::default();
+        let theme = cfg.theme();
+        let mut glyphs = crate::app::build_glyphs(&cfg, 11.0, 1.67);
+        let (cols, lines) = (180, 50);
+
+        // Pantallas de prueba: texto plano, texto con muchos colores y casi vacía.
+        let plain: String = (0..lines)
+            .map(|i| format!("{:<180}\r\n", format!("{i:>6}  fn draw_terminal(p: &mut Painter, term: &Term<T>) -> Option<usize> {{ /* {i} */ }}")))
+            .collect();
+        let colored: String = (0..lines * 12)
+            .map(|i| {
+                let sep = if i % 12 == 11 { "\r\n" } else { " " };
+                format!(
+                    "\x1b[38;5;{}m{}palabra{i:<4}\x1b[0m{sep}",
+                    i % 230 + 16,
+                    if i % 7 == 0 { "\x1b[1;48;5;236m" } else { "" }
+                )
+            })
+            .collect();
+        let empty = "\x1b[1m~/Documentos/Proyectos\x1b[0m $ ls -la".to_string();
+        // Un comando en marcha cuyo prompt quedó 1500 líneas por encima de la pantalla.
+        let running = format!(
+            "\x1b]133;A\x07$ \x1b]133;B\x07seq 1500\r\n\x1b]133;C\x07{}",
+            (1..=1500).map(|i| format!("{i}\r\n")).collect::<String>()
+        );
+
+        for (name, text) in [
+            ("plana", plain),
+            ("colores", colored),
+            ("vacía", empty),
+            ("bloques", running),
+        ] {
+            let mut term = Term::new(
+                crate::terminal::term_config(&cfg),
+                &TermSize::new(cols, lines),
+                VoidListener,
+            );
+            let blocks = std::sync::Mutex::new(BlockState::new(0));
+            crate::pty_loop::feed_for_tests(&mut term, &blocks, text.as_bytes(), &VoidListener);
+            let bs = blocks.into_inner().unwrap();
+            let v = TermView {
+                x: 0.0,
+                y: 0.0,
+                lines,
+                focused: true,
+                cursor_on: true,
+            };
+            let (mut out, mut fg) = (Vec::new(), Vec::new());
+            let mut times = Vec::new();
+            for i in 0..1100 {
+                out.clear();
+                fg.clear();
+                let t = std::time::Instant::now();
+                let mut p = Painter {
+                    out: &mut out,
+                    fg: &mut fg,
+                    glyphs: &mut glyphs,
+                    queue: &queue,
+                    atlas: &atlas,
+                };
+                draw_prompts(&mut p, &term, &theme, &v, &bs, None, 1.67);
+                draw_terminal(&mut p, &term, &theme, &v, Some(&bs), None);
+                draw_blocks(&mut p, &term, &theme, &v, &bs, None, (0.0, 1800.0), 1.67);
+                p.finish();
+                if i >= 100 {
+                    times.push(t.elapsed().as_secs_f64() * 1e6);
+                }
+            }
+            times.sort_by(f64::total_cmp);
+            eprintln!(
+                "fotograma {name:8} {cols}x{lines}: mediana {:7.1} µs, p10 {:7.1} µs, {} instancias",
+                times[times.len() / 2],
+                times[times.len() / 10],
+                out.len()
+            );
+        }
+    }
 
     fn rows(lines: &[&str]) -> Vec<Vec<(char, Rgb)>> {
         lines

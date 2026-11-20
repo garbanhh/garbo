@@ -1,17 +1,19 @@
 //! Edición de la línea de órdenes al estilo Warp.
 //!
-//! bash (readline) ya edita la línea; aquí se añaden los atajos de Warp que readline no tiene, o
-//! tiene en otras teclas, traducidos a lo que entiende cada programa:
-//! - **Shift+Intro**: salto de línea sin ejecutar. En bash, `Ctrl+V Ctrl+J` (inserción literal: el
-//!   comando de varias líneas se ejecuta entero al pulsar Intro). En Claude Code, Codex, Gemini…,
-//!   `Ctrl+J`. En Aider, `Esc Intro`.
-//! - **Ctrl+Retroceso / Ctrl+Supr**: borrar la palabra de la izquierda / de la derecha.
-//! - **Ctrl+Z**: deshacer (en el prompt, bash no tiene nada que suspender).
+//! El shell (readline en bash, ZLE en zsh, el de fish) ya edita la línea; aquí se añaden los atajos
+//! de Warp que no tiene, o tiene en otras teclas, traducidos a lo que entiende cada programa:
+//! - **Shift+Intro**: salto de línea sin ejecutar. En bash y zsh, `Ctrl+V Ctrl+J` (inserción
+//!   literal: el comando de varias líneas se ejecuta entero al pulsar Intro); en fish, `Alt+Intro`
+//!   (su `Ctrl+V` pega). En Claude Code, Codex, Gemini…, `Ctrl+J`. En Aider, `Esc Intro`.
+//! - **Ctrl+Retroceso / Ctrl+Supr**: borrar la palabra de la izquierda / de la derecha (`Alt+Retroceso`
+//!   y `Alt+D`, iguales en los tres shells).
+//! - **Ctrl+Z**: deshacer (`Ctrl+_` en los tres; en el prompt no hay nada que suspender).
 //! - **Clic en lo escrito**: lleva el cursor ahí, con flechas, como si se pulsaran.
 //! - **↑ / ↓ en un comando de varias líneas**: cambian de línea en vez de recorrer el historial.
 //!
 //! Fuera del prompt y de los agentes, las teclas siguen su camino de siempre.
 
+use crate::shell::Shell;
 use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::index::{Column, Line, Point, Side};
 use alacritty_terminal::term::cell::Flags;
@@ -21,8 +23,8 @@ use winit::keyboard::{Key, ModifiersState, NamedKey};
 /// Dónde va lo que se teclea.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Context {
-    /// bash con la integración de Garbo, esperando un comando.
-    Prompt,
+    /// El shell con la integración de Garbo, esperando un comando.
+    Prompt(Shell),
     /// Un agente en primer plano (por su nombre: "Claude Code", "Aider"…).
     Agent(&'static str),
     Other,
@@ -44,12 +46,13 @@ pub fn shortcut(key: &Key, mods: ModifiersState, ctx: Context) -> Option<&'stati
     let shift = mods == ModifiersState::SHIFT;
     let ctrl = mods == ModifiersState::CONTROL;
     let bytes: &[u8] = match (ctx, key) {
-        (Context::Prompt, Key::Named(NamedKey::Enter)) if shift => b"\x16\n",
+        (Context::Prompt(Shell::Fish), Key::Named(NamedKey::Enter)) if shift => b"\x1b\r",
+        (Context::Prompt(_), Key::Named(NamedKey::Enter)) if shift => b"\x16\n",
         // backward-kill-word (Alt+Retroceso) y kill-word (Alt+D): por palabras, como Warp
         // ("~/Documentos/Proyectos" pierde "Proyectos").
-        (Context::Prompt, Key::Named(NamedKey::Backspace)) if ctrl => b"\x1b\x7f",
-        (Context::Prompt, Key::Named(NamedKey::Delete)) if ctrl => b"\x1bd",
-        (Context::Prompt, Key::Character(c)) if ctrl && c.eq_ignore_ascii_case("z") => b"\x1f",
+        (Context::Prompt(_), Key::Named(NamedKey::Backspace)) if ctrl => b"\x1b\x7f",
+        (Context::Prompt(_), Key::Named(NamedKey::Delete)) if ctrl => b"\x1bd",
+        (Context::Prompt(_), Key::Character(c)) if ctrl && c.eq_ignore_ascii_case("z") => b"\x1f",
         (Context::Agent("Aider"), Key::Named(NamedKey::Enter)) if shift => b"\x1b\r",
         (Context::Agent(_), Key::Named(NamedKey::Enter)) if shift => b"\n",
         // Ctrl+W: "borrar la palabra anterior" en todos (en Linux, el ^H de Ctrl+Retroceso de
@@ -90,11 +93,14 @@ fn layout<T>(term: &Term<T>, start: (i64, usize)) -> Option<Layout> {
         return None;
     }
     let cols = term.columns();
-    let blank = |c: char| c == ' ' || c == '\0';
+    // El prompt derecho cuenta como hueco.
+    let blank = |cell: &alacritty_terminal::term::cell::Cell| {
+        cell.c == ' ' || cell.c == '\0' || crate::blocks::is_right_prompt(cell)
+    };
     // Última fila con algo escrito (lo escrito puede seguir por debajo del cursor).
     let mut last = cur.line;
     for l in (cur.line.0 + 1)..=bottom.0 {
-        if (0..cols).any(|c| !blank(grid[Line(l)][Column(c)].c)) {
+        if (0..cols).any(|c| !blank(&grid[Line(l)][Column(c)])) {
             last = Line(l);
         }
     }
@@ -111,7 +117,7 @@ fn layout<T>(term: &Term<T>, start: (i64, usize)) -> Option<Layout> {
         if !wraps {
             for c in from..cols {
                 let cell = &row[Column(c)];
-                if !blank(cell.c) {
+                if !blank(cell) {
                     end = c + if cell.flags.contains(Flags::WIDE_CHAR) {
                         2
                     } else {
@@ -272,8 +278,21 @@ mod tests {
         let bs = Key::Named(NamedKey::Backspace);
         let z = Key::Character("z".into());
         assert_eq!(
-            shortcut(&enter, shift, Context::Prompt),
+            shortcut(&enter, shift, Context::Prompt(Shell::Bash)),
             Some(&b"\x16\n"[..])
+        );
+        assert_eq!(
+            shortcut(&enter, shift, Context::Prompt(Shell::Zsh)),
+            Some(&b"\x16\n"[..])
+        );
+        // fish: Ctrl+V pega; Alt+Intro inserta el salto de línea.
+        assert_eq!(
+            shortcut(&enter, shift, Context::Prompt(Shell::Fish)),
+            Some(&b"\x1b\r"[..])
+        );
+        assert_eq!(
+            shortcut(&bs, ctrl, Context::Prompt(Shell::Fish)),
+            Some(&b"\x1b\x7f"[..])
         );
         assert_eq!(
             shortcut(&enter, shift, Context::Agent("Claude Code")),
@@ -289,15 +308,25 @@ mod tests {
             "vim, python…: como siempre"
         );
         assert_eq!(
-            shortcut(&enter, ModifiersState::empty(), Context::Prompt),
+            shortcut(
+                &enter,
+                ModifiersState::empty(),
+                Context::Prompt(Shell::Bash)
+            ),
             None
         );
-        assert_eq!(shortcut(&bs, ctrl, Context::Prompt), Some(&b"\x1b\x7f"[..]));
+        assert_eq!(
+            shortcut(&bs, ctrl, Context::Prompt(Shell::Bash)),
+            Some(&b"\x1b\x7f"[..])
+        );
         assert_eq!(
             shortcut(&bs, ctrl, Context::Agent("Codex")),
             Some(&b"\x17"[..])
         );
-        assert_eq!(shortcut(&z, ctrl, Context::Prompt), Some(&b"\x1f"[..]));
+        assert_eq!(
+            shortcut(&z, ctrl, Context::Prompt(Shell::Bash)),
+            Some(&b"\x1f"[..])
+        );
         assert_eq!(
             shortcut(&z, ctrl, Context::Agent("Claude Code")),
             None,

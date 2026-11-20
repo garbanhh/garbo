@@ -91,7 +91,7 @@ const CATEGORIES: &[(&str, &[(Field, &str)])] = &[
         &[
             (Field::Blocks, "Bloques de comandos"),
             (Field::GarboPrompt, "Prompt de Garbo"),
-            (Field::ShellIntegration, "Integración con bash"),
+            (Field::ShellIntegration, "Integración con el shell"),
         ],
     ),
     (

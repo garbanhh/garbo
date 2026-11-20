@@ -1,6 +1,6 @@
 [package]
 name = "garbo"
-version = "0.9.1"
+version = "0.10.0"
 edition = "2021"
 description = "Terminal GPU ligera, rápida y personalizable con pestañas y bloques de comandos"
 license = "MIT"
@@ -12,6 +12,11 @@ categories = ["command-line-utilities"]
 [dependencies]
 # Núcleo de emulación VT (parser + grid + PTY), el mismo que usa Alacritty
 alacritty_terminal = "0.26"
+memchr = "2"
+# Hash rápido para las cachés de glifos (ya está en el árbol vía naga)
+rustc-hash = "1.1"
+# Clave de firma en armadura ASCII a binario para gpgv (ya está en el árbol vía alacritty_terminal)
+base64 = "0.22"
 polling = "3"
 libc = "0.2"
 # Ventana y eventos
@@ -59,6 +64,30 @@ assets = [
 curl = "*"
 # notify-send (avisos)
 libnotify = "*"
+
+# Paquete .deb con `cargo deb` (Debian y Ubuntu; ver .github/workflows/release.yml)
+[package.metadata.deb]
+maintainer = "garbanhh <336566837+garbanhh@users.noreply.github.com>"
+copyright = "2026, garbanhh"
+license-file = ["LICENSE", "0"]
+extended-description = """\
+Terminal para Linux acelerada por GPU, con pestañas, paneles divididos, bloques de comandos, \
+sugerencias y completado, y seguimiento de agentes de código. Escrita en Rust."""
+section = "x11"
+priority = "optional"
+# El binario solo enlaza libc ($auto). Wayland, X11, xkbcommon y Vulkan (u OpenGL) se abren al
+# arrancar; curl y notify-send los usan el actualizador y los avisos.
+depends = "$auto, curl, libnotify-bin, libvulkan1 | libegl1, libwayland-client0, libxkbcommon0, libx11-6, libx11-xcb1, libxcursor1, libxi6, libxrandr2, libxkbcommon-x11-0"
+# Controladores Vulkan, pegar imágenes en Wayland, y verificar e instalar actualizaciones.
+recommends = "mesa-vulkan-drivers, wl-clipboard, pkexec | policykit-1, gpgv"
+assets = [
+    ["target/release/garbo", "usr/bin/", "755"],
+    ["packaging/io.github.garbanhh.Garbo.desktop", "usr/share/applications/", "644"],
+    ["packaging/io.github.garbanhh.Garbo.svg", "usr/share/icons/hicolor/scalable/apps/", "644"],
+    ["packaging/io.github.garbanhh.Garbo.metainfo.xml", "usr/share/metainfo/", "644"],
+    ["NOTICE", "usr/share/doc/garbo/", "644"],
+    ["README.md", "usr/share/doc/garbo/", "644"],
+]
 
 [profile.release]
 opt-level = 3

@@ -24,6 +24,7 @@ mod renderer;
 mod search;
 mod sessions;
 mod settings;
+mod shell;
 mod status;
 mod subagents;
 mod suggest;

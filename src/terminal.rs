@@ -4,6 +4,7 @@
 use crate::blocks::BlockState;
 use crate::config::{Config, CursorStyle};
 use crate::pty_loop::{PtyLoop, PtySender};
+use crate::shell::Shell;
 use alacritty_terminal::event::{Event as TermEvent, EventListener, WindowSize};
 use alacritty_terminal::event_loop::Msg;
 use alacritty_terminal::grid::Dimensions;
@@ -95,6 +96,8 @@ pub struct Tab {
     cwd_checked: Option<std::time::Instant>,
     pub title: String,
     pub child_pid: u32,
+    /// Shell de la pestaña (los atajos de edición cambian entre ellos).
+    pub shell: Shell,
     pub exited: bool,
 }
 
@@ -114,24 +117,39 @@ pub fn term_config(cfg: &Config) -> TermConfig {
     }
 }
 
-/// Shell a lanzar. Con bash se inyecta la integración de bloques vía `--rcfile`
-/// (carga tu ~/.bashrc igualmente), salvo que el usuario haya puesto argumentos propios.
-fn shell_command(cfg: &Config) -> tty::Shell {
-    let program = cfg
-        .shell
+/// Programa del shell: el de la configuración, `$SHELL` o bash.
+pub fn shell_program(cfg: &Config) -> String {
+    cfg.shell
         .program
         .clone()
         .or_else(|| std::env::var("SHELL").ok())
-        .unwrap_or_else(|| "/bin/bash".into());
+        .unwrap_or_else(|| "/bin/bash".into())
+}
+
+/// Shell a lanzar y variables que añadir a su entorno. Con bash, zsh y fish se inyecta la
+/// integración de bloques (`shell/`), que carga igualmente sus archivos de arranque de siempre,
+/// salvo que el usuario haya puesto argumentos propios.
+pub fn shell_command(cfg: &Config) -> (tty::Shell, Shell, Vec<(String, String)>) {
+    let program = shell_program(cfg);
+    let kind = Shell::from_program(&program);
     let mut args = cfg.shell.args.clone();
-    let is_bash = program.rsplit('/').next() == Some("bash");
-    if cfg.terminal.shell_integration && is_bash && args.is_empty() {
-        match crate::blocks::bash_integration_path() {
-            Some(path) => args = vec!["--rcfile".into(), path],
-            None => log::warn!("No se pudo escribir el script de integración de bash"),
+    let mut env = Vec::new();
+    if cfg.terminal.shell_integration && args.is_empty() && kind != Shell::Other {
+        let zdotdir = cfg
+            .shell
+            .env
+            .get("ZDOTDIR")
+            .cloned()
+            .or_else(|| std::env::var("ZDOTDIR").ok());
+        match kind.injection(zdotdir.as_deref()) {
+            Some(inj) => (args, env) = (inj.args, inj.env),
+            None => log::warn!(
+                "No se pudo escribir el script de integración de {}",
+                kind.name()
+            ),
         }
     }
-    tty::Shell::new(program, args)
+    (tty::Shell::new(program, args), kind, env)
 }
 
 impl Tab {
@@ -162,19 +180,28 @@ impl Tab {
             "TERM_PROGRAM_VERSION".into(),
             env!("CARGO_PKG_VERSION").into(),
         );
-        // Prompt de Garbo (lo pone la integración de bash; ver shell/garbo.bash).
+        // Prompt de Garbo (lo pone la integración del shell; ver shell/).
         if cfg.terminal.garbo_prompt {
             env.insert("GARBO_PROMPT".into(), "1".into());
         } else {
             env.remove("GARBO_PROMPT");
+        }
+        // Con las sugerencias de Garbo, la integración de fish apaga las suyas: se pisarían.
+        if cfg.terminal.autosuggest {
+            env.insert("GARBO_AUTOSUGGEST".into(), "1".into());
+        } else {
+            env.remove("GARBO_AUTOSUGGEST");
         }
         // No propagar al shell el filtro de drivers Vulkan que pone el renderer.
         for var in crate::renderer::env_overrides() {
             env.entry(var.to_string()).or_default();
         }
 
+        let (shell, kind, shell_env) = shell_command(cfg);
+        env.extend(shell_env);
+        crate::shell::set_current(kind);
         let opts = tty::Options {
-            shell: Some(shell_command(cfg)),
+            shell: Some(shell),
             working_directory: cwd,
             drain_on_exit: false,
             env,
@@ -188,13 +215,11 @@ impl Tab {
         let sender = pty_loop.sender();
         pty_loop.spawn();
 
-        let title = cfg
-            .shell
-            .program
-            .clone()
-            .or_else(|| std::env::var("SHELL").ok())
-            .and_then(|s| s.rsplit('/').next().map(str::to_owned))
-            .unwrap_or_else(|| "shell".into());
+        let title = shell_program(cfg)
+            .rsplit('/')
+            .next()
+            .unwrap_or("shell")
+            .to_owned();
 
         Ok(Self {
             id,
@@ -215,6 +240,7 @@ impl Tab {
             cwd_checked: None,
             title,
             child_pid,
+            shell: kind,
             exited: false,
         })
     }
@@ -265,7 +291,7 @@ impl Tab {
         input_for(&term, start)
     }
 
-    /// ¿Espera bash un comando (con la integración de Garbo)? Entre las marcas B y C.
+    /// ¿Espera el shell un comando (con la integración de Garbo)? Entre las marcas B y C.
     pub fn at_prompt(&self) -> bool {
         let waiting = self.blocks.lock().unwrap().input_start.is_some();
         waiting
@@ -280,7 +306,7 @@ impl Tab {
     pub fn edit_context(&self) -> crate::edit::Context {
         use std::os::fd::AsRawFd;
         if self.at_prompt() {
-            return crate::edit::Context::Prompt;
+            return crate::edit::Context::Prompt(self.shell);
         }
         let pgid = self
             .master

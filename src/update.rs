@@ -1,6 +1,7 @@
-//! Actualizaciones: consulta la última release en GitHub y, si el usuario lo pide, descarga
-//! el RPM, verifica su SHA-256 y su firma e instala con `pkexec dnf`.
-//! Usa `curl` (ya está en Fedora): la app no lleva ninguna librería de red ni TLS.
+//! Actualizaciones: consulta la última release en GitHub y, si el usuario lo pide, descarga el
+//! paquete de su sistema (RPM en Fedora, `.deb` en Debian y Ubuntu), verifica su SHA-256 y su firma
+//! con la clave de Garbo incorporada al binario e instala con `pkexec dnf` o `pkexec apt-get`.
+//! Usa `curl`: la app no lleva ninguna librería de red ni TLS.
 //! Coste: una consulta al arrancar y otra cada 24 h; el resto del tiempo el hilo duerme.
 
 use crate::terminal::UserEvent;
@@ -14,13 +15,65 @@ use winit::event_loop::EventLoopProxy;
 
 pub const REPO: &str = "garbanhh/garbo";
 const USER_AGENT: &str = "garbo-updater";
-const RPM_PUBLIC_KEY: Option<&str> = option_env!("GARBO_RPM_PUBLIC_KEY");
+/// Clave pública de Garbo (la misma firma los RPM y los `.deb`; el nombre es anterior a los `.deb`).
+const PUBLIC_KEY: Option<&str> = option_env!("GARBO_RPM_PUBLIC_KEY");
+
+/// Formato de paquete del sistema.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Format {
+    Rpm,
+    Deb,
+}
+
+impl Format {
+    /// Final del nombre del paquete en la release (`garbo-0.9.1-1.x86_64.rpm`,
+    /// `garbo_0.9.1-1_amd64.deb`).
+    fn suffix(self) -> String {
+        match self {
+            Format::Rpm => format!(".{}.rpm", std::env::consts::ARCH),
+            Format::Deb => format!("_{}.deb", deb_arch()),
+        }
+    }
+
+    /// Programas que hacen falta para descargar, verificar e instalar.
+    fn tools(self) -> [&'static str; 5] {
+        match self {
+            Format::Rpm => ["curl", "dnf", "pkexec", "rpmkeys", "sha256sum"],
+            Format::Deb => ["curl", "apt-get", "pkexec", "gpgv", "sha256sum"],
+        }
+    }
+
+    fn file_name(self) -> &'static str {
+        match self {
+            Format::Rpm => "garbo.rpm",
+            Format::Deb => "garbo.deb",
+        }
+    }
+}
+
+/// Arquitectura con el nombre de Debian.
+fn deb_arch() -> &'static str {
+    match std::env::consts::ARCH {
+        "x86_64" => "amd64",
+        "aarch64" => "arm64",
+        other => other,
+    }
+}
+
+/// Un paquete publicado: el archivo, su suma y, en los `.deb`, su firma aparte (la de los RPM va
+/// dentro del propio paquete).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Package {
+    pub url: String,
+    pub sha_url: String,
+    pub sig_url: Option<String>,
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Release {
     pub version: String,
-    pub rpm_url: Option<String>,
-    pub sha_url: Option<String>,
+    pub rpm: Option<Package>,
+    pub deb: Option<Package>,
     pub page: String,
 }
 
@@ -34,12 +87,18 @@ impl Release {
         format!("{action} {}", self.version)
     }
 
-    fn install_urls(&self) -> Option<(&str, &str)> {
-        let https = |url: &&str| url.starts_with("https://");
-        Some((
-            self.rpm_url.as_deref().filter(https)?,
-            self.sha_url.as_deref().filter(https)?,
-        ))
+    /// El paquete de ese formato, si todo lo necesario para instalarlo llega por HTTPS.
+    fn package(&self, format: Format) -> Option<&Package> {
+        let pkg = match format {
+            Format::Rpm => self.rpm.as_ref(),
+            Format::Deb => self.deb.as_ref(),
+        }?;
+        let https = |url: &str| url.starts_with("https://");
+        let signed = match format {
+            Format::Rpm => true,
+            Format::Deb => pkg.sig_url.as_deref().is_some_and(https),
+        };
+        (https(&pkg.url) && https(&pkg.sha_url) && signed).then_some(pkg)
     }
 }
 
@@ -150,29 +209,30 @@ pub fn parse_release(body: &[u8]) -> Option<Release> {
     let tag = v["tag_name"].as_str()?;
     let version = tag.trim_start_matches('v').to_string();
     let page = v["html_url"].as_str().unwrap_or_default().to_string();
-    let suffix = format!(".{}.rpm", std::env::consts::ARCH);
     let assets = v["assets"].as_array().cloned().unwrap_or_default();
-    let find = |pred: &dyn Fn(&str) -> bool| {
+    let url_of = |want: &str| {
         assets.iter().find_map(|a| {
-            let name = a["name"].as_str()?;
-            pred(name)
+            (a["name"].as_str()? == want)
                 .then(|| a["browser_download_url"].as_str().map(str::to_owned))
                 .flatten()
         })
     };
-    let rpm_name = assets
-        .iter()
-        .filter_map(|a| a["name"].as_str())
-        .find(|n| n.ends_with(&suffix))
-        .map(str::to_owned);
-    let rpm_url = rpm_name.as_ref().and_then(|n| find(&|name| name == n));
-    let sha_url = rpm_name
-        .as_ref()
-        .and_then(|n| find(&|name| name == format!("{n}.sha256")));
+    let package = |format: Format| {
+        let suffix = format.suffix();
+        let name = assets
+            .iter()
+            .filter_map(|a| a["name"].as_str())
+            .find(|n| n.ends_with(&suffix))?;
+        Some(Package {
+            url: url_of(name)?,
+            sha_url: url_of(&format!("{name}.sha256"))?,
+            sig_url: url_of(&format!("{name}.sig")),
+        })
+    };
     Some(Release {
         version,
-        rpm_url,
-        sha_url,
+        rpm: package(Format::Rpm),
+        deb: package(Format::Deb),
         page,
     })
 }
@@ -196,20 +256,31 @@ pub fn is_newer(candidate: &str, current: &str) -> bool {
     }
 }
 
-/// Se puede instalar automáticamente (Fedora/RPM con dnf y pkexec).
+/// Se puede instalar automáticamente: hay clave, el sistema tiene sus herramientas y la release
+/// trae su paquete.
 pub fn can_install(rel: &Release) -> bool {
-    static TOOLS_PRESENT: OnceLock<bool> = OnceLock::new();
-    trusted_key().is_some()
-        && rel.install_urls().is_some()
-        && *TOOLS_PRESENT.get_or_init(|| {
-            ["curl", "dnf", "pkexec", "rpmkeys", "sha256sum"]
-                .into_iter()
-                .all(which)
-        })
+    trusted_key().is_some() && system_format().is_some_and(|f| rel.package(f).is_some())
+}
+
+/// Formato de paquete de este sistema: `.deb` si Garbo se instaló así; si no, RPM con dnf o, en
+/// su defecto, `.deb` con apt. `None` si faltan las herramientas.
+fn system_format() -> Option<Format> {
+    static FORMAT: OnceLock<Option<Format>> = OnceLock::new();
+    *FORMAT.get_or_init(|| {
+        let has = |f: Format| f.tools().into_iter().all(which);
+        let deb_installed = Path::new("/var/lib/dpkg/info/garbo.list").exists();
+        if deb_installed && has(Format::Deb) {
+            Some(Format::Deb)
+        } else if has(Format::Rpm) {
+            Some(Format::Rpm)
+        } else {
+            has(Format::Deb).then_some(Format::Deb)
+        }
+    })
 }
 
 fn trusted_key() -> Option<&'static str> {
-    RPM_PUBLIC_KEY.filter(|key| !key.trim().is_empty())
+    PUBLIC_KEY.filter(|key| !key.trim().is_empty())
 }
 
 fn which(cmd: &str) -> bool {
@@ -238,12 +309,13 @@ pub fn start_install(rel: Release, proxy: EventLoopProxy<UserEvent>) -> io::Resu
 }
 
 fn install(rel: &Release, send: &dyn Fn(UpdateState)) -> Result<(), String> {
-    let (url, sha_url) = rel
-        .install_urls()
-        .ok_or("la versión necesita un RPM y su suma SHA-256 por HTTPS")?;
+    let format = system_format().ok_or("este sistema no tiene dnf ni apt con pkexec")?;
+    let pkg = rel.package(format).ok_or(
+        "la versión no trae un paquete para este sistema con su suma y su firma por HTTPS",
+    )?;
     let key = trusted_key().ok_or("esta compilación no tiene una clave de firma de Garbo")?;
-    let expected =
-        curl_bytes(&["--max-time", "30", "--", sha_url]).ok_or("no se pudo descargar la suma")?;
+    let expected = curl_bytes(&["--max-time", "30", "--", &pkg.sha_url])
+        .ok_or("no se pudo descargar la suma")?;
     let expected = parse_sha256(&expected).ok_or("la suma SHA-256 publicada no es válida")?;
 
     let dir = dirs::cache_dir()
@@ -254,24 +326,29 @@ fn install(rel: &Release, send: &dyn Fn(UpdateState)) -> Result<(), String> {
     let dir = fs::canonicalize(dir).map_err(|e| e.to_string())?;
     remove_stale_downloads(&dir);
     let staged = crate::temp_dir::TempDir::new_in(&dir).map_err(|e| e.to_string())?;
-    let path = staged.path().join("garbo.rpm");
-    let download = curl()
-        .args(["--max-time", "600", "-o"])
-        .arg(&path)
-        .args(["--", url])
-        .status()
-        .map_err(|e| e.to_string())?;
-    if !download.success() {
-        return Err("no se pudo descargar el RPM".into());
-    }
+    let path = staged.path().join(format.file_name());
+    download(&pkg.url, &path, 600).ok_or("no se pudo descargar el paquete")?;
     if sha256(&path)? != expected {
         return Err("la descarga no coincide con su suma de verificación".into());
     }
-    verify_signature(staged.path(), &path, key)?;
+    match (format, &pkg.sig_url) {
+        (Format::Rpm, _) => verify_rpm_signature(staged.path(), &path, key)?,
+        (Format::Deb, Some(sig_url)) => {
+            let sig = staged.path().join("garbo.deb.sig");
+            download(sig_url, &sig, 30).ok_or("no se pudo descargar la firma")?;
+            verify_deb_signature(staged.path(), &path, &sig, key)?;
+        }
+        (Format::Deb, None) => return Err("el paquete no trae firma".into()),
+    }
 
     send(UpdateState::Installing(rel.version.clone()));
+    // apt-get instala un archivo local si la ruta empieza por "/" (y resuelve sus dependencias).
+    let installer: &[&str] = match format {
+        Format::Rpm => &["dnf", "install", "-y"],
+        Format::Deb => &["apt-get", "install", "-y"],
+    };
     let status = Command::new("pkexec")
-        .args(["dnf", "install", "-y"])
+        .args(installer)
         .arg(&path)
         .status()
         .map_err(|e| e.to_string())?;
@@ -303,7 +380,54 @@ fn remove_stale_downloads(dir: &Path) {
     }
 }
 
-fn verify_signature(dir: &Path, rpm: &Path, key: &str) -> Result<(), String> {
+/// Descarga `url` en `path` (como mucho `secs` segundos).
+fn download(url: &str, path: &Path, secs: u32) -> Option<()> {
+    let status = curl()
+        .args(["--max-time", &secs.to_string(), "-o"])
+        .arg(path)
+        .args(["--", url])
+        .status()
+        .ok()?;
+    status.success().then_some(())
+}
+
+/// Firma aparte del `.deb` con `gpgv` y un llavero que solo tiene la clave de esta compilación.
+fn verify_deb_signature(dir: &Path, deb: &Path, sig: &Path, key: &str) -> Result<(), String> {
+    let keyring = dir.join("garbo.gpg");
+    let key = dearmor(key).ok_or("la clave de firma de Garbo no es válida")?;
+    fs::write(&keyring, key).map_err(|e| e.to_string())?;
+    let verified = Command::new("gpgv")
+        .arg("--keyring")
+        .arg(&keyring)
+        .arg(sig)
+        .arg(deb)
+        .output()
+        .map_err(|e| e.to_string())?;
+    if !verified.status.success() {
+        return Err("la firma del paquete no es válida para la clave de Garbo".into());
+    }
+    Ok(())
+}
+
+/// Clave OpenPGP en armadura ASCII a binario (`gpgv` solo lee llaveros binarios). Se quitan la
+/// cabecera, las líneas `Clave: valor`, las vacías y la suma `=XXXX` del final.
+fn dearmor(armored: &str) -> Option<Vec<u8>> {
+    use base64::Engine;
+    let body: String = armored
+        .lines()
+        .map(str::trim)
+        .skip_while(|l| !l.starts_with("-----BEGIN PGP PUBLIC KEY BLOCK-----"))
+        .skip(1)
+        .take_while(|l| !l.starts_with("-----END "))
+        .filter(|l| !l.is_empty() && !l.contains(':') && !l.starts_with('='))
+        .collect();
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(body)
+        .ok()?;
+    (!bytes.is_empty()).then_some(bytes)
+}
+
+fn verify_rpm_signature(dir: &Path, rpm: &Path, key: &str) -> Result<(), String> {
     let key_path = dir.join("garbo.asc");
     fs::write(&key_path, key).map_err(|e| e.to_string())?;
     let db = dir.join("rpmdb");
@@ -341,7 +465,7 @@ fn sha256(path: &Path) -> Result<String, String> {
         .output()
         .map_err(|e| e.to_string())?;
     if !out.status.success() {
-        return Err("no se pudo calcular la suma SHA-256 del RPM".into());
+        return Err("no se pudo calcular la suma SHA-256 del paquete".into());
     }
     parse_sha256(&out.stdout).ok_or_else(|| "sha256sum devolvió una suma no válida".into())
 }
@@ -355,7 +479,7 @@ fn parse_sha256(bytes: &[u8]) -> Option<String> {
         .then(|| sum.to_ascii_lowercase())
 }
 
-/// Ruta del binario para relanzar tras actualizar (el RPM instala en /usr/bin/garbo).
+/// Ruta del binario para relanzar tras actualizar (los paquetes instalan en /usr/bin/garbo).
 pub fn restart_path() -> PathBuf {
     let installed = PathBuf::from("/usr/bin/garbo");
     if installed.is_file() {
@@ -383,36 +507,94 @@ mod tests {
     #[test]
     fn lee_release_de_github() {
         let arch = std::env::consts::ARCH;
+        let deb = deb_arch();
         let json = format!(
             r#"{{"tag_name":"v0.3.0","html_url":"https://github.com/garbanhh/garbo/releases/tag/v0.3.0",
             "assets":[
               {{"name":"garbo-0.3.0-1.{arch}.rpm","browser_download_url":"https://x/garbo.rpm"}},
               {{"name":"garbo-0.3.0-1.{arch}.rpm.sha256","browser_download_url":"https://x/garbo.rpm.sha256"}},
+              {{"name":"garbo_0.3.0-1_{deb}.deb","browser_download_url":"https://x/garbo.deb"}},
+              {{"name":"garbo_0.3.0-1_{deb}.deb.sha256","browser_download_url":"https://x/garbo.deb.sha256"}},
+              {{"name":"garbo_0.3.0-1_{deb}.deb.sig","browser_download_url":"https://x/garbo.deb.sig"}},
               {{"name":"otro.zip","browser_download_url":"https://x/otro.zip"}}
             ]}}"#
         );
         let r = parse_release(json.as_bytes()).unwrap();
         assert_eq!(r.version, "0.3.0");
-        assert_eq!(r.rpm_url.as_deref(), Some("https://x/garbo.rpm"));
-        assert_eq!(r.sha_url.as_deref(), Some("https://x/garbo.rpm.sha256"));
+        let rpm = r.package(Format::Rpm).unwrap();
+        assert_eq!(rpm.url, "https://x/garbo.rpm");
+        assert_eq!(rpm.sha_url, "https://x/garbo.rpm.sha256");
+        let deb = r.package(Format::Deb).unwrap();
+        assert_eq!(deb.url, "https://x/garbo.deb");
+        assert_eq!(deb.sig_url.as_deref(), Some("https://x/garbo.deb.sig"));
         assert!(r.page.ends_with("v0.3.0"));
-        assert!(r.install_urls().is_some());
     }
 
     #[test]
-    fn instala_solo_con_rpm_y_suma_por_https() {
+    fn instala_solo_con_suma_y_firma_por_https() {
+        let pkg = |sha: &str, sig: Option<&str>| Package {
+            url: "https://example.org/garbo".into(),
+            sha_url: sha.into(),
+            sig_url: sig.map(str::to_owned),
+        };
         let mut release = Release {
             version: "0.9.0".into(),
-            rpm_url: Some("https://example.org/garbo.rpm".into()),
-            sha_url: None,
+            rpm: Some(pkg("http://example.org/garbo.rpm.sha256", None)),
+            deb: Some(pkg("https://example.org/garbo.deb.sha256", None)),
             page: "https://example.org/garbo".into(),
         };
-        assert!(release.install_urls().is_none());
-        assert!(!can_install(&release));
-        release.sha_url = Some("http://example.org/garbo.rpm.sha256".into());
-        assert!(release.install_urls().is_none());
-        release.sha_url = Some("https://example.org/garbo.rpm.sha256".into());
-        assert!(release.install_urls().is_some());
+        // Suma por HTTP: no. El .deb sin firma aparte: no (el RPM la lleva dentro).
+        assert!(release.package(Format::Rpm).is_none());
+        assert!(release.package(Format::Deb).is_none());
+        release.rpm = Some(pkg("https://example.org/garbo.rpm.sha256", None));
+        assert!(release.package(Format::Rpm).is_some());
+        release.deb = Some(pkg(
+            "https://example.org/garbo.deb.sha256",
+            Some("http://example.org/garbo.deb.sig"),
+        ));
+        assert!(release.package(Format::Deb).is_none());
+        release.deb = Some(pkg(
+            "https://example.org/garbo.deb.sha256",
+            Some("https://example.org/garbo.deb.sig"),
+        ));
+        assert!(release.package(Format::Deb).is_some());
+    }
+
+    /// Verificación real con `gpgv` de un `.deb` firmado aparte: `GARBO_TEST_DEB` (el paquete,
+    /// con su `.sig` al lado) y `GARBO_TEST_KEY` (la clave pública en armadura ASCII). Un byte
+    /// cambiado tiene que fallar. Se ejecuta a mano (ver docs/Procesos/Compilar y probar.md).
+    #[test]
+    #[ignore = "necesita gpgv, un paquete firmado y su clave"]
+    fn verifica_la_firma_de_un_deb() {
+        let deb = PathBuf::from(std::env::var("GARBO_TEST_DEB").unwrap());
+        let key = std::env::var("GARBO_TEST_KEY").unwrap();
+        let sig = deb.with_extension("deb.sig");
+        let dir = crate::temp_dir::TempDir::new_in(&std::env::temp_dir()).unwrap();
+        assert_eq!(verify_deb_signature(dir.path(), &deb, &sig, &key), Ok(()));
+        let mut bytes = fs::read(&deb).unwrap();
+        let mid = bytes.len() / 2;
+        bytes[mid] ^= 1;
+        let bad = dir.path().join("manipulado.deb");
+        fs::write(&bad, bytes).unwrap();
+        assert!(verify_deb_signature(dir.path(), &bad, &sig, &key).is_err());
+    }
+
+    #[test]
+    fn quita_la_armadura_de_la_clave() {
+        use base64::Engine;
+        let bytes: Vec<u8> = (0u8..=200).collect();
+        let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+        let lines: Vec<&str> = b64
+            .as_bytes()
+            .chunks(64)
+            .map(|c| std::str::from_utf8(c).unwrap())
+            .collect();
+        let armored = format!(
+            "-----BEGIN PGP PUBLIC KEY BLOCK-----\nComment: Garbo\n\n{}\n=AbCd\n-----END PGP PUBLIC KEY BLOCK-----\n",
+            lines.join("\n")
+        );
+        assert_eq!(dearmor(&armored), Some(bytes));
+        assert_eq!(dearmor("no es una clave"), None);
     }
 
     #[test]

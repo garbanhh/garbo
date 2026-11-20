@@ -567,7 +567,7 @@ impl App {
         if crate::edit::is_candidate(key, mods) || vertical {
             let ctx = tab.edit_context();
             let bytes = if vertical {
-                (ctx == crate::edit::Context::Prompt)
+                matches!(ctx, crate::edit::Context::Prompt(_))
                     .then(|| tab.vertical_moves(matches!(key, Key::Named(NamedKey::ArrowUp))))
                     .flatten()
             } else {

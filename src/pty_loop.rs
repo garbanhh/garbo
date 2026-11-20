@@ -16,11 +16,21 @@ use std::io::{self, ErrorKind, Read, Write};
 use std::num::NonZeroUsize;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
-const READ_BUFFER_SIZE: usize = 0x10_0000;
-/// Máximo de bytes procesados con el terminal bloqueado antes de soltarlo para la UI.
-const MAX_LOCKED_READ: usize = u16::MAX as usize;
+/// Máximo de bytes leídos y procesados de una vez, con el terminal bloqueado, antes de
+/// volver al bucle de eventos.
+const READ_BUFFER_SIZE: usize = 64 * 1024;
+/// Con salida abundante que llega en migajas (el programa escribe más despacio de lo que se
+/// lee), esperar un poco antes de volver a leer junta bloques más grandes. Con `seq 1 3000000`
+/// gasta un tercio menos de CPU y tarda lo mismo que la 0.9.1; sin esperar sería un 5 % más
+/// rápido pero con casi la misma CPU. El búfer del PTY en el kernel es pequeño: desde ~0,5 ms
+/// se llena y frena al programa. Si las lecturas son grandes, el programa va más rápido que
+/// nosotros y no se espera. Ver docs/Rendimiento.md.
+const COALESCE: Duration = Duration::from_micros(200);
+/// Tamaño mínimo del bloque y tamaño medio de lectura por debajo del cual se considera migaja.
+const COALESCE_MIN_BATCH: usize = 4096;
+const CRUMB: usize = 1024;
 // Mismos valores que los tokens (privados) de alacritty_terminal::tty.
 const PTY_READ_WRITE_TOKEN: usize = 0;
 const PTY_CHILD_EVENT_TOKEN: usize = 1;
@@ -147,56 +157,47 @@ impl<U: EventListener + Send + 'static> PtyLoop<U> {
         }
     }
 
-    fn pty_read(&mut self, state: &mut State, buf: &mut [u8]) -> io::Result<()> {
-        let mut unprocessed = 0;
-        let mut processed = 0;
-        // Reserva el siguiente turno del lock para la lectura del PTY.
-        let _lease = self.terminal.lease();
-        let mut terminal = None;
-
-        loop {
-            match self.pty.reader().read(&mut buf[unprocessed..]) {
-                Ok(0) if unprocessed == 0 => break,
-                Ok(got) => unprocessed += got,
-                Err(err) => match err.kind() {
-                    ErrorKind::Interrupted | ErrorKind::WouldBlock => {
-                        if unprocessed == 0 {
-                            break;
-                        }
-                    }
-                    _ => return Err(err),
-                },
+    /// Devuelve `true` si la salida llegó en migajas y conviene esperar `COALESCE`.
+    fn pty_read(&mut self, state: &mut State, buf: &mut [u8]) -> io::Result<bool> {
+        // Lee hasta vaciar el PTY o llenar el búfer y lo procesa todo de una vez. Con salida
+        // abundante el kernel entrega migajas de pocas decenas de bytes y procesarlas una a una
+        // costaba el doble de CPU. El terminal solo se bloquea para procesar, no mientras se
+        // lee, así que la UI puede dibujar entretanto.
+        let (mut len, mut reads) = (0, 0);
+        let mut error = None;
+        while len < buf.len() {
+            reads += 1;
+            match self.pty.reader().read(&mut buf[len..]) {
+                Ok(0) => break,
+                Ok(got) => len += got,
+                Err(err) if err.kind() == ErrorKind::Interrupted => {}
+                Err(err) if err.kind() == ErrorKind::WouldBlock => break,
+                Err(err) => {
+                    // Lo ya leído se procesa antes de informar del error (p. ej. EIO al salir).
+                    error = Some(err);
+                    break;
+                }
             }
-
-            let terminal = match &mut terminal {
-                Some(t) => t,
-                None => terminal.insert(match self.terminal.try_lock_unfair() {
-                    None if unprocessed >= READ_BUFFER_SIZE => self.terminal.lock_unfair(),
-                    None => continue,
-                    Some(t) => t,
-                }),
-            };
-
+        }
+        if len > 0 {
+            let mut terminal = self.terminal.lock();
             Self::feed(
                 state,
-                terminal,
-                &buf[..unprocessed],
+                &mut terminal,
+                &buf[..len],
                 &self.blocks,
                 &self.event_proxy,
             );
-            processed += unprocessed;
-            unprocessed = 0;
-
-            if processed >= MAX_LOCKED_READ {
-                break;
+            drop(terminal);
+            // Pedir redibujado salvo que todo fuese una actualización sincronizada pendiente.
+            if state.parser.sync_bytes_count() < len {
+                self.event_proxy.send_event(Event::Wakeup);
             }
         }
-
-        // Pedir redibujado salvo que todo fuese una actualización sincronizada pendiente.
-        if state.parser.sync_bytes_count() < processed && processed > 0 {
-            self.event_proxy.send_event(Event::Wakeup);
+        match error {
+            Some(err) => Err(err),
+            None => Ok(len >= COALESCE_MIN_BATCH && len < reads * CRUMB),
         }
-        Ok(())
     }
 
     fn pty_write(&mut self, state: &mut State) -> io::Result<()> {
@@ -239,7 +240,9 @@ impl<U: EventListener + Send + 'static> PtyLoop<U> {
                     log::error!("No se pudo registrar el PTY: {err}");
                     return;
                 }
-                let mut events = Events::with_capacity(NonZeroUsize::new(1024).unwrap());
+                // Dos fuentes propias (PTY y señal del hijo) y dos internas de `polling`
+                // (notificador y temporizador), que también ocupan sitio en la lista.
+                let mut events = Events::with_capacity(NonZeroUsize::new(4).unwrap());
 
                 'event_loop: loop {
                     // Despertar si vence el plazo de una actualización sincronizada.
@@ -270,6 +273,7 @@ impl<U: EventListener + Send + 'static> PtyLoop<U> {
                         break;
                     }
 
+                    let mut coalesce = false;
                     for event in events.iter() {
                         match event.key {
                             PTY_CHILD_EVENT_TOKEN => {
@@ -289,14 +293,17 @@ impl<U: EventListener + Send + 'static> PtyLoop<U> {
                                     continue;
                                 }
                                 if event.readable {
-                                    if let Err(err) = self.pty_read(&mut state, &mut buf) {
-                                        // Linux: EIO cuando el hijo cuelga; llegará el evento de salida.
-                                        #[cfg(target_os = "linux")]
-                                        if err.raw_os_error() == Some(libc::EIO) {
-                                            continue;
+                                    match self.pty_read(&mut state, &mut buf) {
+                                        Ok(crumbs) => coalesce |= crumbs,
+                                        Err(err) => {
+                                            // Linux: EIO cuando el hijo cuelga; llegará el evento de salida.
+                                            #[cfg(target_os = "linux")]
+                                            if err.raw_os_error() == Some(libc::EIO) {
+                                                continue;
+                                            }
+                                            log::error!("Error leyendo del PTY: {err}");
+                                            break 'event_loop;
                                         }
-                                        log::error!("Error leyendo del PTY: {err}");
-                                        break 'event_loop;
                                     }
                                 }
                                 if event.writable {
@@ -316,10 +323,191 @@ impl<U: EventListener + Send + 'static> PtyLoop<U> {
                         interest.writable = needs_write;
                         let _ = self.pty.reregister(&self.poll, interest, poll_opts);
                     }
+                    if coalesce {
+                        std::thread::sleep(COALESCE);
+                    }
                 }
 
                 let _ = self.pty.deregister(&self.poll);
             })
             .expect("no se pudo crear el hilo del PTY");
+    }
+}
+
+/// Para las pruebas de otros módulos: procesa `bytes` como si llegasen del PTY.
+#[cfg(test)]
+pub(crate) fn feed_for_tests<U: EventListener + Send + 'static>(
+    term: &mut Term<U>,
+    blocks: &Mutex<BlockState>,
+    bytes: &[u8],
+    proxy: &U,
+) {
+    PtyLoop::<U>::feed(&mut State::default(), term, bytes, blocks, proxy);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alacritty_terminal::event::VoidListener;
+    use alacritty_terminal::term::test::TermSize;
+
+    /// Avisa cuando el terminal contesta a la consulta de posición del cursor del final.
+    #[derive(Clone)]
+    struct Done(mpsc::Sender<Instant>);
+
+    impl EventListener for Done {
+        fn send_event(&self, event: Event) {
+            if let Event::PtyWrite(_) = event {
+                let _ = self.0.send(Instant::now());
+            }
+        }
+    }
+
+    fn cpu_time() -> f64 {
+        let mut ru: libc::rusage = unsafe { std::mem::zeroed() };
+        unsafe { libc::getrusage(libc::RUSAGE_SELF, &mut ru) };
+        let t = |tv: libc::timeval| tv.tv_sec as f64 + tv.tv_usec as f64 / 1e6;
+        t(ru.ru_utime) + t(ru.ru_stime)
+    }
+
+    /// Banco de medida del camino completo: `seq` real en un PTY, el bucle de lectura y el
+    /// terminal, sin ventana. Con «UI» otro hilo bloquea el terminal cada 16 ms y lo recorre,
+    /// como haría un fotograma.
+    /// `cargo test --release bench_ -- --ignored --nocapture --test-threads=1`
+    #[test]
+    #[ignore = "banco de medida"]
+    fn bench_pty_seq() {
+        use alacritty_terminal::event::WindowSize;
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let cfg = crate::config::Config::default();
+        let cmds = [
+            ("seq", "seq 1 3000000; printf '\\033[6n'; exec sleep 10"),
+            ("líneas largas", "yes \"$(head -c 3000 /dev/zero | tr '\\0' x)\" | head -n 8000; printf '\\033[6n'; exec sleep 10"),
+        ];
+        for (ui, (cmd_name, cmd)) in [(false, cmds[0]), (true, cmds[0]), (false, cmds[1])] {
+            let (mut walls, mut cpus) = (Vec::new(), Vec::new());
+            for _ in 0..5 {
+                let (tx, rx) = mpsc::channel();
+                let term = Arc::new(FairMutex::new(Term::new(
+                    crate::terminal::term_config(&cfg),
+                    &TermSize::new(180, 50),
+                    Done(tx.clone()),
+                )));
+                let ws = WindowSize {
+                    num_lines: 50,
+                    num_cols: 180,
+                    cell_width: 10,
+                    cell_height: 20,
+                };
+                let opts = tty::Options {
+                    shell: Some(tty::Shell::new("sh".into(), vec!["-c".into(), cmd.into()])),
+                    working_directory: None,
+                    drain_on_exit: false,
+                    env: Default::default(),
+                };
+                let stop = Arc::new(AtomicBool::new(false));
+                let frames = ui.then(|| {
+                    let (term, stop) = (term.clone(), stop.clone());
+                    std::thread::spawn(move || {
+                        let mut sum = 0u64;
+                        while !stop.load(Ordering::Relaxed) {
+                            std::thread::sleep(std::time::Duration::from_millis(16));
+                            let t = term.lock();
+                            for c in t.renderable_content().display_iter {
+                                sum = sum.wrapping_add(c.c as u64);
+                            }
+                        }
+                        sum
+                    })
+                });
+                let cpu0 = cpu_time();
+                let t = Instant::now();
+                let pty = tty::new(&opts, ws, 0).unwrap();
+                let blocks = Arc::new(Mutex::new(BlockState::new(pty.child().id())));
+                let lp = PtyLoop::new(term.clone(), Done(tx), pty, blocks).unwrap();
+                let sender = lp.sender();
+                lp.spawn();
+                let end = rx.recv_timeout(std::time::Duration::from_secs(60)).unwrap();
+                walls.push(end.duration_since(t).as_secs_f64());
+                cpus.push(cpu_time() - cpu0);
+                stop.store(true, Ordering::Relaxed);
+                if let Some(f) = frames {
+                    f.join().unwrap();
+                }
+                sender.send(Msg::Shutdown);
+            }
+            walls.sort_by(f64::total_cmp);
+            cpus.sort_by(f64::total_cmp);
+            eprintln!(
+                "pty {cmd_name} {}: mediana {:.3} s (de {:.3} a {:.3}), CPU {:.3} s",
+                if ui { "con UI" } else { "sin UI" },
+                walls[2],
+                walls[0],
+                walls[4],
+                cpus[2]
+            );
+        }
+    }
+
+    /// Banco de medida del procesado de la salida (escáner de marcas + parser + rejilla).
+    /// `cargo test --release bench_ -- --ignored --nocapture --test-threads=1`
+    #[test]
+    #[ignore = "banco de medida"]
+    fn bench_feed() {
+        let cfg = crate::config::Config::default();
+        let seq: Vec<u8> = (1..=3_000_000u32)
+            .flat_map(|n| format!("{n}\r\n").into_bytes())
+            .collect();
+        let colored: Vec<u8> = (0..400_000u32)
+            .flat_map(|n| {
+                format!(
+                    "\x1b[01;34mcarpeta{n}\x1b[0m  \x1b[38;5;{}march[{n}].rs\x1b[0m\r\n",
+                    n % 200
+                )
+                .into_bytes()
+            })
+            .collect();
+        for (name, data) in [("seq", &seq), ("colores", &colored)] {
+            let mut best = f64::MAX;
+            for _ in 0..3 {
+                let mut term = Term::new(
+                    crate::terminal::term_config(&cfg),
+                    &TermSize::new(180, 50),
+                    VoidListener,
+                );
+                let blocks = Mutex::new(BlockState::new(0));
+                let mut state = State::default();
+                let t = Instant::now();
+                for chunk in data.chunks(READ_BUFFER_SIZE) {
+                    PtyLoop::<VoidListener>::feed(
+                        &mut state,
+                        &mut term,
+                        chunk,
+                        &blocks,
+                        &VoidListener,
+                    );
+                }
+                best = best.min(t.elapsed().as_secs_f64());
+            }
+            eprintln!(
+                "feed {name:8}: {:.1} MB en {:.0} ms ({:.0} MB/s)",
+                data.len() as f64 / 1e6,
+                best * 1e3,
+                data.len() as f64 / 1e6 / best
+            );
+
+            let mut best = f64::MAX;
+            for _ in 0..3 {
+                let mut scanner = MarkScanner::default();
+                let mut marks = Vec::new();
+                let t = Instant::now();
+                for chunk in data.chunks(READ_BUFFER_SIZE) {
+                    marks.clear();
+                    scanner.scan(chunk, &mut marks);
+                }
+                best = best.min(t.elapsed().as_secs_f64());
+            }
+            eprintln!("  solo el escáner: {:.2} ms", best * 1e3);
+        }
     }
 }

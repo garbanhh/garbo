@@ -195,18 +195,19 @@ pub struct TerminalConfig {
     pub scroll_multiplier: f32,
     /// Copiar automáticamente al soltar la selección.
     pub copy_on_select: bool,
-    /// Inyectar la integración de shell (bash) que delimita los bloques de comandos.
+    /// Inyectar la integración de shell (bash, zsh o fish) que delimita los bloques de comandos.
     pub shell_integration: bool,
     /// Dibujar los bloques (separadores, estado, duración).
     pub blocks: bool,
-    /// Sugerir en gris el resto del comando a partir del historial (se acepta con →).
+    /// Sugerir en gris el resto del comando a partir del historial (se acepta con →). En fish
+    /// apaga sus sugerencias propias en las pestañas nuevas.
     pub autosuggest: bool,
     /// Qué hace Tab: abrir el menú de completado o aceptar la sugerencia.
     pub tab_key: TabKey,
     /// Abrir el menú de completado solo, mientras se escribe.
     pub complete_as_you_type: bool,
     /// Prompt de Garbo: la carpeta como etiqueta encima de lo que se escribe y, en los comandos ya
-    /// ejecutados, en gris con su duración (con la integración de bash; en pestañas nuevas).
+    /// ejecutados, en gris con su duración (con la integración del shell; en pestañas nuevas).
     pub garbo_prompt: bool,
 }
 

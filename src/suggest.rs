@@ -8,22 +8,24 @@
 //! Lo que se está escribiendo se lee de la propia pantalla: desde la marca OSC 133;B (fin del
 //! prompt) hasta el cursor. Por eso solo funciona con la integración de shell activa.
 //!
-//! Historial: `$HISTFILE` (o `~/.bash_history`), releído si cambia, más el historial propio de
-//! Garbo (`~/.local/share/garbo/history.tsv`), que guarda cada comando ejecutado con la carpeta
-//! donde se ejecutó (bash no la guarda).
+//! Historial: el del shell (bash: `$HISTFILE` o `~/.bash_history`; zsh: `~/.zsh_history`; fish:
+//! `~/.local/share/fish/fish_history`), releído si cambia, más el historial propio de Garbo
+//! (`~/.local/share/garbo/history.tsv`), que guarda cada comando ejecutado con la carpeta donde se
+//! ejecutó (los shells no la guardan).
 //!
 //! Para que lo sugerido tenga sentido:
 //!   - primero lo ejecutado en esta misma carpeta; después, lo de cualquier sitio;
 //!   - un `cd` a una ruta relativa solo se sugiere donde se hizo: `cd Proyectos` ejecutado en
 //!     ~/Documentos no se ofrece en ~ aunque exista ~/Proyectos (otra carpeta con el mismo nombre);
-//!   - solo líneas cuya primera palabra se puede ejecutar (programa del PATH, orden interna de bash,
-//!     o alias/función de los archivos de arranque): fuera erratas y fallos;
+//!   - solo líneas cuya primera palabra se puede ejecutar (programa del PATH, orden interna del
+//!     shell, o alias/función de sus archivos de arranque): fuera erratas y fallos;
 //!   - `cd X` solo si X existe desde el directorio actual;
 //!   - hacen falta al menos 2 caracteres escritos;
 //!   - los comandos que acaban en "orden no encontrada" (126/127) no se guardan;
 //!   - nada mientras readline reescribe la línea (búsqueda con Ctrl+R).
 
 use crate::complete::Kind;
+use crate::shell::Shell;
 use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::index::{Column, Line};
 use alacritty_terminal::term::cell::Flags;
@@ -48,6 +50,205 @@ const KNOWN_EVERY: Duration = Duration::from_secs(60);
 const CACHE_FOR: Duration = Duration::from_secs(1);
 /// Caracteres escritos necesarios para sugerir.
 const MIN_PREFIX: usize = 2;
+
+/// Órdenes internas y palabras clave de zsh (`${(k)builtins} ${(k)reswords}`, zsh 5.9).
+const ZSH_BUILTINS: &[&str] = &[
+    "!",
+    ".",
+    ":",
+    "[",
+    "[[",
+    "{",
+    "}",
+    "alias",
+    "autoload",
+    "bg",
+    "bindkey",
+    "break",
+    "builtin",
+    "bye",
+    "case",
+    "cd",
+    "chdir",
+    "command",
+    "compadd",
+    "comparguments",
+    "compcall",
+    "compctl",
+    "compdescribe",
+    "compfiles",
+    "compgroups",
+    "compquote",
+    "compset",
+    "comptags",
+    "comptry",
+    "compvalues",
+    "continue",
+    "coproc",
+    "declare",
+    "dirs",
+    "disable",
+    "disown",
+    "do",
+    "done",
+    "echo",
+    "echotc",
+    "echoti",
+    "elif",
+    "else",
+    "emulate",
+    "enable",
+    "end",
+    "esac",
+    "eval",
+    "exec",
+    "exit",
+    "export",
+    "false",
+    "fc",
+    "fg",
+    "fi",
+    "float",
+    "for",
+    "foreach",
+    "function",
+    "functions",
+    "getln",
+    "getopts",
+    "hash",
+    "history",
+    "if",
+    "integer",
+    "jobs",
+    "kill",
+    "let",
+    "limit",
+    "local",
+    "log",
+    "logout",
+    "nocorrect",
+    "noglob",
+    "popd",
+    "print",
+    "printf",
+    "private",
+    "pushd",
+    "pushln",
+    "pwd",
+    "r",
+    "read",
+    "readonly",
+    "rehash",
+    "repeat",
+    "return",
+    "sched",
+    "select",
+    "set",
+    "setopt",
+    "shift",
+    "source",
+    "suspend",
+    "test",
+    "then",
+    "time",
+    "times",
+    "trap",
+    "true",
+    "ttyctl",
+    "type",
+    "typeset",
+    "ulimit",
+    "umask",
+    "unalias",
+    "unfunction",
+    "unhash",
+    "unlimit",
+    "unset",
+    "unsetopt",
+    "until",
+    "vared",
+    "wait",
+    "whence",
+    "where",
+    "which",
+    "while",
+    "zcompile",
+    "zformat",
+    "zle",
+    "zmodload",
+    "zparseopts",
+    "zregexparse",
+    "zstyle",
+];
+
+/// Órdenes internas de fish (`builtin -n`, fish 4.6). Sus funciones de serie (`alias`, `funced`,
+/// `fish_add_path`…) salen de las carpetas de funciones.
+const FISH_BUILTINS: &[&str] = &[
+    "!",
+    ".",
+    ":",
+    "[",
+    "_",
+    "abbr",
+    "and",
+    "argparse",
+    "begin",
+    "bg",
+    "bind",
+    "block",
+    "break",
+    "breakpoint",
+    "builtin",
+    "case",
+    "cd",
+    "command",
+    "commandline",
+    "complete",
+    "contains",
+    "continue",
+    "count",
+    "disown",
+    "echo",
+    "else",
+    "emit",
+    "end",
+    "eval",
+    "exec",
+    "exit",
+    "false",
+    "fg",
+    "fish_indent",
+    "fish_key_reader",
+    "for",
+    "function",
+    "functions",
+    "history",
+    "if",
+    "jobs",
+    "math",
+    "not",
+    "or",
+    "path",
+    "printf",
+    "pwd",
+    "random",
+    "read",
+    "realpath",
+    "return",
+    "set",
+    "set_color",
+    "source",
+    "status",
+    "string",
+    "switch",
+    "test",
+    "time",
+    "true",
+    "type",
+    "ulimit",
+    "wait",
+    "while",
+];
 
 /// Órdenes internas y palabras clave de bash.
 const BUILTINS: &[&str] = &[
@@ -76,11 +277,12 @@ struct Record {
 struct History {
     /// De más antiguo a más reciente, sin repetidos.
     entries: Vec<Entry>,
-    /// Líneas del historial de bash.
-    bash: Vec<String>,
+    /// Comandos del historial del shell.
+    shell: Vec<String>,
     /// Historial propio, de más antiguo a más reciente.
     garbo: Vec<Record>,
-    bash_mtime: Option<SystemTime>,
+    /// Archivo del historial del shell leído y su fecha.
+    shell_file: Option<(PathBuf, Option<SystemTime>)>,
     garbo_mtime: Option<SystemTime>,
     garbo_loaded: bool,
     checked: Option<Instant>,
@@ -90,17 +292,112 @@ struct History {
 
 static HISTORY: Mutex<Option<History>> = Mutex::new(None);
 
-fn history_file() -> Option<PathBuf> {
-    std::env::var_os("HISTFILE")
-        .map(PathBuf::from)
-        .or_else(|| dirs::home_dir().map(|h| h.join(".bash_history")))
+/// Archivo de historial del shell en uso.
+fn history_file(shell: Shell) -> Option<PathBuf> {
+    let home = dirs::home_dir()?;
+    match shell {
+        Shell::Bash | Shell::Other => Some(
+            std::env::var_os("HISTFILE")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| home.join(".bash_history")),
+        ),
+        // `HISTFILE` lo pone cada .zshrc (sin exportarlo): los nombres habituales, el más reciente.
+        Shell::Zsh => {
+            let dir = std::env::var_os("ZDOTDIR").map_or(home, PathBuf::from);
+            [".zsh_history", ".zhistory", ".histfile"]
+                .iter()
+                .map(|f| dir.join(f))
+                .filter_map(|p| Some((mtime(&p)?, p)))
+                .max()
+                .map(|(_, p)| p)
+        }
+        Shell::Fish => Some(dirs::data_dir()?.join("fish").join("fish_history")),
+    }
+}
+
+/// Comandos de un archivo de historial, del más antiguo al más reciente. Los de varias líneas se
+/// descartan (no se sugieren).
+fn parse_shell_history(shell: Shell, bytes: &[u8]) -> Vec<String> {
+    match shell {
+        Shell::Bash | Shell::Other => String::from_utf8_lossy(bytes)
+            .lines()
+            .filter(|l| !is_timestamp(l))
+            .map(str::to_string)
+            .collect(),
+        Shell::Zsh => parse_zsh_history(bytes),
+        Shell::Fish => parse_fish_history(&String::from_utf8_lossy(bytes)),
+    }
+}
+
+/// zsh: una línea por comando, con `: inicio:duración;` delante si usa EXTENDED_HISTORY; una
+/// barra al final de la línea sigue el comando en la siguiente. Algunos bytes van "metafied":
+/// 0x83 y luego el byte con el bit 0x20 cambiado.
+fn parse_zsh_history(bytes: &[u8]) -> Vec<String> {
+    let mut raw = Vec::with_capacity(bytes.len());
+    let mut it = bytes.iter();
+    while let Some(&b) = it.next() {
+        match b {
+            0x83 => raw.extend(it.next().map(|n| n ^ 0x20)),
+            _ => raw.push(b),
+        }
+    }
+    let text = String::from_utf8_lossy(&raw);
+    let mut out = Vec::new();
+    let mut continued = false;
+    for line in text.lines() {
+        let multi = continued;
+        continued = line.ends_with('\\');
+        if multi || continued {
+            continue;
+        }
+        let extended = line.strip_prefix(": ").and_then(|r| r.split_once(';'));
+        let cmd = match extended {
+            Some((when, cmd)) if when.bytes().all(|b| b.is_ascii_digit() || b == b':') => cmd,
+            _ => line,
+        };
+        out.push(cmd.to_string());
+    }
+    out
+}
+
+/// fish: `- cmd: orden` seguido de `when:` y `paths:` con sangría; `\\` y `\n` escapados.
+fn parse_fish_history(text: &str) -> Vec<String> {
+    text.lines()
+        .filter_map(|l| l.strip_prefix("- cmd: "))
+        .filter_map(|c| {
+            let mut out = String::with_capacity(c.len());
+            let mut chars = c.chars();
+            while let Some(ch) = chars.next() {
+                if ch != '\\' {
+                    out.push(ch);
+                } else if chars.next() == Some('\\') {
+                    out.push('\\');
+                } else {
+                    return None; // \n: varias líneas
+                }
+            }
+            Some(out)
+        })
+        .collect()
 }
 
 /// Historial propio de Garbo (`GARBO_HISTORY` para usar otro archivo).
+#[cfg(not(test))]
 fn garbo_history_file() -> Option<PathBuf> {
     std::env::var_os("GARBO_HISTORY")
         .map(PathBuf::from)
         .or_else(|| dirs::data_dir().map(|d| d.join("garbo").join("history.tsv")))
+}
+
+/// En las pruebas, nunca el historial real: las que aplican marcas de bloques anotan comandos.
+#[cfg(test)]
+fn garbo_history_file() -> Option<PathBuf> {
+    Some(history_path_for_tests())
+}
+
+#[cfg(test)]
+pub fn history_path_for_tests() -> PathBuf {
+    std::env::temp_dir().join(format!("garbo-pruebas-{}.tsv", std::process::id()))
 }
 
 fn mtime(path: &Path) -> Option<SystemTime> {
@@ -159,18 +456,18 @@ impl History {
         }
         self.checked = Some(now);
         let mut changed = false;
-        if let Some(path) = history_file() {
+        let shell = crate::shell::current();
+        if let Some(path) = history_file(shell) {
             let m = mtime(&path);
-            if m.is_some() && m != self.bash_mtime {
-                self.bash_mtime = m;
-                let text = std::fs::read(&path)
-                    .map(|b| String::from_utf8_lossy(&b).into_owned())
+            let seen = self
+                .shell_file
+                .as_ref()
+                .is_some_and(|(p, t)| *p == path && *t == m);
+            if !seen {
+                self.shell = std::fs::read(&path)
+                    .map(|b| parse_shell_history(shell, &b))
                     .unwrap_or_default();
-                self.bash = text
-                    .lines()
-                    .filter(|l| !is_timestamp(l))
-                    .map(str::to_string)
-                    .collect();
+                self.shell_file = Some((path, m));
                 changed = true;
             }
         }
@@ -188,8 +485,8 @@ impl History {
         }
     }
 
-    /// Une los dos historiales: el de bash primero y el propio después (es el más reciente: bash
-    /// solo escribe su archivo al salir).
+    /// Une los dos historiales: el del shell primero y el propio después (es el más reciente: bash
+    /// y zsh suelen escribir su archivo al salir).
     fn rebuild(&mut self) {
         let mut dirs: HashMap<&str, Vec<PathBuf>> = HashMap::new();
         for r in self.garbo.iter().rev() {
@@ -201,7 +498,7 @@ impl History {
             }
         }
         let cmds = dedup(
-            self.bash
+            self.shell
                 .iter()
                 .cloned()
                 .chain(self.garbo.iter().map(|r| r.cmd.clone())),
@@ -284,9 +581,15 @@ struct Known {
 static KNOWN: Mutex<Option<Known>> = Mutex::new(None);
 
 /// Programas del PATH (y carpetas habituales del usuario), órdenes internas, y alias y funciones de
-/// los archivos de arranque de bash.
+/// los archivos de arranque del shell en uso.
 fn build_known() -> HashMap<String, Kind> {
-    let mut names: HashMap<String, Kind> = BUILTINS
+    let shell = crate::shell::current();
+    let builtins = match shell {
+        Shell::Zsh => ZSH_BUILTINS,
+        Shell::Fish => FISH_BUILTINS,
+        Shell::Bash | Shell::Other => BUILTINS,
+    };
+    let mut names: HashMap<String, Kind> = builtins
         .iter()
         .map(|s| (s.to_string(), Kind::Builtin))
         .collect();
@@ -308,12 +611,60 @@ fn build_known() -> HashMap<String, Kind> {
             }
         }
     }
-    let mut rc: Vec<PathBuf> = [".bashrc", ".bash_aliases", ".bash_profile", ".profile"]
-        .iter()
-        .map(|f| home.join(f))
-        .collect();
-    rc.push(PathBuf::from("/etc/bashrc"));
-    for dir in [home.join(".bashrc.d"), PathBuf::from("/etc/profile.d")] {
+    let (files, rc_dirs): (Vec<PathBuf>, Vec<PathBuf>) = match shell {
+        Shell::Zsh => {
+            let z = std::env::var_os("ZDOTDIR").map_or(home.clone(), PathBuf::from);
+            (
+                [
+                    ".zshrc",
+                    ".zshenv",
+                    ".zprofile",
+                    ".zlogin",
+                    ".zsh_aliases",
+                    ".aliases",
+                ]
+                .iter()
+                .map(|f| z.join(f))
+                .chain(["/etc/zshrc", "/etc/zshenv", "/etc/zprofile"].map(PathBuf::from))
+                .collect(),
+                vec![z.join(".zshrc.d"), home.join(".oh-my-zsh/custom")],
+            )
+        }
+        Shell::Fish => {
+            let conf = dirs::config_dir().unwrap_or_default().join("fish");
+            // Cada archivo de las carpetas de funciones define la función de su nombre.
+            for d in [
+                conf.join("functions"),
+                PathBuf::from("/etc/fish/functions"),
+                PathBuf::from("/usr/share/fish/functions"),
+                PathBuf::from("/usr/share/fish/vendor_functions.d"),
+            ] {
+                for e in std::fs::read_dir(d).into_iter().flatten().flatten() {
+                    let p = e.path();
+                    if let (Some(stem), Some("fish")) = (
+                        p.file_stem().and_then(|s| s.to_str()),
+                        p.extension().and_then(|s| s.to_str()),
+                    ) {
+                        names.entry(stem.to_string()).or_insert(Kind::Alias);
+                    }
+                }
+            }
+            (
+                vec![conf.join("config.fish")],
+                vec![conf.join("conf.d"), PathBuf::from("/etc/fish/conf.d")],
+            )
+        }
+        Shell::Bash | Shell::Other => (
+            [".bashrc", ".bash_aliases", ".bash_profile", ".profile"]
+                .iter()
+                .map(|f| home.join(f))
+                .chain([PathBuf::from("/etc/bashrc")])
+                .collect(),
+            vec![home.join(".bashrc.d"), PathBuf::from("/etc/profile.d")],
+        ),
+    };
+    let mut rc = files;
+    for dir in rc_dirs {
         if let Ok(rd) = std::fs::read_dir(dir) {
             rc.extend(rd.flatten().map(|e| e.path()));
         }
@@ -343,7 +694,8 @@ pub fn with_known<R>(f: impl FnOnce(&HashMap<String, Kind>) -> R) -> R {
     f(&known.as_ref().unwrap().names)
 }
 
-/// Nombre que define una línea de un archivo de arranque: `alias x=…`, `function x`, `x() {`.
+/// Nombre que define una línea de un archivo de arranque: `alias x=…` (bash, zsh), `alias x …`
+/// (fish), `abbr -a x …` (fish), `function x`, `x() {`.
 fn defined_name(line: &str) -> Option<String> {
     let l = line.trim();
     let ident = |s: &str| {
@@ -351,11 +703,26 @@ fn defined_name(line: &str) -> Option<String> {
             .chars()
             .take_while(|c| c.is_alphanumeric() || "_-.:".contains(*c))
             .collect();
-        (!n.is_empty()).then_some(n)
+        (!n.is_empty() && !n.starts_with('-')).then_some(n)
+    };
+    // Tras la palabra clave, el primer argumento que no es una opción (`alias -g`, `abbr --add`).
+    let first_arg = |rest: &str| {
+        rest.split_whitespace()
+            .find(|w| !w.starts_with('-'))
+            .and_then(|w| ident(w.split('=').next()?))
     };
     if let Some(rest) = l.strip_prefix("alias ") {
-        let rest = rest.trim_start().trim_start_matches("-- ");
-        return rest.split_once('=').and_then(|(n, _)| ident(n.trim()));
+        return first_arg(rest);
+    }
+    if let Some(rest) = l.strip_prefix("abbr ") {
+        // `abbr -a x …`; `abbr -e x` borra y `abbr --list` no define nada.
+        let w: Vec<&str> = rest.split_whitespace().collect();
+        if w.iter()
+            .any(|o| matches!(*o, "-e" | "--erase" | "-l" | "--list" | "-s" | "--show"))
+        {
+            return None;
+        }
+        return first_arg(rest);
     }
     if let Some(rest) = l.strip_prefix("function ") {
         return ident(rest.trim());
@@ -582,9 +949,13 @@ pub fn current_input<T>(term: &Term<T>, start: (i64, usize)) -> Option<String> {
         }
         l += 1;
     }
-    // Detrás del cursor no puede haber nada escrito.
+    // Detrás del cursor no puede haber nada escrito (el prompt derecho no cuenta).
     let row = &term.grid()[cur.line];
-    if (cur.column.0..cols).any(|c| cell_char(row[Column(c)].c) != ' ') || readline_mode(&s) {
+    let written = |c: usize| {
+        let cell = &row[Column(c)];
+        cell_char(cell.c) != ' ' && !crate::blocks::is_right_prompt(cell)
+    };
+    if (cur.column.0..cols).any(written) || readline_mode(&s) {
         return None;
     }
     Some(s)
@@ -645,7 +1016,9 @@ pub fn executed_command<T>(term: &Term<T>, start: (i64, usize)) -> Option<String
         let mut line = String::new();
         for c in from..cols {
             let cell = &row[Column(c)];
-            if !cell
+            if crate::blocks::is_right_prompt(cell) {
+                line.push(' ');
+            } else if !cell
                 .flags
                 .intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER)
             {
@@ -673,9 +1046,60 @@ pub fn executed_command<T>(term: &Term<T>, start: (i64, usize)) -> Option<String
 mod tests {
     use super::*;
 
+    #[test]
+    fn lee_el_historial_de_zsh() {
+        // Con EXTENDED_HISTORY, sin él, un comando de dos líneas y "ñ€" con el byte 0x82 de "€"
+        // guardado como 0x83 0xA2 (metafied).
+        let mut bytes = b": 1700000000:0;git status\nls -la\n: 1700000001:3;for i in 1 2; do\\\necho $i; done\n: 1700000002:0;echo \xc3\xb1\xe2".to_vec();
+        bytes.extend_from_slice(&[0x83, 0x82 ^ 0x20, 0xac, b'\n']);
+        bytes.extend_from_slice(b": no es extendido;x\n");
+        assert_eq!(
+            parse_zsh_history(&bytes),
+            ["git status", "ls -la", "echo ñ€", ": no es extendido;x"]
+        );
+    }
+
+    #[test]
+    fn lee_el_historial_de_fish() {
+        let text = "- cmd: cargo build\n  when: 1700000000\n- cmd: echo a\\\\b\n  when: 1\n  paths:\n    - b\n- cmd: echo uno\\necho dos\n  when: 2\n";
+        assert_eq!(parse_fish_history(text), ["cargo build", "echo a\\b"]);
+    }
+
+    #[test]
+    fn nombres_definidos_en_los_archivos_de_arranque() {
+        let names: Vec<Option<String>> = [
+            "alias ll='ls -l'",
+            "alias -- gs='git status'",
+            "alias -g G='| grep'",
+            "alias la 'ls -a'",
+            "abbr -a gco git checkout",
+            "abbr --add --global ga git add",
+            "abbr -e gco",
+            "function mkcd --description 'crea y entra'",
+            "mkcd() {",
+            "export PATH=x",
+        ]
+        .iter()
+        .map(|l| defined_name(l))
+        .collect();
+        let want = [
+            Some("ll"),
+            Some("gs"),
+            Some("G"),
+            Some("la"),
+            Some("gco"),
+            Some("ga"),
+            None,
+            Some("mkcd"),
+            Some("mkcd"),
+            None,
+        ];
+        assert_eq!(names, want.map(|n| n.map(str::to_string)));
+    }
+
     fn history(bash: &[&str], garbo: &[(&str, Option<&str>)]) -> History {
         let mut h = History {
-            bash: bash
+            shell: bash
                 .iter()
                 .filter(|l| !is_timestamp(l))
                 .map(|s| s.to_string())

@@ -54,21 +54,28 @@
   seleccionado, busca solo en él.
 - **Texto impecable.** Emoji a color (también COLRv1), CJK, *true color*, estilos de subrayado y
   caracteres de cajas dibujados al píxel.
-- **Actualizaciones.** Avisa de las versiones nuevas y permite instalar desde Garbo cuando el RPM está firmado.
+- **Actualizaciones.** Avisa de las versiones nuevas y permite instalarlas desde Garbo cuando el
+  paquete (RPM o `.deb`) está firmado.
 
 ## Instalación
 
-Descarga el paquete `.rpm` de la [última versión](https://github.com/garbanhh/garbo/releases/latest)
-e instálalo con:
+Descarga el paquete de la [última versión](https://github.com/garbanhh/garbo/releases/latest) para
+tu sistema e instálalo:
 
 ```bash
+# Fedora y derivadas (.rpm)
 sudo dnf install ./garbo-*.x86_64.rpm
+
+# Debian 12 o posterior, Ubuntu 22.04 o posterior y derivadas (.deb)
+sudo apt install ./garbo_*_amd64.deb
 ```
 
-Garbo aparece en el menú de aplicaciones. La aplicación avisa cuando hay una versión nueva.
+Garbo aparece en el menú de aplicaciones. La aplicación avisa cuando hay una versión nueva y la
+instala con el gestor de paquetes del sistema, tras comprobar la suma SHA-256 y la firma.
 
 **Requisitos:** Linux con Wayland o X11 (desarrollada y probada en Fedora 45 con GNOME) y una GPU
-con Vulkan u OpenGL. Los bloques de comandos, las sugerencias y el completado usan bash.
+con Vulkan u OpenGL. Los bloques de comandos, las sugerencias y el completado funcionan con bash,
+zsh y fish.
 
 ## Uso
 
@@ -146,17 +153,19 @@ usado que empieza igual: primero lo ejecutado en la carpeta actual y, si no, lo 
 historial no tiene nada, sugiere el único candidato del completado (`cd Doc` → `umentos/`).
 
 Garbo guarda su propio historial en `~/.local/share/garbo/history.tsv`, con la carpeta de cada
-comando, y lo combina con `~/.bash_history`. Un `cd` a una ruta relativa solo se sugiere en la
-carpeta donde se hizo, y solo se sugieren comandos que se pueden ejecutar (programas del `PATH`,
-órdenes internas de bash, alias y funciones de `~/.bashrc`). Los comandos que empiezan por un
-espacio no se guardan.
+comando, y lo combina con el del shell (`~/.bash_history`, `~/.zsh_history` o el de fish). Un `cd`
+a una ruta relativa solo se sugiere en la carpeta donde se hizo, y solo se sugieren comandos que se
+pueden ejecutar (programas del `PATH`, órdenes internas del shell, alias y funciones de sus
+archivos de arranque). Los comandos que empiezan por un espacio no se guardan. En fish, mientras
+la sugerencia de Garbo esté activada, se apaga la sugerencia propia de fish en sus pestañas, porque
+ocuparían el mismo sitio.
 
 En *Ajustes → Completado* se puede desactivar la sugerencia en gris, hacer que `Tab` la acepte (el
 menú pasa a `Ctrl+Espacio`) y abrir el menú automáticamente mientras se escribe.
 
 ### Edición de la línea
 
-Garbo añade a bash los atajos de edición de Warp. `Shift+Intro` parte el comando en varias líneas
+Garbo añade al shell los atajos de edición de Warp. `Shift+Intro` parte el comando en varias líneas
 sin ejecutarlo; al pulsar `Intro` se ejecutan todas, una tras otra. En un comando de varias líneas,
 `↑` y `↓` cambian de línea; en la primera y en la última recorren el historial como siempre. Un
 clic en lo escrito lleva el cursor a ese punto. `Ctrl+Retroceso` y `Ctrl+Supr` borran por palabras
@@ -198,9 +207,13 @@ Un bloque se selecciona con `Ctrl+Shift+↑` / `Ctrl+Shift+↓` o con un clic en
 Con un bloque seleccionado, `Ctrl+Shift+C` copia el bloque completo y `Ctrl+Shift+O` su salida; la
 paleta de comandos permite además copiar solo el comando.
 
-La integración funciona con bash sin tocar su configuración: Garbo lo inicia con `--rcfile`
-apuntando a [`shell/garbo.bash`](shell/garbo.bash), que carga `~/.bashrc` y marca con OSC 133 el
-prompt, el comando y su salida. Cada bloque queda anclado al propio texto de la rejilla, así que
+La integración funciona con bash, zsh y fish sin tocar su configuración. Garbo inicia bash con
+`--rcfile` apuntando a [`shell/garbo.bash`](shell/garbo.bash), que carga `~/.bashrc`; zsh, con un
+`ZDOTDIR` propio ([`shell/zsh/.zshenv`](shell/zsh/.zshenv)) que lo devuelve a su valor y carga los
+archivos de siempre antes de [`shell/garbo.zsh`](shell/garbo.zsh); y fish, con `--init-command`,
+que carga [`shell/garbo.fish`](shell/garbo.fish) después de `config.fish`. Los tres marcan con
+OSC 133 el prompt, el comando y su salida (fish 4 ya lo hace por sí mismo), y también el prompt
+derecho de zsh y fish, para que no se tome por parte del comando. Cada bloque queda anclado al propio texto de la rejilla, así que
 conserva su sitio al desplazarse, al recortarse el historial y al redimensionar. Se desactiva con
 `shell_integration = false`, o solo su aspecto con `blocks = false`.
 
@@ -253,9 +266,11 @@ El archivo es `~/.config/garbo/config.toml`; todas las opciones están explicada
 ## Actualizaciones
 
 Garbo consulta las versiones publicadas en GitHub al iniciarse y cada 24 horas. En una compilación
-con la clave pública de Garbo, **Actualizar a X.Y.Z** descarga el RPM y comprueba su suma SHA-256
-y su firma antes de llamar a `pkexec dnf`. **Ver versión X.Y.Z** abre la página de GitHub para
-instalarla manualmente si faltan la clave, las herramientas o los archivos necesarios. La consulta
+con la clave pública de Garbo, **Actualizar a X.Y.Z** descarga el paquete del sistema y comprueba
+su suma SHA-256 y su firma antes de instalarlo: el RPM con `rpmkeys` y `pkexec dnf`, y el `.deb`
+con su firma aparte (`.sig`), `gpgv` y `pkexec apt-get`. En ambos casos solo se acepta la clave
+incorporada a la compilación. **Ver versión X.Y.Z** abre la página de GitHub para instalarla
+manualmente si faltan la clave, las herramientas o los archivos necesarios. La consulta
 automática se puede desactivar en Ajustes.
 
 ## Rendimiento
@@ -291,7 +306,7 @@ cargo build --release
 - `GARBO_SCREENSHOT=/ruta/captura.ppm` guarda cada fotograma en disco.
 - `GARBO_GPU_DEBUG=1` activa las capas de validación de la GPU.
 - `RUST_LOG=debug` aumenta el nivel de registro.
-- `scripts/publicar.sh X.Y.Z` publica una versión: GitHub Actions genera el paquete RPM.
+- `scripts/publicar.sh X.Y.Z` publica una versión: GitHub Actions genera los paquetes RPM y `.deb`.
 
 <details>
 <summary><strong>Estructura del código</strong></summary>
@@ -304,6 +319,7 @@ src/
   terminal.rs     pestaña: PTY, estado del terminal (alacritty_terminal) y bloques
   pty_loop.rs     E/S del PTY y detección de marcas OSC 133
   blocks.rs       bloques de comandos: marcas, anclas, rangos y copia
+  shell.rs        bash, zsh y fish: detección y carga de la integración
   renderer.rs     renderizador wgpu
   shader.wgsl     primitivas: rectángulos redondeados, glifos, emoji, arcos y segmentos
   atlas.rs        atlas de glifos
@@ -327,7 +343,7 @@ src/
   notify.rs       avisos del escritorio cuando un agente termina
   activation.rs   traer la ventana al frente al pulsar un aviso (Wayland)
   panel.rs        panel lateral de agentes y puertos, con vista previa al pasar el ratón
-shell/            integración con bash
+shell/            integración con bash, zsh y fish
 packaging/        icono, entrada de escritorio y metadatos AppStream
 assets/           logo y capturas del README
 scripts/          publicación de versiones

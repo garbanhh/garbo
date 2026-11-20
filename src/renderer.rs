@@ -4,6 +4,7 @@
 use crate::atlas::ATLAS_SIZE;
 use bytemuck::{Pod, Zeroable};
 use std::sync::Arc;
+use wgpu::util::DeviceExt;
 use winit::window::Window;
 
 /// Variables de entorno que pusimos nosotros y que no deben heredar los shells.
@@ -90,6 +91,15 @@ impl Instance {
 struct Uniforms {
     screen: [f32; 2],
     _pad: [f32; 2],
+}
+
+impl Uniforms {
+    fn for_surface(config: &wgpu::SurfaceConfiguration) -> Self {
+        Self {
+            screen: [config.width as f32, config.height as f32],
+            _pad: [0.0; 2],
+        }
+    }
 }
 
 pub struct Renderer {
@@ -215,11 +225,10 @@ impl Renderer {
             ..Default::default()
         });
 
-        let uniforms = device.create_buffer(&wgpu::BufferDescriptor {
+        let uniforms = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("uniforms"),
-            size: std::mem::size_of::<Uniforms>() as u64,
+            contents: bytemuck::bytes_of(&Uniforms::for_surface(&config)),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
         });
 
         let bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -313,7 +322,7 @@ impl Renderer {
             cache: None,
         });
 
-        let instance_cap = 16 * 1024;
+        let instance_cap = 1024;
         let instances = Self::make_instance_buffer(&device, instance_cap);
 
         Self {
@@ -341,9 +350,17 @@ impl Renderer {
     }
 
     pub fn resize(&mut self, width: u32, height: u32) {
+        if (self.config.width, self.config.height) == (width.max(1), height.max(1)) {
+            return;
+        }
         self.config.width = width.max(1);
         self.config.height = height.max(1);
         self.surface.configure(&self.device, &self.config);
+        self.queue.write_buffer(
+            &self.uniforms,
+            0,
+            bytemuck::bytes_of(&Uniforms::for_surface(&self.config)),
+        );
     }
 
     pub fn size(&self) -> (f32, f32) {
@@ -355,12 +372,6 @@ impl Renderer {
             self.instance_cap = instances.len().next_power_of_two();
             self.instances = Self::make_instance_buffer(&self.device, self.instance_cap);
         }
-        let u = Uniforms {
-            screen: [self.config.width as f32, self.config.height as f32],
-            _pad: [0.0; 2],
-        };
-        self.queue
-            .write_buffer(&self.uniforms, 0, bytemuck::bytes_of(&u));
         if !instances.is_empty() {
             self.queue
                 .write_buffer(&self.instances, 0, bytemuck::cast_slice(instances));
