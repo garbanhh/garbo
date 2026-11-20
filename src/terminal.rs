@@ -192,7 +192,8 @@ impl Tab {
         } else {
             env.remove("GARBO_AUTOSUGGEST");
         }
-        // No propagar al shell el filtro de drivers Vulkan que pone el renderer.
+        // No propagar al shell el filtro de drivers Vulkan que pone el renderer. No se puede quitar
+        // una variable, solo vaciarla: el cargador de Vulkan y Garbo tratan la vacía como no puesta.
         for var in crate::renderer::env_overrides() {
             env.entry(var.to_string()).or_default();
         }

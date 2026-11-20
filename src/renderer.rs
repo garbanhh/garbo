@@ -18,12 +18,12 @@ pub fn env_overrides() -> &'static [&'static str] {
 /// (radeon, lavapipe) arrastran libLLVM: ~25 MB residentes para nada. Detectamos el fabricante
 /// de la GPU y limitamos el cargador a sus drivers. Si no se reconoce, solo se descartan
 /// lavapipe y dzn. Sin GPU usable queda el fallback a OpenGL.
+/// Una variable vacía cuenta como no puesta: es lo que Garbo deja a sus shells (ver
+/// `env_overrides`), y sin esto un Garbo abierto desde otro cargaría todos los drivers.
 pub fn limit_vulkan_drivers() {
     let mut set = Vec::new();
     #[cfg(target_os = "linux")]
-    if std::env::var_os("VK_LOADER_DRIVERS_SELECT").is_none()
-        && std::env::var_os("VK_LOADER_DRIVERS_DISABLE").is_none()
-    {
+    if unset_or_empty("VK_LOADER_DRIVERS_SELECT") && unset_or_empty("VK_LOADER_DRIVERS_DISABLE") {
         let mut select: Vec<&str> = Vec::new();
         if let Ok(dir) = std::fs::read_dir("/sys/class/drm") {
             for entry in dir.flatten() {
@@ -53,6 +53,11 @@ pub fn limit_vulkan_drivers() {
         }
     }
     let _ = ENV_OVERRIDES.set(set);
+}
+
+#[cfg(target_os = "linux")]
+fn unset_or_empty(name: &str) -> bool {
+    std::env::var_os(name).is_none_or(|v| v.is_empty())
 }
 
 #[repr(C)]

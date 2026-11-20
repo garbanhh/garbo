@@ -30,7 +30,8 @@
 ## Características
 
 - **Rápida y ligera.** Dibuja con la GPU (wgpu: Vulkan u OpenGL) y solo cuando algo cambia: en
-  reposo no gasta CPU y arranca con unos 30 MB de memoria.
+  reposo no gasta CPU y arranca con unos 30 MB de memoria (más en equipos sin GPU: véase
+  [Rendimiento](#rendimiento)).
 - **Bloques de comandos.** Cada comando y su salida forman un bloque con la carpeta, la duración y
   el resultado (en rojo si falla). Se seleccionan, se recorren con el teclado y se copian enteros o
   solo su salida.
@@ -74,8 +75,9 @@ Garbo aparece en el menú de aplicaciones. La aplicación avisa cuando hay una v
 instala con el gestor de paquetes del sistema, tras comprobar la suma SHA-256 y la firma.
 
 **Requisitos:** Linux con Wayland o X11 (desarrollada y probada en Fedora 45 con GNOME) y una GPU
-con Vulkan u OpenGL. Los bloques de comandos, las sugerencias y el completado funcionan con bash,
-zsh y fish.
+con Vulkan u OpenGL. Sin GPU también funciona, dibujando por software y con más memoria (véase
+[Rendimiento](#rendimiento)). Los bloques de comandos, las sugerencias y el completado funcionan
+con bash, zsh y fish.
 
 ## Uso
 
@@ -290,10 +292,35 @@ Medido en Fedora 45 con GPU Intel Arc integrada y Wayland:
 
 | Métrica | Valor |
 |---|---|
-| Memoria residente al iniciar | ~30 MB (~11 MB privados) |
+| Memoria residente al iniciar | ~30 MB (~9–11 MB privados) |
 | CPU en reposo | 0 % |
-| `seq 1 3000000` | ~2,2 s |
-| Tamaño del binario | ~9 MB |
+| `seq 1 3000000` | ~1,4 s |
+| Tamaño del binario | ~10 MB |
+
+### Memoria según el equipo
+
+El consumo depende sobre todo de cómo se dibuja la ventana, no del paquete: el `.rpm` y el `.deb`
+contienen el mismo programa y gastan lo mismo en el mismo equipo. Medido con Garbo 0.10.1 en
+reposo, con una pestaña de bash:
+
+| Cómo se dibuja | Memoria residente |
+|---|---|
+| GPU con Vulkan, Wayland | ~30 MB |
+| GPU con Vulkan, X11 | ~32 MB |
+| GPU con OpenGL (sin controlador Vulkan) | ~70 MB |
+| Sin GPU: Vulkan u OpenGL por software | ~80–140 MB |
+
+- **Wayland o X11** apenas cambia la cifra (1–2 MB).
+- **Con OpenGL**, la biblioteca de Mesa incluye LLVM aunque la GPU sea real; por eso Garbo usa
+  Vulkan siempre que hay controlador.
+- **Sin GPU**, como en muchas máquinas virtuales o escritorios remotos sin aceleración, Mesa dibuja
+  por software (lavapipe o llvmpipe): carga LLVM (~50 MB) y guarda la imagen de la ventana en la
+  memoria normal, más cuanto mayor es la ventana. Parte de esa memoria es compartida con otros
+  programas que también dibujan por software, como el propio escritorio en una máquina virtual,
+  así que el gasto añadido real es menor que la memoria residente.
+
+Para saber cuál se usa, `RUST_LOG=garbo=info garbo` escribe al arrancar una línea `GPU:` con el
+nombre del dispositivo; `llvmpipe` indica dibujo por software.
 
 ## Compilar desde el código
 
