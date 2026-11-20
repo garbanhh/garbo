@@ -297,6 +297,11 @@ Medido en Fedora 45 con GPU Intel Arc integrada y Wayland:
 | `seq 1 3000000` | ~1,4 s |
 | Tamaño del binario | ~10 MB |
 
+La memoria residente incluye el código del programa y de las bibliotecas que usa (controlador de
+la GPU, libc…), que se leen del disco y en parte se comparten con otros programas. Los monitores
+del sistema suelen mostrar solo la memoria privada, la que usa únicamente Garbo: unos 10 MB al
+arrancar, que crecen con el historial de cada pestaña hasta el límite de líneas configurado.
+
 ### Memoria según el equipo
 
 El consumo depende sobre todo de cómo se dibuja la ventana, no del paquete: el `.rpm` y el `.deb`
