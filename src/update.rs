@@ -343,8 +343,10 @@ fn install(rel: &Release, send: &dyn Fn(UpdateState)) -> Result<(), String> {
 
     send(UpdateState::Installing(rel.version.clone()));
     // apt-get instala un archivo local si la ruta empieza por "/" (y resuelve sus dependencias).
+    // La firma ya la comprobó Garbo con su clave, que no está en la base de RPM del sistema: con
+    // `localpkg_gpgcheck=1` en la configuración de dnf, la instalación fallaría (NOKEY).
     let installer: &[&str] = match format {
-        Format::Rpm => &["dnf", "install", "-y"],
+        Format::Rpm => &["dnf", "install", "-y", "--setopt=localpkg_gpgcheck=0"],
         Format::Deb => &["apt-get", "install", "-y"],
     };
     let status = Command::new("pkexec")

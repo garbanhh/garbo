@@ -5,9 +5,10 @@
 //! - **Shift+Intro**: salto de línea sin ejecutar. En bash y zsh, `Ctrl+V Ctrl+J` (inserción
 //!   literal: el comando de varias líneas se ejecuta entero al pulsar Intro); en fish, `Alt+Intro`
 //!   (su `Ctrl+V` pega). En Claude Code, Codex, Gemini…, `Ctrl+J`. En Aider, `Esc Intro`.
-//! - **Ctrl+Retroceso / Ctrl+Supr**: borrar la palabra de la izquierda / de la derecha (`Alt+Retroceso`
-//!   y `Alt+D`, iguales en los tres shells).
-//! - **Ctrl+Z**: deshacer (`Ctrl+_` en los tres; en el prompt no hay nada que suspender).
+//! - **Ctrl+Retroceso / Ctrl+Supr**: borrar la palabra de la izquierda / de la derecha, como la
+//!   entiende cada shell. En bash y zsh, `Alt+Retroceso` y `Alt+D`; fish recibe las teclas tal cual
+//!   y actúan sus propias acciones.
+//! - **Ctrl+Z**: deshacer (`Ctrl+_` en bash y zsh; fish ya deshace con Ctrl+Z).
 //! - **Clic en lo escrito**: lleva el cursor ahí, con flechas, como si se pulsaran.
 //! - **↑ / ↓ en un comando de varias líneas**: cambian de línea en vez de recorrer el historial.
 //!
@@ -48,8 +49,15 @@ pub fn shortcut(key: &Key, mods: ModifiersState, ctx: Context) -> Option<&'stati
     let bytes: &[u8] = match (ctx, key) {
         (Context::Prompt(Shell::Fish), Key::Named(NamedKey::Enter)) if shift => b"\x1b\r",
         (Context::Prompt(_), Key::Named(NamedKey::Enter)) if shift => b"\x16\n",
-        // backward-kill-word (Alt+Retroceso) y kill-word (Alt+D): por palabras, como Warp
-        // ("~/Documentos/Proyectos" pierde "Proyectos").
+        // Por palabras, como las entiende cada shell (no se cambia nada dentro de ninguno). fish:
+        // Ctrl+Retroceso tal cual (ESC[127;5u; el ^H de siempre sería "borrar una letra") para que
+        // actúe su propia acción; Ctrl+Supr y Ctrl+Z ya le llegan bien sin tocarlos. bash y zsh no
+        // tienen nada para Ctrl+Retroceso: se les manda su "borrar palabra" (Alt+Retroceso), su
+        // kill-word (Alt+D) y su deshacer (Ctrl+_). En bash, "~/Documentos/Proyectos" pierde solo
+        // "Proyectos"; en zsh, lo que diga su WORDCHARS.
+        (Context::Prompt(Shell::Fish), Key::Named(NamedKey::Backspace)) if ctrl => b"\x1b[127;5u",
+        (Context::Prompt(Shell::Fish), Key::Named(NamedKey::Delete)) => return None,
+        (Context::Prompt(Shell::Fish), Key::Character(_)) => return None,
         (Context::Prompt(_), Key::Named(NamedKey::Backspace)) if ctrl => b"\x1b\x7f",
         (Context::Prompt(_), Key::Named(NamedKey::Delete)) if ctrl => b"\x1bd",
         (Context::Prompt(_), Key::Character(c)) if ctrl && c.eq_ignore_ascii_case("z") => b"\x1f",
@@ -290,10 +298,23 @@ mod tests {
             shortcut(&enter, shift, Context::Prompt(Shell::Fish)),
             Some(&b"\x1b\r"[..])
         );
+        // zsh: sus propias teclas de borrar palabra. fish: Ctrl+Retroceso tal cual; Ctrl+Supr y
+        // Ctrl+Z, sin tocar (ya le llegan como las espera).
         assert_eq!(
-            shortcut(&bs, ctrl, Context::Prompt(Shell::Fish)),
+            shortcut(&bs, ctrl, Context::Prompt(Shell::Zsh)),
             Some(&b"\x1b\x7f"[..])
         );
+        assert_eq!(
+            shortcut(&bs, ctrl, Context::Prompt(Shell::Fish)),
+            Some(&b"\x1b[127;5u"[..])
+        );
+        let del = Key::Named(NamedKey::Delete);
+        assert_eq!(
+            shortcut(&del, ctrl, Context::Prompt(Shell::Zsh)),
+            Some(&b"\x1bd"[..])
+        );
+        assert_eq!(shortcut(&del, ctrl, Context::Prompt(Shell::Fish)), None);
+        assert_eq!(shortcut(&z, ctrl, Context::Prompt(Shell::Fish)), None);
         assert_eq!(
             shortcut(&enter, shift, Context::Agent("Claude Code")),
             Some(&b"\n"[..])

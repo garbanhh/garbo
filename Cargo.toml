@@ -1,6 +1,6 @@
 [package]
 name = "garbo"
-version = "0.10.0"
+version = "0.10.1"
 edition = "2021"
 description = "Terminal GPU ligera, rápida y personalizable con pestañas y bloques de comandos"
 license = "MIT"
@@ -64,6 +64,10 @@ assets = [
 curl = "*"
 # notify-send (avisos)
 libnotify = "*"
+
+# Pegar imágenes en Wayland (wl-paste)
+[package.metadata.generate-rpm.recommends]
+wl-clipboard = "*"
 
 # Paquete .deb con `cargo deb` (Debian y Ubuntu; ver .github/workflows/release.yml)
 [package.metadata.deb]

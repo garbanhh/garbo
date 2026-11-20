@@ -2,7 +2,8 @@
 # `--init-command`, que carga este archivo después de tu config.fish. Marcas OSC 133 (invisibles):
 #   A = empieza el prompt   B = empieza el comando   C = empieza la salida   D;n = terminó (código n)
 #   P;k=r = empieza el prompt derecho; la B que lo cierra no mueve el inicio del comando.
-# fish 4 ya emite A, B, C y D por su cuenta; con fish 3 se añaden aquí. El prompt derecho se marca
+# fish 4 ya emite A, B, C y D por su cuenta; con fish 3 se añaden aquí (y se le enseña la
+# secuencia de Ctrl+Retroceso que manda Garbo). El prompt derecho se marca
 # siempre, para que Garbo no lo tome por parte del comando. Con GARBO_PROMPT=1 (opción "Prompt de
 # Garbo") el prompt es el de Garbo: una línea con la carpeta, que Garbo dibuja como etiqueta
 # (`A;garbo` lo anuncia), y debajo lo que se escribe. Con GARBO_AUTOSUGGEST=1 (opción
@@ -58,6 +59,9 @@ else if set -q own_marks[1]
 end
 
 if set -q own_marks[1]
+    # Garbo manda Ctrl+Retroceso como ESC[127;5u, que fish 4 entiende (y hace lo suyo: borrar la
+    # palabra anterior). fish 3 no lo reconoce y lo escribiría: se asigna a esa misma acción.
+    bind \e\[127\;5u backward-kill-word
     function __garbo_preexec --on-event fish_preexec
         printf '\e]133;C\a'
     end

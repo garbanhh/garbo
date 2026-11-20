@@ -275,6 +275,36 @@ mod tests {
             let start = blocks.lock().unwrap().input_start;
             assert_eq!(start.map(|s| s.1), Some(0), "{}", shell.name());
         }
+        // Ctrl+Retroceso borra una palabra como la entiende cada shell, Ctrl+Z lo deshace y
+        // Ctrl+Supr borra la de la derecha, con lo que manda Garbo (su atajo o, si no lo toca, la
+        // tecla de siempre).
+        use winit::keyboard::{Key, ModifiersState, NamedKey};
+        let ctx = crate::edit::Context::Prompt(shell);
+        let key = |k: &Key, usual: &[u8]| {
+            let b = crate::edit::shortcut(k, ModifiersState::CONTROL, ctx).unwrap_or(usual);
+            tx.send(Msg::Input(b.to_vec().into()));
+        };
+        send("\x15echo ~/Documentos/Proyectos");
+        wait("la ruta", &|| {
+            typed().as_deref() == Some("echo ~/Documentos/Proyectos")
+        });
+        key(&Key::Named(NamedKey::Backspace), b"\x08");
+        // zsh, con su WORDCHARS de serie, cuenta la ruta entera como una palabra.
+        let left = if shell == Shell::Zsh {
+            "echo "
+        } else {
+            "echo ~/Documentos/"
+        };
+        wait("Ctrl+Retroceso", &|| typed().as_deref() == Some(left));
+        key(&Key::Character("z".into()), b"\x1a");
+        wait("Ctrl+Z", &|| {
+            typed().as_deref() == Some("echo ~/Documentos/Proyectos")
+        });
+        send("\x15echo uno dos\x1b[D\x1b[D\x1b[D");
+        key(&Key::Named(NamedKey::Delete), b"\x1b[3;5~");
+        wait("Ctrl+Supr", &|| typed().as_deref() == Some("echo uno "));
+        send("\x15");
+        wait("la línea vacía", &|| typed().as_deref() == Some(""));
         // Lo escrito se lee aunque el prompt derecho esté detrás del cursor.
         send("echo garbo-");
         wait("lo escrito", &|| typed().as_deref() == Some("echo garbo-"));

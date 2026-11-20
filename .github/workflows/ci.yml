@@ -12,7 +12,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       # Actions fijadas a un commit concreto (una etiqueta se puede mover; un SHA no).
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # master
         with:
           # Versión fija: una versión nueva de clippy con avisos nuevos no rompe el CI sin cambios.

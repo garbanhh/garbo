@@ -11,7 +11,73 @@ use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-pub(super) type CodexCache = HashMap<PathBuf, (SystemTime, Option<SubAgent>)>;
+/// Lo que se sabe de cada archivo de sesión de Codex o Gemini CLI. La cabecera (primera línea) no
+/// cambia y en Codex puede ocupar cientos de KB: se lee una sola vez. Al cambiar el archivo solo se
+/// vuelve a leer su final.
+pub(super) type TranscriptCache = HashMap<PathBuf, Cached>;
+
+pub(super) struct Cached {
+    /// `None`: no es un subagente de esta sesión.
+    meta: Option<Meta>,
+    /// Fecha de modificación con la que se leyó `status` (`None`: aún no se leyó).
+    modified: Option<SystemTime>,
+    /// En marcha y actividad, leídos del final.
+    status: (bool, Option<String>),
+}
+
+/// Lo que dice la cabecera de un subagente.
+#[derive(Clone)]
+struct Meta {
+    id: String,
+    kind: String,
+    description: String,
+}
+
+/// Cabecera leída: de un subagente de esta sesión, de otra cosa o aún a medio escribir (se
+/// reintenta en la próxima vuelta).
+enum Header {
+    Child(Meta),
+    Other,
+    Pending,
+}
+
+/// Entrada de la caché para `path`, leyendo su cabecera la primera vez que se puede.
+fn cached<'a>(
+    cache: &'a mut TranscriptCache,
+    path: &Path,
+    header: impl FnOnce() -> Header,
+) -> Option<&'a mut Cached> {
+    if !cache.contains_key(path) {
+        let meta = match header() {
+            Header::Pending => return None,
+            Header::Other => None,
+            Header::Child(meta) => Some(meta),
+        };
+        cache.insert(
+            path.to_path_buf(),
+            Cached {
+                meta,
+                modified: None,
+                status: (true, None),
+            },
+        );
+    }
+    cache.get_mut(path)
+}
+
+/// Estado del subagente, releyendo el final solo si el archivo cambió desde la última vez.
+fn refresh(
+    entry: &mut Cached,
+    path: &Path,
+    modified: SystemTime,
+    status: fn(&str) -> (bool, Option<String>),
+) {
+    if entry.modified != Some(modified) {
+        // Sin final legible (una línea larga a medio escribir): sigue en la lista, sin actividad.
+        entry.status = status(&read_tail(path).unwrap_or_default());
+        entry.modified = Some(modified);
+    }
+}
 
 #[derive(PartialEq)]
 pub(super) enum Location {
@@ -50,12 +116,12 @@ impl Location {
     pub(super) fn scan(
         &self,
         cache: &mut HashMap<String, (SystemTime, Option<String>)>,
-        codex_cache: &mut CodexCache,
+        transcripts: &mut TranscriptCache,
     ) -> Vec<SubAgent> {
         match self {
             Self::Claude(dir) => super::scan(dir, cache),
-            Self::Codex { root, pid, session } => codex_agents(root, *pid, session, codex_cache),
-            Self::Gemini(dir) => gemini_agents(dir),
+            Self::Codex { root, pid, session } => codex_agents(root, *pid, session, transcripts),
+            Self::Gemini(dir) => gemini_agents(dir, transcripts),
         }
     }
 }
@@ -154,7 +220,7 @@ fn entries(dir: &Path) -> impl Iterator<Item = fs::DirEntry> {
     fs::read_dir(dir).into_iter().flatten().flatten()
 }
 
-fn codex_agents(root: &Path, pid: i32, parent: &str, cache: &mut CodexCache) -> Vec<SubAgent> {
+fn codex_agents(root: &Path, pid: i32, parent: &str, cache: &mut TranscriptCache) -> Vec<SubAgent> {
     let now = SystemTime::now();
     let days = numeric_dirs(root, 4)
         .iter()
@@ -183,32 +249,49 @@ fn codex_agents(root: &Path, pid: i32, parent: &str, cache: &mut CodexCache) -> 
     cache.retain(|path, _| recent.iter().any(|(_, _, candidate)| path == candidate));
     let mut children = Vec::new();
     for (modified, started, path) in recent {
-        let entry = cache
-            .entry(path.clone())
-            .or_insert_with(|| (modified, codex_child(&path, parent, started)));
-        if entry.0 != modified {
-            *entry = (modified, codex_child(&path, parent, started));
-        }
-        let Some(child) = &entry.1 else { continue };
-        if !child.running && now.duration_since(modified).unwrap_or_default() > KEEP_DONE {
+        let Some(entry) = cached(cache, &path, || codex_meta(&path, parent)) else {
+            continue;
+        };
+        let Some(meta) = entry.meta.clone() else {
+            continue;
+        };
+        refresh(entry, &path, modified, codex_status);
+        let (running, activity) = entry.status.clone();
+        if !running && now.duration_since(modified).unwrap_or_default() > KEEP_DONE {
             continue;
         }
-        if !children.iter().any(|agent: &SubAgent| agent.id == child.id) {
-            children.push(child.clone());
+        if !children.iter().any(|agent: &SubAgent| agent.id == meta.id) {
+            children.push(SubAgent {
+                id: meta.id,
+                kind: meta.kind,
+                description: meta.description,
+                running,
+                started,
+                activity,
+            });
         }
     }
     children.sort_by_key(|agent| agent.started);
     children
 }
 
-fn codex_child(path: &Path, parent: &str, started: SystemTime) -> Option<SubAgent> {
-    let meta = codex_header(path)?;
-    if codex_parent(&meta) != Some(parent) {
-        return None;
+/// Cabecera de Codex: `session_meta` de un subagente cuyo padre es `parent`.
+fn codex_meta(path: &Path, parent: &str) -> Header {
+    let Some(mut header) = read_header(path) else {
+        return Header::Pending;
+    };
+    if header["type"] != "session_meta" {
+        return Header::Other;
     }
-    let id = meta["id"].as_str().filter(|id| is_uuid(id))?;
-    // Sin final legible (una línea larga a medio escribir): sigue en la lista, sin actividad.
-    let (running, activity) = codex_status(&read_tail(path).unwrap_or_default());
+    let Some(meta) = header.as_object_mut().and_then(|h| h.remove("payload")) else {
+        return Header::Other;
+    };
+    if codex_parent(&meta) != Some(parent) {
+        return Header::Other;
+    }
+    let Some(id) = meta["id"].as_str().filter(|id| is_uuid(id)) else {
+        return Header::Other;
+    };
     let spawn = &meta["source"]["subagent"]["thread_spawn"];
     let role = meta["agent_role"]
         .as_str()
@@ -218,13 +301,10 @@ fn codex_child(path: &Path, parent: &str, started: SystemTime) -> Option<SubAgen
         .as_str()
         .or_else(|| spawn["agent_nickname"].as_str())
         .or_else(|| spawn["agent_path"].as_str());
-    Some(SubAgent {
+    Header::Child(Meta {
         id: id.into(),
         kind: role.map_or_else(|| "subagente".into(), compact),
         description: name.map_or_else(String::new, compact),
-        running,
-        started,
-        activity,
     })
 }
 
@@ -261,37 +341,55 @@ fn gemini_session(root: &Path, id: &str) -> Option<PathBuf> {
     matches.next().is_none().then_some(path)
 }
 
-fn gemini_agents(dir: &Path) -> Vec<SubAgent> {
+fn gemini_agents(dir: &Path, cache: &mut TranscriptCache) -> Vec<SubAgent> {
     let now = SystemTime::now();
-    let mut children: Vec<_> = entries(dir)
-        .filter_map(|entry| {
-            let path = entry.path();
-            if path.extension().and_then(|ext| ext.to_str()) != Some("jsonl") {
-                return None;
-            }
-            let (age, started, _) = age(&path, now)?;
-            if age > STALE {
-                return None;
-            }
-            let header = read_header(&path)?;
-            if header["kind"] != "subagent" {
-                return None;
-            }
-            let id = header["sessionId"].as_str().filter(|id| is_uuid(id))?;
-            let tail = read_tail(&path).unwrap_or_default();
-            let (running, activity) = gemini_status(&tail);
-            (running || age <= KEEP_DONE).then(|| SubAgent {
-                id: id.into(),
-                kind: "subagente".into(),
-                description: id[..8].into(),
+    let recent: Vec<_> = entries(dir)
+        .map(|entry| entry.path())
+        .filter(|path| path.extension().and_then(|ext| ext.to_str()) == Some("jsonl"))
+        .filter_map(|path| {
+            let (age, started, modified) = age(&path, now)?;
+            (age <= STALE).then_some((age, started, modified, path))
+        })
+        .collect();
+    cache.retain(|path, _| recent.iter().any(|(.., candidate)| path == candidate));
+    let mut children = Vec::new();
+    for (age, started, modified, path) in recent {
+        let Some(entry) = cached(cache, &path, || gemini_meta(&path)) else {
+            continue;
+        };
+        let Some(meta) = entry.meta.clone() else {
+            continue;
+        };
+        refresh(entry, &path, modified, gemini_status);
+        let (running, activity) = entry.status.clone();
+        if running || age <= KEEP_DONE {
+            children.push(SubAgent {
+                id: meta.id,
+                kind: meta.kind,
+                description: meta.description,
                 running,
                 started,
                 activity,
-            })
-        })
-        .collect();
+            });
+        }
+    }
     children.sort_by_key(|agent| agent.started);
     children
+}
+
+/// Cabecera de Gemini CLI: `kind: subagent` con su `sessionId`.
+fn gemini_meta(path: &Path) -> Header {
+    let Some(header) = read_header(path) else {
+        return Header::Pending;
+    };
+    match header["sessionId"].as_str() {
+        Some(id) if header["kind"] == "subagent" && is_uuid(id) => Header::Child(Meta {
+            id: id.into(),
+            kind: "subagente".into(),
+            description: id[..8].into(),
+        }),
+        _ => Header::Other,
+    }
 }
 
 fn gemini_status(tail: &str) -> (bool, Option<String>) {
@@ -385,7 +483,7 @@ mod tests {
             fs::write(day.join(path), format!("{meta}\n{task}\n{tool}\n")).unwrap();
         }
 
-        let mut cache = CodexCache::new();
+        let mut cache = TranscriptCache::new();
         let agents = codex_agents(temp.path(), pid, MAIN, &mut cache);
         assert_eq!(agents.len(), 1);
         assert_eq!(agents[0].id, CHILD);
@@ -414,6 +512,48 @@ mod tests {
     }
 
     #[test]
+    fn la_cabecera_se_lee_una_vez_y_la_incompleta_se_reintenta() {
+        let temp = crate::temp_dir::TempDir::new_in(&std::env::temp_dir()).unwrap();
+        let day = temp.path().join("2026/11/20");
+        fs::create_dir_all(&day).unwrap();
+        let path = day.join("rollout-child.jsonl");
+        let meta = json!({"type":"session_meta","payload":{"id":CHILD,"source":{"subagent":{"thread_spawn":{
+            "parent_thread_id":MAIN,"agent_role":"explorer"
+        }}}}})
+        .to_string();
+        let pid = std::process::id() as i32;
+        let mut cache = TranscriptCache::new();
+        let bump = |secs| {
+            let f = fs::OpenOptions::new().append(true).open(&path).unwrap();
+            f.set_modified(SystemTime::now() + std::time::Duration::from_secs(secs))
+                .unwrap();
+        };
+
+        // Primera línea a medio escribir: todavía no sale, pero no se da por descartada.
+        fs::write(&path, &meta[..meta.len() / 2]).unwrap();
+        assert!(codex_agents(temp.path(), pid, MAIN, &mut cache).is_empty());
+        let task = json!({"type":"event_msg","payload":{"type":"task_started"}});
+        fs::write(&path, format!("{meta}\n{task}\n")).unwrap();
+        bump(1);
+        let agents = codex_agents(temp.path(), pid, MAIN, &mut cache);
+        assert_eq!(agents.len(), 1);
+        assert!(agents[0].running);
+
+        // La cabecera ya no se relee (aunque cambie), pero el final sí al cambiar el archivo.
+        let done = json!({"type":"event_msg","payload":{"type":"task_complete"}});
+        fs::write(
+            &path,
+            format!("{{\"type\":\"otra cosa\"}}\n{task}\n{done}\n"),
+        )
+        .unwrap();
+        bump(2);
+        let agents = codex_agents(temp.path(), pid, MAIN, &mut cache);
+        assert_eq!(agents.len(), 1);
+        assert_eq!(agents[0].kind, "explorer");
+        assert!(!agents[0].running);
+    }
+
+    #[test]
     fn gemini_solo_muestra_los_hijos_de_la_sesion_reanudada() {
         let temp = crate::temp_dir::TempDir::new_in(&std::env::temp_dir()).unwrap();
         let chats = temp.path().join("proyecto/chats");
@@ -431,12 +571,12 @@ mod tests {
             fs::write(dir.join("child.jsonl"), records).unwrap();
         }
         let target = gemini_session(temp.path(), MAIN).unwrap();
-        let agents = gemini_agents(&target);
+        let agents = gemini_agents(&target, &mut TranscriptCache::new());
         assert_eq!(target, chats.join(MAIN));
         assert_eq!(agents.len(), 1);
         assert_eq!(agents[0].description, &CHILD[..8]);
         assert!(!agents[0].running);
-        let other = gemini_agents(&chats.join(OTHER));
+        let other = gemini_agents(&chats.join(OTHER), &mut TranscriptCache::new());
         assert!(other[0].running);
         assert_eq!(other[0].activity.as_deref(), Some("read_file"));
     }

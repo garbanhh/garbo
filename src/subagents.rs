@@ -19,7 +19,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime};
 
 mod transcripts;
-use transcripts::{CodexCache, Location};
+use transcripts::{Location, TranscriptCache};
 
 /// Cada cuánto se vuelve a mirar la carpeta de subagentes.
 const CHECK_EVERY: Duration = Duration::from_millis(1000);
@@ -52,7 +52,8 @@ pub struct Watch {
     checked: Option<Instant>,
     /// Actividad ya leída por subagente, con la fecha de modificación de su conversación.
     cache: HashMap<String, (SystemTime, Option<String>)>,
-    codex_cache: CodexCache,
+    /// Cabeceras y estado de las sesiones de Codex y Gemini CLI.
+    transcripts: TranscriptCache,
     pub list: Vec<SubAgent>,
 }
 
@@ -89,14 +90,14 @@ impl Watch {
             let location = Location::resolve(provider, pid);
             if location != self.location || changed_target {
                 self.cache.clear();
-                self.codex_cache.clear();
+                self.transcripts.clear();
             }
             self.target = target;
             self.location = location;
             self.resolved = Some(now);
         }
         let list = self.location.as_ref().map_or_else(Vec::new, |location| {
-            location.scan(&mut self.cache, &mut self.codex_cache)
+            location.scan(&mut self.cache, &mut self.transcripts)
         });
         if list != self.list {
             self.list = list;

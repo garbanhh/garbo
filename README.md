@@ -169,7 +169,8 @@ Garbo añade al shell los atajos de edición de Warp. `Shift+Intro` parte el com
 sin ejecutarlo; al pulsar `Intro` se ejecutan todas, una tras otra. En un comando de varias líneas,
 `↑` y `↓` cambian de línea; en la primera y en la última recorren el historial como siempre. Un
 clic en lo escrito lleva el cursor a ese punto. `Ctrl+Retroceso` y `Ctrl+Supr` borran por palabras
-(en `~/Documentos/Proyectos`, solo `Proyectos`) y `Ctrl+Z` deshace.
+tal como las entiende cada shell, sin cambiar su configuración (en bash y fish, de
+`~/Documentos/Proyectos` solo se va `Proyectos`; zsh sigue su `WORDCHARS`), y `Ctrl+Z` deshace.
 
 Con un agente en primer plano, `Shift+Intro` también inserta un salto de línea (en Claude Code,
 Codex o Gemini CLI se envía `Ctrl+J`) y `Ctrl+Retroceso` borra la palabra anterior. En el resto de
