@@ -134,7 +134,7 @@ de las versiones nuevas y abre su página para descargarlas.
 | Atajo | Acción |
 |---|---|
 | `Ctrl+Shift+F` | Buscar en el historial (con un bloque seleccionado, solo en él) |
-| `Ctrl+Shift+C` / `Ctrl+Shift+V` | Copiar / pegar (también imágenes) |
+| `Ctrl+Shift+C` / `Ctrl+Shift+V` | Copiar / pegar (también imágenes). En Windows, además, `Ctrl+C` con texto seleccionado, `Ctrl+V` y el clic derecho (copia lo seleccionado o pega) |
 | `Ctrl+Shift+↑` / `Ctrl+Shift+↓` | Bloque de comandos anterior / siguiente |
 | `Ctrl+Shift+O` | Copiar la salida del bloque seleccionado o del último comando |
 | `Shift+RePág` / `Shift+AvPág` / `Shift+Inicio` / `Shift+Fin` | Recorrer el historial |
@@ -285,7 +285,7 @@ en el Explorador se pegan como rutas.
 `Ctrl+,` o el botón de menú abren los ajustes, por categorías: Tema, Texto, Terminal, Completado,
 Bloques, Avisos, Ventana y Actualizaciones. Los cambios se aplican al momento y se guardan en
 `~/.config/garbo/config.toml` (en Windows, `%APPDATA%\garbo\config.toml`), respetando el resto del
-archivo y sus comentarios. Se manejan con el
+archivo y sus comentarios; solo se escriben los valores distintos de los de por defecto. Se manejan con el
 ratón o con el teclado (`Tab` cambia de categoría, `↑` `↓` eligen, `←` `→` cambian el valor, `Esc`
 cierra). Si el archivo tiene errores, Ajustes muestra un aviso y conserva el archivo para que
 puedas corregirlo.

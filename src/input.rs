@@ -116,36 +116,95 @@ pub fn key_to_bytes(ev: &KeyEvent, m: ModifiersState, mode: TermMode) -> Option<
 /// tecla exacta (PSReadLine distingue Shift+Intro, Ctrl+Retroceso, Ctrl+Z…), como en Windows
 /// Terminal. Un carácter fuera del plano básico va en dos eventos, uno por mitad.
 #[cfg(windows)]
-pub fn win32_key(ev: &KeyEvent, m: ModifiersState) -> Option<Vec<u8>> {
-    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{MapVirtualKeyW, MAPVK_VSC_TO_VK_EX};
+pub fn win32_key(ev: &KeyEvent) -> Option<Vec<u8>> {
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
+        GetKeyState, MapVirtualKeyW, MAPVK_VSC_TO_VK_EX, VK_CAPITAL, VK_LCONTROL, VK_LMENU,
+        VK_NUMLOCK, VK_RCONTROL, VK_RMENU, VK_SCROLL, VK_SHIFT,
+    };
     use winit::platform::modifier_supplement::KeyEventExtModifierSupplement;
     use winit::platform::scancode::PhysicalKeyExtScancode;
     let scancode = ev.physical_key.to_scancode().unwrap_or(0);
     // SAFETY: MapVirtualKeyW solo consulta la distribución de teclado activa.
-    let vk = if scancode == 0 {
+    let mapped = if scancode == 0 {
         0
     } else {
         unsafe { MapVirtualKeyW(scancode, MAPVK_VSC_TO_VK_EX) }
     };
     let text = ev.text_with_all_modifiers().unwrap_or_default();
+    let vk = win32_vk(mapped, scancode, text);
     if vk == 0 && text.is_empty() {
         return None;
     }
-    // Modificadores como los da Windows (sin distinguir izquierda y derecha: la izquierda).
+    // Los modificadores, del estado del teclado en el momento de esta tecla y como los da
+    // Windows: Alt y Ctrl de cada lado (AltGr es Ctrl izquierdo + Alt derecho; winit no los
+    // marca) y las luces de Bloq Num, Bloq Despl y Bloq Mayús.
+    // SAFETY: GetKeyState solo consulta el estado del teclado de este hilo.
+    let key = |vk: u16| unsafe { GetKeyState(i32::from(vk)) };
     let mut state = 0u32;
-    if m.alt_key() {
-        state |= 0x02; // LEFT_ALT_PRESSED
+    for (vk, flag) in [
+        (VK_RMENU, 0x01),    // RIGHT_ALT_PRESSED
+        (VK_LMENU, 0x02),    // LEFT_ALT_PRESSED
+        (VK_RCONTROL, 0x04), // RIGHT_CTRL_PRESSED
+        (VK_LCONTROL, 0x08), // LEFT_CTRL_PRESSED
+        (VK_SHIFT, 0x10),    // SHIFT_PRESSED
+    ] {
+        if key(vk) < 0 {
+            state |= flag;
+        }
     }
-    if m.control_key() {
-        state |= 0x08; // LEFT_CTRL_PRESSED
-    }
-    if m.shift_key() {
-        state |= 0x10; // SHIFT_PRESSED
+    for (vk, flag) in [(VK_NUMLOCK, 0x20), (VK_SCROLL, 0x40), (VK_CAPITAL, 0x80)] {
+        if key(vk) & 1 != 0 {
+            state |= flag;
+        }
     }
     if scancode & 0xE000 != 0 {
         state |= 0x100; // ENHANCED_KEY (flechas, Insert, Supr, Inicio, Fin…)
     }
     Some(win32_sequence(vk, scancode & 0xFF, text, state))
+}
+
+/// Tecla virtual que daría Windows a un programa de consola. `mapped` es la del código de
+/// exploración (`MapVirtualKeyW`), que se diferencia en dos casos:
+/// - Shift, Ctrl y Alt de cada lado (`VK_LSHIFT`, `VK_RMENU`…): Windows da la genérica
+///   (`VK_SHIFT`, `VK_MENU`…), la única que .NET reconoce como modificador. Con las otras,
+///   PowerShell escribía "@" (un carácter nulo) al pulsar Shift o Alt.
+/// - El teclado numérico con Bloq Num: los mismos códigos que Inicio, Fin, las flechas…, pero
+///   con un número es `VK_NUMPAD0`–`9` (y la coma, `VK_DECIMAL`). Como Fin, el 1 no se escribía.
+#[cfg(any(windows, test))]
+pub fn win32_vk(mapped: u32, scancode: u32, text: &str) -> u32 {
+    match mapped {
+        0xA0 | 0xA1 => return 0x10, // VK_LSHIFT, VK_RSHIFT -> VK_SHIFT
+        0xA2 | 0xA3 => return 0x11, // VK_LCONTROL, VK_RCONTROL -> VK_CONTROL
+        0xA4 | 0xA5 => return 0x12, // VK_LMENU, VK_RMENU -> VK_MENU
+        _ => {}
+    }
+    let numpad = matches!(scancode, 0x47..=0x49 | 0x4B..=0x4D | 0x4F..=0x53);
+    if numpad {
+        match text.chars().next() {
+            Some(c @ '0'..='9') => return 0x60 + (c as u32 - '0' as u32), // VK_NUMPAD0–9
+            Some(_) if scancode == 0x53 => return 0x6E,                   // VK_DECIMAL
+            _ => {}
+        }
+    }
+    mapped
+}
+
+/// Texto pegado en el prompt de PowerShell. PSReadLine no pide el pegado entre corchetes: cada
+/// salto de línea llegaría como Intro y se ejecutaría línea a línea. Van como Shift+Intro (nueva
+/// línea sin ejecutar, lo mismo que hace su Ctrl+V) y sin el salto final: queda escrito, como al
+/// pegar en bash. Sin ESC: ConPTY leería una secuencia pegada como teclas (un Intro, por ejemplo).
+#[cfg(windows)]
+pub fn powershell_paste(text: &str) -> Vec<u8> {
+    let shift_enter = win32_sequence(0x0D, 0x1C, "\r", 0x10);
+    let text = text.replace("\r\n", "\n").replace(['\r'], "\n");
+    let mut out = Vec::with_capacity(text.len() + 16);
+    for (i, line) in text.trim_end_matches('\n').split('\n').enumerate() {
+        if i > 0 {
+            out.extend_from_slice(&shift_enter);
+        }
+        out.extend(line.bytes().filter(|&b| b != 0x1b));
+    }
+    out
 }
 
 /// `ESC [ Vk ; Sc ; Uc ; 1 ; Cs ; 1 _` para una tecla pulsada (y uno más por cada mitad de un
@@ -203,5 +262,34 @@ pub fn mouse_report(
             33 + col as u8,
             33 + line as u8,
         ])
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn teclas_virtuales_de_windows() {
+        // Shift, Ctrl y Alt de cada lado: la genérica.
+        assert_eq!(win32_vk(0xA0, 0x2A, ""), 0x10);
+        assert_eq!(win32_vk(0xA1, 0x36, ""), 0x10);
+        assert_eq!(win32_vk(0xA2, 0x1D, ""), 0x11);
+        assert_eq!(win32_vk(0xA3, 0xE01D, ""), 0x11);
+        assert_eq!(win32_vk(0xA4, 0x38, ""), 0x12);
+        assert_eq!(win32_vk(0xA5, 0xE038, ""), 0x12);
+        // Teclado numérico: con Bloq Num, números; sin él, Fin, flechas…
+        assert_eq!(win32_vk(0x23, 0x4F, "1"), 0x61);
+        assert_eq!(win32_vk(0x2D, 0x52, "0"), 0x60);
+        assert_eq!(win32_vk(0x21, 0x49, "9"), 0x69);
+        assert_eq!(win32_vk(0x2E, 0x53, ","), 0x6E);
+        assert_eq!(win32_vk(0x23, 0x4F, ""), 0x23);
+        // Fin y las flechas de verdad (códigos extendidos) no cambian.
+        assert_eq!(win32_vk(0x23, 0xE04F, ""), 0x23);
+        assert_eq!(win32_vk(0x26, 0xE048, ""), 0x26);
+        // Ni el - y el + del teclado numérico, ni las letras.
+        assert_eq!(win32_vk(0x6D, 0x4A, "-"), 0x6D);
+        assert_eq!(win32_vk(0x6B, 0x4E, "+"), 0x6B);
+        assert_eq!(win32_vk(0x41, 0x1E, "a"), 0x41);
     }
 }

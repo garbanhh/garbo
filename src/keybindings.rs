@@ -79,7 +79,18 @@ impl Action {
                 "ctrl+shift+pagedown",
             ),
             (Copy, "copy", "Copiar selección", "ctrl+shift+c"),
-            (Paste, "paste", "Pegar", "ctrl+shift+v, shift+insert"),
+            // En Windows también Ctrl+V, como en Windows Terminal (y así se pegan capturas en
+            // cualquier programa). Ctrl+C copia si hay texto seleccionado (`App::on_key`).
+            (
+                Paste,
+                "paste",
+                "Pegar",
+                if cfg!(windows) {
+                    "ctrl+v, ctrl+shift+v, shift+insert"
+                } else {
+                    "ctrl+shift+v, shift+insert"
+                },
+            ),
             (
                 FontBigger,
                 "font_bigger",

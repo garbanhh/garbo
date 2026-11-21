@@ -494,6 +494,32 @@ mod tests {
         };
 
         wait("el prompt", &|| typed().as_deref() == Some(""));
+        // Teclas como las manda `input::win32_key`: Shift, Ctrl y Alt solos (de los dos lados) no
+        // escriben nada (escribían "@") y los números del teclado numérico con Bloq Num se escriben
+        // (eran Fin, Supr…). AltGr+2 da "@" (Ctrl izquierdo + Alt derecho, como en Windows).
+        let key = |mapped: u32, sc: u32, text: &str, state: u32| {
+            let vk = crate::input::win32_vk(mapped, sc, text);
+            tx.send(Msg::Input(
+                crate::input::win32_sequence(vk, sc & 0xFF, text, state).into(),
+            ))
+        };
+        key(0xA0, 0x2A, "", 0x10);
+        key(0xA1, 0x36, "", 0x10);
+        key(0xA4, 0x38, "", 0x02);
+        key(0xA5, 0xE038, "", 0x101);
+        key(0xA2, 0x1D, "", 0x08);
+        key(0xA3, 0xE01D, "", 0x104);
+        key(0x23, 0x4F, "1", 0x20);
+        key(0x2E, 0x53, ".", 0x20);
+        key(0x22, 0x51, "3", 0x20);
+        key(0x32, 0x03, "@", 0x09);
+        key(0xBE, 0x34, ".", 0);
+        key(0xBD, 0x35, "-", 0);
+        wait("los números del teclado numérico", &|| {
+            typed().as_deref() == Some("1.3@.-")
+        });
+        key(0x1B, 0x01, "\x1b", 0);
+        wait("la línea vacía", &|| typed().as_deref() == Some(""));
         assert!(
             blocks.lock().unwrap().win32_input,
             "{program}: ConPTY pide win32-input-mode"
@@ -560,6 +586,28 @@ mod tests {
             blocks.lock().unwrap().shell_cwd() == Some(std::path::PathBuf::from(r"C:\Windows"))
         });
         wait("el quinto prompt", &|| typed().as_deref() == Some(""));
+        // Pegar varias líneas (lo que manda Garbo al prompt de PowerShell): quedan escritas sin
+        // ejecutarse; Esc las borra.
+        tx.send(Msg::Input(
+            crate::input::powershell_paste("echo tres\r\necho cuatro\r\n").into(),
+        ));
+        let fourth = if garbo_prompt {
+            "echo cuatro"
+        } else {
+            ">> echo cuatro"
+        };
+        wait("lo pegado", &|| cursor_line() == fourth);
+        std::thread::sleep(Duration::from_millis(300));
+        assert_eq!(
+            codes().iter().filter(|c| c.is_some()).count(),
+            5,
+            "{program}: lo pegado se ejecutó: {:?}",
+            blocks.lock().unwrap().summary()
+        );
+        key(0x1B, 0x01, "\x1b", 0);
+        wait("la línea vacía tras pegar", &|| {
+            typed().as_deref() == Some("")
+        });
         let summary = blocks.lock().unwrap().summary();
         tx.send(Msg::Shutdown);
 

@@ -54,7 +54,6 @@ fn resize_cursor(dir: ResizeDirection) -> CursorIcon {
 }
 
 const BLINK: Duration = Duration::from_millis(530);
-const MULTI_CLICK: Duration = Duration::from_millis(400);
 
 fn pane_is_visible(groups: &[crate::panes::Group], active_group: usize, id: u64) -> bool {
     groups
@@ -301,10 +300,10 @@ impl ApplicationHandler<UserEvent> for App {
                 self.update_title();
             }
             TermEvent::ResetTitle => {
-                st.tabs[idx].title = std::env::var("SHELL")
-                    .ok()
-                    .and_then(|s| s.rsplit('/').next().map(str::to_owned))
-                    .unwrap_or_else(|| "shell".into());
+                // El mismo título que al abrir la pestaña (en Windows no hay `$SHELL`: salía
+                // "shell").
+                let program = crate::terminal::shell_program(&self.cfg);
+                st.tabs[idx].title = crate::platform::base_name(&program).to_owned();
                 st.window.request_redraw();
             }
             TermEvent::Bell => {
@@ -546,6 +545,15 @@ impl App {
         }
 
         let mods = self.st().mods;
+        // Windows: Ctrl+C con texto seleccionado lo copia, como en Windows Terminal. Sin
+        // selección llega al programa (interrumpir).
+        #[cfg(windows)]
+        if mods == ModifiersState::CONTROL
+            && matches!(&ev.logical_key, Key::Character(c) if c.eq_ignore_ascii_case("c"))
+            && self.copy_and_clear_selection()
+        {
+            return false;
+        }
         if let Some(action) = self.keys.lookup(&ev.logical_key, mods) {
             use crate::keybindings::Action::{FocusDown, FocusLeft, FocusRight, FocusUp};
             let pane_nav = matches!(action, FocusLeft | FocusRight | FocusUp | FocusDown);
@@ -618,7 +626,7 @@ impl App {
         // En Windows, si ConPTY lo pidió, la tecla exacta como evento de Windows.
         #[cfg(windows)]
         let encoded = if tab.blocks.lock().unwrap().win32_input {
-            input::win32_key(&ev, mods)
+            input::win32_key(&ev)
         } else {
             input::key_to_bytes(&ev, mods, mode)
         };
@@ -1070,8 +1078,9 @@ impl App {
             if pressed {
                 let st = self.st();
                 let now = Instant::now();
-                let double =
-                    now.duration_since(st.last_click.0) < MULTI_CLICK && st.last_click.1 == 1;
+                let double = now.duration_since(st.last_click.0)
+                    < crate::platform::double_click_time()
+                    && st.last_click.1 == 1;
                 st.last_click = (now, if double { 0 } else { 1 });
                 match (tb.hit(x, y), button) {
                     (Some(TabHit::Tab(i)), MouseButton::Left) => self.select_group(i),
@@ -1197,11 +1206,12 @@ impl App {
         match (button, pressed) {
             (MouseButton::Left, true) => {
                 let now = Instant::now();
-                let count = if now.duration_since(st.last_click.0) < MULTI_CLICK {
-                    st.last_click.1 % 3 + 1
-                } else {
-                    1
-                };
+                let count =
+                    if now.duration_since(st.last_click.0) < crate::platform::double_click_time() {
+                        st.last_click.1 % 3 + 1
+                    } else {
+                        1
+                    };
                 st.last_click = (now, count);
                 let ty = match count {
                     2 => SelectionType::Semantic,
@@ -1250,6 +1260,10 @@ impl App {
                 }
             }
             (MouseButton::Middle, true) => self.paste(true),
+            // Windows: el clic derecho copia lo seleccionado o, si no hay nada, pega (como en
+            // Windows Terminal y la consola de siempre).
+            #[cfg(windows)]
+            (MouseButton::Right, true) => self.copy_or_paste(),
             _ => {}
         }
         false
@@ -1312,11 +1326,8 @@ impl App {
 
     /// Borde de la ventana bajo el ratón, si la barra de título es nuestra.
     fn resize_edge(&self, x: f32, y: f32) -> Option<ResizeDirection> {
-        if self.cfg.window.decorations {
-            return None;
-        }
         let st = self.st.as_ref()?;
-        if st.window.is_maximized() {
+        if st.decorations || st.window.is_maximized() {
             return None;
         }
         let (w, h) = st.renderer.size();

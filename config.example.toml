@@ -69,7 +69,7 @@ blocked = true           # avisar también cuando un agente espera tu permiso o 
 # move_tab_right   = "ctrl+shift+pagedown"
 # goto_tab_1       = "alt+1"          # ... hasta goto_tab_9 (alt+9 = última)
 # copy             = "ctrl+shift+c"
-# paste            = "ctrl+shift+v, shift+insert"
+# paste            = "ctrl+shift+v, shift+insert"   # en Windows: "ctrl+v, ctrl+shift+v, shift+insert"
 # font_bigger      = "ctrl+plus, ctrl+equal"
 # font_smaller     = "ctrl+minus"
 # font_reset       = "ctrl+0"

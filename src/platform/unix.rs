@@ -132,3 +132,8 @@ pub fn open(target: &str) {
 pub fn default_editor() -> Option<String> {
     None
 }
+
+/// Tiempo entre dos clics para que cuenten como doble clic.
+pub fn double_click_time() -> std::time::Duration {
+    std::time::Duration::from_millis(400)
+}

@@ -115,6 +115,9 @@ pub struct State {
     pub trim_at: Option<Instant>,
     pub scroll_accum: f32,
     pub last_ws: WindowSize,
+    /// La ventana se creó con la barra de título del sistema. Cambiar el ajuste se aplica al
+    /// reiniciar: hasta entonces la barra de Garbo (con sus botones de ventana) sigue como está.
+    pub decorations: bool,
     out: Vec<Instance>,
     fg: Vec<Instance>,
 }
@@ -210,6 +213,7 @@ impl App {
                 cell_width: 0,
                 cell_height: 0,
             },
+            decorations: self.cfg.window.decorations,
             out: Vec::with_capacity(8192),
             fg: Vec::with_capacity(8192),
         });
@@ -266,7 +270,7 @@ impl App {
         let st = self.st.as_ref().unwrap();
         let (w, h) = st.renderer.size();
         let n_tabs = st.groups.len().max(1);
-        let integrated = !self.cfg.window.decorations;
+        let integrated = !st.decorations;
         let tab_bar = (integrated || self.cfg.window.always_show_tabs || n_tabs > 1)
             .then(|| TabBar::layout(n_tabs, w, st.scale, integrated, st.update.is_some()));
         let top = tab_bar.as_ref().map_or(0.0, |t| t.height);
@@ -612,6 +616,38 @@ impl App {
         }
     }
 
+    /// Copia al portapapeles el texto seleccionado y quita la selección (Ctrl+C y clic derecho
+    /// en Windows). `false` si no hay nada seleccionado.
+    #[cfg(windows)]
+    pub fn copy_and_clear_selection(&mut self) -> bool {
+        let st = self.st();
+        let selected = st.tabs.get(st.active).is_some_and(|t| {
+            t.term
+                .lock()
+                .selection
+                .as_ref()
+                .is_some_and(|s| !s.is_empty())
+        });
+        if !selected {
+            return false;
+        }
+        self.copy_selection(false);
+        let st = self.st();
+        if let Some(tab) = st.tabs.get(st.active) {
+            tab.term.lock().selection = None;
+        }
+        st.window.request_redraw();
+        true
+    }
+
+    /// Clic derecho en Windows: copia lo seleccionado o, si no hay nada, pega.
+    #[cfg(windows)]
+    pub fn copy_or_paste(&mut self) {
+        if !self.copy_and_clear_selection() {
+            self.paste(false);
+        }
+    }
+
     /// Abre lo encontrado con Ctrl+clic (ver `links.rs`).
     pub fn open_link(&mut self, target: crate::links::Target) {
         use crate::links::{Open, Target};
@@ -699,11 +735,13 @@ impl App {
         let bytes = if mode.contains(TermMode::BRACKETED_PASTE) {
             // Evita que el texto pegado cierre el modo bracketed por su cuenta.
             let clean = text.replace("\x1b[201~", "").replace('\x1b', "");
-            format!("\x1b[200~{clean}\x1b[201~")
+            format!("\x1b[200~{clean}\x1b[201~").into_bytes()
+        } else if let Some(b) = powershell_paste(tab, text) {
+            b
         } else {
-            text.replace("\r\n", "\r").replace('\n', "\r")
+            text.replace("\r\n", "\r").replace('\n', "\r").into_bytes()
         };
-        tab.input(bytes.into_bytes());
+        tab.input(bytes);
         self.scroll_to_bottom();
     }
 
@@ -1558,6 +1596,21 @@ impl App {
         st.renderer
             .render(&st.out, theme.background.to_f32(opacity));
     }
+}
+
+/// Windows: lo pegado en el prompt de PowerShell (ver `input::powershell_paste`).
+#[cfg(windows)]
+fn powershell_paste(tab: &Tab, text: &str) -> Option<Vec<u8>> {
+    // Primero el candado de `blocks` y soltarlo: `edit_context` lo vuelve a tomar.
+    let win32 = tab.blocks.lock().unwrap().win32_input;
+    let prompt = win32
+        && tab.edit_context() == crate::edit::Context::Prompt(crate::shell::Shell::PowerShell);
+    prompt.then(|| crate::input::powershell_paste(text))
+}
+
+#[cfg(not(windows))]
+fn powershell_paste(_tab: &Tab, _text: &str) -> Option<Vec<u8>> {
+    None
 }
 
 #[cfg(all(unix, not(target_os = "macos")))]

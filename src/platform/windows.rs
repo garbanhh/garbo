@@ -630,6 +630,15 @@ pub fn default_editor() -> Option<String> {
     })
 }
 
+/// Tiempo entre dos clics para que cuenten como doble clic: el de la configuración del ratón de
+/// Windows (500 ms de serie).
+pub fn double_click_time() -> Duration {
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::GetDoubleClickTime;
+    // SAFETY: solo lee un ajuste del sistema.
+    let ms = unsafe { GetDoubleClickTime() };
+    Duration::from_millis(u64::from(ms.clamp(100, 5000)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

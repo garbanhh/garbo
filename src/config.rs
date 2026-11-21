@@ -353,40 +353,156 @@ impl Config {
             Err(e) => return Err(e),
         };
         let r2 = |v: f32| ((v as f64) * 100.0).round() / 100.0;
-        doc["theme"] = value(self.theme.clone());
-        doc["check_updates"] = value(self.check_updates);
-        doc["notifications"]["agents"] = value(match self.notifications.agents {
+        // Se escribe lo que ya estaba en el archivo y lo que no es el valor por defecto. Lo demás
+        // no se añade: así un valor por defecto nuevo (o el de otro sistema) le llega a quien no
+        // lo cambió. Hasta la 0.11.1 se escribía todo al tocar cualquier ajuste y quedaba fijado
+        // (en Windows, Consolas a 12 pt).
+        let d = Config::default();
+        let mut put = |table: &str, key: &str, item: toml_edit::Item, default: bool| {
+            let present = if table.is_empty() {
+                doc.contains_key(key)
+            } else {
+                doc.get(table).and_then(|t| t.get(key)).is_some()
+            };
+            if default && !present {
+                return;
+            }
+            if table.is_empty() {
+                doc[key] = item;
+            } else {
+                doc[table][key] = item;
+            }
+        };
+        let notify = |w: NotifyWhen| match w {
             NotifyWhen::Unfocused => "unfocused",
             NotifyWhen::Always => "always",
             NotifyWhen::Never => "never",
-        });
-        doc["notifications"]["min_work_secs"] = value(self.notifications.min_work_secs as i64);
-        doc["notifications"]["sound"] = value(self.notifications.sound);
-        doc["notifications"]["blocked"] = value(self.notifications.blocked);
-        doc["font"]["family"] = value(self.font.family.clone());
-        doc["font"]["size"] = value(r2(self.font.size));
-        doc["font"]["line_height"] = value(r2(self.font.line_height));
-        doc["window"]["padding"] = value(r2(self.window.padding));
-        doc["window"]["opacity"] = value(r2(self.window.opacity));
-        doc["window"]["decorations"] = value(self.window.decorations);
-        let cursor = match self.terminal.cursor_style {
+        };
+        let cursor = |c: CursorStyle| match c {
             CursorStyle::Block => "block",
             CursorStyle::Beam => "beam",
             CursorStyle::Underline => "underline",
         };
-        doc["terminal"]["cursor_style"] = value(cursor);
-        doc["terminal"]["cursor_blink"] = value(self.terminal.cursor_blink);
-        doc["terminal"]["copy_on_select"] = value(self.terminal.copy_on_select);
-        doc["terminal"]["scrollback"] = value(self.terminal.scrollback as i64);
-        doc["terminal"]["blocks"] = value(self.terminal.blocks);
-        doc["terminal"]["shell_integration"] = value(self.terminal.shell_integration);
-        doc["terminal"]["autosuggest"] = value(self.terminal.autosuggest);
-        doc["terminal"]["tab_key"] = value(match self.terminal.tab_key {
+        let tab_key = |k: TabKey| match k {
             TabKey::Menu => "menu",
             TabKey::Accept => "accept",
-        });
-        doc["terminal"]["complete_as_you_type"] = value(self.terminal.complete_as_you_type);
-        doc["terminal"]["garbo_prompt"] = value(self.terminal.garbo_prompt);
+        };
+        let (n, dn) = (&self.notifications, &d.notifications);
+        let (f, df) = (&self.font, &d.font);
+        let (w, dw) = (&self.window, &d.window);
+        let (t, dt) = (&self.terminal, &d.terminal);
+        put("", "theme", value(&self.theme), self.theme == d.theme);
+        put(
+            "",
+            "check_updates",
+            value(self.check_updates),
+            self.check_updates == d.check_updates,
+        );
+        put(
+            "notifications",
+            "agents",
+            value(notify(n.agents)),
+            n.agents == dn.agents,
+        );
+        put(
+            "notifications",
+            "min_work_secs",
+            value(n.min_work_secs as i64),
+            n.min_work_secs == dn.min_work_secs,
+        );
+        put(
+            "notifications",
+            "sound",
+            value(n.sound),
+            n.sound == dn.sound,
+        );
+        put(
+            "notifications",
+            "blocked",
+            value(n.blocked),
+            n.blocked == dn.blocked,
+        );
+        put("font", "family", value(&f.family), f.family == df.family);
+        put("font", "size", value(r2(f.size)), r2(f.size) == r2(df.size));
+        put(
+            "font",
+            "line_height",
+            value(r2(f.line_height)),
+            r2(f.line_height) == r2(df.line_height),
+        );
+        put(
+            "window",
+            "padding",
+            value(r2(w.padding)),
+            r2(w.padding) == r2(dw.padding),
+        );
+        put(
+            "window",
+            "opacity",
+            value(r2(w.opacity)),
+            r2(w.opacity) == r2(dw.opacity),
+        );
+        put(
+            "window",
+            "decorations",
+            value(w.decorations),
+            w.decorations == dw.decorations,
+        );
+        put(
+            "terminal",
+            "cursor_style",
+            value(cursor(t.cursor_style)),
+            t.cursor_style == dt.cursor_style,
+        );
+        put(
+            "terminal",
+            "cursor_blink",
+            value(t.cursor_blink),
+            t.cursor_blink == dt.cursor_blink,
+        );
+        put(
+            "terminal",
+            "copy_on_select",
+            value(t.copy_on_select),
+            t.copy_on_select == dt.copy_on_select,
+        );
+        put(
+            "terminal",
+            "scrollback",
+            value(t.scrollback as i64),
+            t.scrollback == dt.scrollback,
+        );
+        put("terminal", "blocks", value(t.blocks), t.blocks == dt.blocks);
+        put(
+            "terminal",
+            "shell_integration",
+            value(t.shell_integration),
+            t.shell_integration == dt.shell_integration,
+        );
+        put(
+            "terminal",
+            "autosuggest",
+            value(t.autosuggest),
+            t.autosuggest == dt.autosuggest,
+        );
+        put(
+            "terminal",
+            "tab_key",
+            value(tab_key(t.tab_key)),
+            t.tab_key == dt.tab_key,
+        );
+        put(
+            "terminal",
+            "complete_as_you_type",
+            value(t.complete_as_you_type),
+            t.complete_as_you_type == dt.complete_as_you_type,
+        );
+        put(
+            "terminal",
+            "garbo_prompt",
+            value(t.garbo_prompt),
+            t.garbo_prompt == dt.garbo_prompt,
+        );
         let parent = path
             .parent()
             .filter(|p| !p.as_os_str().is_empty())
@@ -459,6 +575,35 @@ mod tests {
             );
             assert_eq!(fs::read_to_string(&path).unwrap(), original);
         }
+    }
+
+    /// Al cambiar un ajuste no se fijan en el archivo los demás valores por defecto (la fuente,
+    /// sobre todo); lo que ya estaba escrito sí se actualiza.
+    #[test]
+    fn guardar_solo_escribe_lo_que_no_es_por_defecto() {
+        let dir = crate::temp_dir::TempDir::new_in(&std::env::temp_dir()).unwrap();
+        let path = dir.path().join("config.toml");
+        fs::write(&path, "# mío\n[font]\nsize = 14.0\n").unwrap();
+        let mut cfg = Config::load_at(&path);
+        assert_eq!(cfg.font.size, 14.0);
+        cfg.theme = "nord".into();
+        cfg.font.size = Config::default().font.size;
+        cfg.save_at(&path).unwrap();
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(text.contains("# mío"), "{text}");
+        assert!(text.contains("theme = \"nord\""), "{text}");
+        assert!(!text.contains("family"), "{text}");
+        assert!(
+            !text.contains("[terminal]") && !text.contains("cursor_style"),
+            "{text}"
+        );
+        let back = Config::load_at(&path);
+        assert_eq!(back.theme, "nord");
+        assert_eq!(back.font.size, Config::default().font.size);
+        // En un archivo nuevo, con todo por defecto, no se escribe nada.
+        let fresh = dir.path().join("nuevo.toml");
+        Config::default().save_at(&fresh).unwrap();
+        assert_eq!(fs::read_to_string(&fresh).unwrap().trim(), "");
     }
 
     #[test]
