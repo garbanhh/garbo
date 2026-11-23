@@ -89,6 +89,18 @@ pub fn children(pid: i32) -> Vec<i32> {
 /// Devolver al sistema la memoria que no se usa: en Linux no hace falta (ver `windows.rs`).
 pub fn trim_memory() {}
 
+/// Diferencia (segundos) entre la hora local y la UTC en el instante `at` (segundos desde 1970),
+/// con el horario de verano que tocara entonces.
+pub fn utc_offset(at: i64) -> i32 {
+    let t = at as libc::time_t;
+    // SAFETY: localtime_r solo escribe en `tm`, que es nuestro.
+    let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+    if unsafe { libc::localtime_r(&t, &mut tm) }.is_null() {
+        return 0;
+    }
+    tm.tm_gmtoff as i32
+}
+
 /// Termina un proceso hijo nuestro (p. ej. el `notify-send` de un aviso).
 pub fn terminate(pid: u32) {
     // SAFETY: kill solo manda una señal; el pid es de un hijo nuestro aún sin recoger.

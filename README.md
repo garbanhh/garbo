@@ -45,6 +45,9 @@
   Aider y otros, con un árbol de subagentes para las sesiones compatibles. Cuando un agente
   termina y no estás viendo su sesión, aparece un aviso del escritorio que permite volver a su
   pestaña. Las capturas de pantalla se pegan como imagen.
+- **Estadísticas de los agentes.** Tokens, peticiones y tiempo de trabajo de Claude Code, Codex y
+  Gemini CLI por día, por hora de la semana, por modelo y por agente, calculados en el propio
+  equipo a partir de sus sesiones.
 - **Pestañas y paneles divididos.** Las pestañas van en la barra de título y se titulan solas con
   lo que se está haciendo; cada una se puede dividir en paneles (un agente a la izquierda y las
   pruebas a la derecha, sin tmux).
@@ -116,6 +119,7 @@ de las versiones nuevas y abre su página para descargarlas.
 | `Ctrl+Shift+D` / `Ctrl+Shift+Alt+D` | Dividir: panel a la derecha / debajo |
 | `Alt+←` `→` `↑` `↓` | Cambiar de panel (si la pestaña está dividida) |
 | `Ctrl+Shift+A` / `Ctrl+Shift+E` | Panel de agentes / de puertos |
+| `Ctrl+Shift+S` | Estadísticas de los agentes |
 
 **Línea de órdenes**
 
@@ -274,6 +278,24 @@ tiempo mínimo de trabajo, el sonido y si avisar cuando te necesita, y se puede 
 Para saber con exactitud si un agente trabaja, te espera o ha terminado, Garbo implementa el
 protocolo de estado de programas (OSC 7501), que usa Claude Code desde la 2.1.295. Con los agentes
 que no lo usan, el estado se deduce de su actividad.
+
+**Estadísticas.** El botón de la gráfica de la barra de pestañas (o `Ctrl+Shift+S`) abre el uso de
+los agentes en los últimos 7, 30 o 90 días o desde el principio:
+
+- tokens de entrada (y la parte leída de la caché), tokens de salida, peticiones y tiempo de
+  trabajo, con su evolución y el cambio respecto al periodo anterior;
+- tokens por día, separando la entrada de la caché, la entrada nueva y la salida;
+- cuándo trabajan los agentes, por día de la semana y hora;
+- el reparto por modelo y por empresa, y el resumen de cada agente. Al pulsar un agente se ven
+  solo sus datos.
+
+Los datos salen de los archivos de sesión que Claude Code (`~/.claude`), Codex (`~/.codex`) y
+Gemini CLI (`~/.gemini`) guardan en el equipo; Garbo solo los lee y no envía nada. Las sesiones
+nuevas se leen al abrir el apartado y cada 30 segundos mientras está abierto. El resumen se
+conserva en `~/.cache/garbo/estadisticas.json` (en Windows, `%LOCALAPPDATA%\garbo`), de modo que
+el historial se mantiene aunque los agentes borren sus sesiones antiguas; borrar ese archivo lo
+reinicia. El tiempo de trabajo es una estimación: suma los intervalos entre los eventos de cada
+sesión, salvo la espera hasta el siguiente mensaje del usuario y las pausas de más de 10 minutos.
 
 **Pegar capturas.** Si al pegar el portapapeles tiene una imagen (por ejemplo, tras `ImprPant`),
 Garbo la guarda en `~/.cache/garbo/capturas` (en Windows, `%LOCALAPPDATA%\garbo\capturas`) y pega

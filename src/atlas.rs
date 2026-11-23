@@ -60,6 +60,8 @@ pub enum UiVariant {
     Title,
     /// Texto secundario denso (vista previa de una pestaña).
     Small,
+    /// Cifras grandes (estadísticas): negrita al doble de tamaño.
+    Big,
 }
 
 impl UiVariant {
@@ -68,11 +70,12 @@ impl UiVariant {
             UiVariant::Normal => 1.0,
             UiVariant::Title => 1.22,
             UiVariant::Small => 0.88,
+            UiVariant::Big => 2.0,
         }
     }
 
     fn style(self) -> Style {
-        if self == UiVariant::Title {
+        if matches!(self, UiVariant::Title | UiVariant::Big) {
             Style::Bold
         } else {
             Style::Regular
@@ -84,6 +87,7 @@ impl UiVariant {
             UiVariant::Normal => 1,
             UiVariant::Title => 2,
             UiVariant::Small => 3,
+            UiVariant::Big => 4,
         }
     }
 }
@@ -95,7 +99,7 @@ pub struct GlyphCache {
     /// Fuente proporcional de la interfaz (pestañas, paleta, ajustes).
     pub ui: FontSet,
     packer: Packer,
-    /// (juego de fuentes 0=terminal 1..=3=interfaz por variante, slot, glifo, ancho doble)
+    /// (juego de fuentes 0=terminal 1..=4=interfaz por variante, slot, glifo, ancho doble)
     map: FxHashMap<(u8, u16, u16, bool), Option<AtlasGlyph>>,
     /// Atajo de `get` para ASCII de anchura simple y sin emoji, por estilo: casi todas las
     /// celdas. `None` = aún no buscado.

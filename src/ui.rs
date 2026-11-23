@@ -28,6 +28,7 @@ pub struct TabBar {
     pub tab_y: f32,
     pub tab_h: f32,
     pub plus: (f32, f32),
+    pub stats_btn: (f32, f32),
     pub agents_btn: (f32, f32),
     pub ports_btn: (f32, f32),
     pub settings: (f32, f32),
@@ -43,6 +44,7 @@ pub enum TabHit {
     Tab(usize),
     Close(usize),
     NewTab,
+    Stats,
     Agents,
     Ports,
     Settings,
@@ -57,6 +59,7 @@ pub enum TabHit {
 /// Estado de los botones conmutables de la barra (y de la ventana, para el botón de maximizar).
 #[derive(Clone, Copy, Default)]
 pub struct Toggles {
+    pub stats: bool,
     pub agents: bool,
     pub ports: bool,
     /// Solo en Windows: el botón de maximizar pasa a ser el de restaurar.
@@ -104,11 +107,12 @@ impl TabBar {
         let settings = (right - btn, btn);
         let ports_btn = (settings.0 - gap - btn, btn);
         let agents_btn = (ports_btn.0 - gap - btn, btn);
+        let stats_btn = (agents_btn.0 - gap - btn, btn);
         let update = has_update.then(|| {
             let w = (200.0 * s).round();
-            (agents_btn.0 - 2.0 * gap - w, w)
+            (stats_btn.0 - 2.0 * gap - w, w)
         });
-        let tabs_end = update.map_or(agents_btn.0 - gap, |u| u.0);
+        let tabs_end = update.map_or(stats_btn.0 - gap, |u| u.0);
         let avail = (tabs_end - margin - 2.0 * gap - btn).max(0.0);
         let tab_w = (avail / n.max(1) as f32).min(260.0 * s).floor();
         let tabs = (0..n).map(|i| (margin + i as f32 * tab_w, tab_w)).collect();
@@ -119,6 +123,7 @@ impl TabBar {
             tab_y,
             tab_h,
             plus,
+            stats_btn,
             agents_btn,
             ports_btn,
             settings,
@@ -144,6 +149,7 @@ impl TabBar {
             (self.settings, TabHit::Settings),
             (self.ports_btn, TabHit::Ports),
             (self.agents_btn, TabHit::Agents),
+            (self.stats_btn, TabHit::Stats),
         ] {
             if in_row && x >= r.0 && x < r.0 + r.1 {
                 return Some(hit);
@@ -313,6 +319,15 @@ impl TabBar {
                 dimc
             }
         };
+        // Estadísticas: tres barras de distinta altura sobre una base.
+        let c = button(p, self.stats_btn, TabHit::Stats, toggles.stats);
+        let sx = (self.stats_btn.0 + self.stats_btn.1 / 2.0).round();
+        let floor = cy + 6.0 * s;
+        for (dx, bh) in [(-4.5, 6.0), (0.0, 11.0), (4.5, 8.0)] {
+            let bx = (sx + dx * s - 1.5 * s).round();
+            p.rounded(bx, floor - bh * s, 3.0 * s, bh * s, c, 1.0, 1.0 * s);
+        }
+
         let c = button(p, self.agents_btn, TabHit::Agents, toggles.agents);
         let bx = (self.agents_btn.0 + self.agents_btn.1 / 2.0).round();
         p.rounded(

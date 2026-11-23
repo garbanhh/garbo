@@ -30,6 +30,7 @@ mod search;
 mod sessions;
 mod settings;
 mod shell;
+mod stats;
 mod status;
 mod subagents;
 mod suggest;

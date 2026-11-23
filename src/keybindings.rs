@@ -33,6 +33,7 @@ pub enum Action {
     Settings,
     ToggleAgents,
     TogglePorts,
+    AgentStats,
     Search,
     SplitRight,
     SplitDown,
@@ -179,6 +180,12 @@ impl Action {
                 "toggle_ports",
                 "Panel de puertos",
                 "ctrl+shift+e",
+            ),
+            (
+                AgentStats,
+                "agent_stats",
+                "Estadísticas de los agentes",
+                "ctrl+shift+s",
             ),
             (Search, "search", "Buscar en el historial", "ctrl+shift+f"),
             (

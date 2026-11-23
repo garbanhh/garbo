@@ -154,13 +154,14 @@ impl ApplicationHandler<UserEvent> for App {
             let blink = self.cfg.terminal.cursor_blink;
             if let Some(st) = self.st.as_mut() {
                 let now = Instant::now();
-                if blink && now >= st.next_blink {
+                // Con las estadísticas abiertas no se ve ningún cursor.
+                if blink && st.stats.is_none() && now >= st.next_blink {
                     st.cursor_on = !st.cursor_on;
                     st.next_blink = now + BLINK;
                     st.window.request_redraw();
                 }
                 // "hace N s" del panel de agentes
-                if st.panel.agents {
+                if st.panel.agents && st.stats.is_none() {
                     st.window.request_redraw();
                 }
             }
@@ -181,7 +182,7 @@ impl ApplicationHandler<UserEvent> for App {
         let blink_at = self
             .st
             .as_ref()
-            .filter(|st| blink && st.focused)
+            .filter(|st| blink && st.focused && st.stats.is_none())
             .map(|st| st.next_blink);
         let trim_at = self.st.as_ref().and_then(|st| st.trim_at);
         // Sin animaciones, parpadeo ni avisos pendientes, la app duerme hasta el siguiente evento.
@@ -208,6 +209,15 @@ impl ApplicationHandler<UserEvent> for App {
                 if let Some(st) = self.st.as_mut() {
                     st.update_check = state;
                     st.window.request_redraw();
+                }
+                return;
+            }
+            UserEvent::Stats(msg) => {
+                if let Some(st) = self.st.as_mut() {
+                    if let Some(stats) = st.stats.as_mut() {
+                        stats.on_msg(msg);
+                        st.window.request_redraw();
+                    }
                 }
                 return;
             }
@@ -533,6 +543,11 @@ impl App {
             return false;
         }
 
+        // Estadísticas abiertas: el teclado es suyo, salvo los atajos que tienen sentido con ellas.
+        if self.st().stats.is_some() {
+            return self.on_stats_key(&ev);
+        }
+
         // Búsqueda abierta (Ctrl+Shift+F): el teclado va a la barra.
         if self.search_open() {
             return self.on_search_key(&ev);
@@ -832,6 +847,11 @@ impl App {
 
     fn on_mouse_move(&mut self, x: f32, y: f32) {
         let geo = self.geometry();
+        if self.st().stats.is_some() && self.st().settings.is_none() {
+            self.st().mouse = (x, y);
+            self.on_stats_mouse_move(&geo, x, y);
+            return;
+        }
         let st = self.st();
         st.mouse = (x, y);
         if let Some(set) = st.settings.as_mut() {
@@ -1007,6 +1027,19 @@ impl App {
             return false;
         }
 
+        // Estadísticas: lo que queda bajo la barra de pestañas es suyo.
+        let in_bar = geo.tab_bar.as_ref().is_some_and(|tb| y < tb.height);
+        if self.st().stats.is_some() && !in_bar {
+            if pressed && button == MouseButton::Left {
+                if let Some(dir) = self.resize_edge(x, y) {
+                    let _ = self.st().window.drag_resize_window(dir);
+                    return false;
+                }
+                self.on_stats_click(&geo, x, y);
+            }
+            return false;
+        }
+
         // Barra de búsqueda: sus botones (el resto de clics sigue su camino).
         if pressed && button == MouseButton::Left && self.search_open() {
             let st = self.st();
@@ -1083,13 +1116,26 @@ impl App {
                     && st.last_click.1 == 1;
                 st.last_click = (now, if double { 0 } else { 1 });
                 match (tb.hit(x, y), button) {
-                    (Some(TabHit::Tab(i)), MouseButton::Left) => self.select_group(i),
+                    (Some(TabHit::Tab(i)), MouseButton::Left) => {
+                        self.close_stats();
+                        self.select_group(i)
+                    }
                     (Some(TabHit::Tab(i) | TabHit::Close(i)), MouseButton::Middle)
                     | (Some(TabHit::Close(i)), MouseButton::Left) => return self.close_tab(i),
-                    (Some(TabHit::NewTab), _) => self.new_tab(),
+                    (Some(TabHit::NewTab), _) => {
+                        self.close_stats();
+                        self.new_tab()
+                    }
                     (Some(TabHit::Update), MouseButton::Left) => return self.on_update_click(),
-                    (Some(TabHit::Agents), MouseButton::Left) => self.toggle_panel(true),
-                    (Some(TabHit::Ports), MouseButton::Left) => self.toggle_panel(false),
+                    (Some(TabHit::Stats), MouseButton::Left) => self.toggle_stats(),
+                    (Some(TabHit::Agents), MouseButton::Left) => {
+                        self.close_stats();
+                        self.toggle_panel(true)
+                    }
+                    (Some(TabHit::Ports), MouseButton::Left) => {
+                        self.close_stats();
+                        self.toggle_panel(false)
+                    }
                     (Some(TabHit::Settings), MouseButton::Left) => {
                         self.run_action(crate::keybindings::Action::Settings);
                     }
@@ -1385,6 +1431,20 @@ impl App {
             }
             return;
         }
+        if st.settings.is_none() {
+            if let Some(stats) = st.stats.as_mut() {
+                let px = match delta {
+                    MouseScrollDelta::LineDelta(_, y) => -y * 48.0 * st.scale,
+                    MouseScrollDelta::PixelDelta(p) => -p.y as f32,
+                };
+                let (w, h) = st.renderer.size();
+                let (mx, my) = st.mouse;
+                stats.scroll_by(px, w, h, top, st.scale);
+                stats.hover = Some(stats.hit(mx, my, w, h, top, st.scale));
+                st.window.request_redraw();
+                return;
+            }
+        }
         if let Some(set) = st.settings.as_mut() {
             // La rueda desplaza la lista; la selección solo la mueve el teclado.
             let px = match delta {
@@ -1435,5 +1495,142 @@ impl App {
             tab.term.lock().scroll_display(Scroll::Delta(n));
             st.window.request_redraw();
         }
+    }
+}
+
+/// Apartado de estadísticas (ver `stats/view.rs`).
+impl App {
+    fn on_stats_key(&mut self, ev: &KeyEvent) -> bool {
+        use crate::keybindings::Action;
+        let mods = self.st().mods;
+        match self.keys.lookup(&ev.logical_key, mods) {
+            // Con las estadísticas abiertas.
+            Some(
+                a @ (Action::AgentStats
+                | Action::CommandPalette
+                | Action::Settings
+                | Action::NextTheme
+                | Action::ReloadConfig
+                | Action::FontBigger
+                | Action::FontSmaller
+                | Action::FontReset),
+            ) => return self.run_action(a),
+            // Las que llevan a un terminal: primero se cierran.
+            Some(
+                a @ (Action::NewTab
+                | Action::NextTab
+                | Action::PrevTab
+                | Action::GotoTab(_)
+                | Action::MoveTabLeft
+                | Action::MoveTabRight
+                | Action::ToggleAgents
+                | Action::TogglePorts
+                | Action::Search
+                | Action::SplitRight
+                | Action::SplitDown),
+            ) => {
+                self.close_stats();
+                return self.run_action(a);
+            }
+            _ => {}
+        }
+        let top = self.geometry().tab_bar.as_ref().map_or(0.0, |t| t.height);
+        let st = self.st();
+        let (w, h) = st.renderer.size();
+        let s = st.scale;
+        let shift = mods.shift_key();
+        let Some(stats) = st.stats.as_mut() else {
+            return false;
+        };
+        let page = ((h - top) * 0.8).max(48.0 * s);
+        match &ev.logical_key {
+            Key::Named(NamedKey::Escape) => {
+                self.close_stats();
+                return false;
+            }
+            Key::Named(NamedKey::ArrowLeft) => stats.step_period(-1),
+            Key::Named(NamedKey::ArrowRight) => stats.step_period(1),
+            Key::Named(NamedKey::Tab) => stats.cycle_agent(shift),
+            Key::Named(NamedKey::ArrowUp) => stats.scroll_by(-48.0 * s, w, h, top, s),
+            Key::Named(NamedKey::ArrowDown) => stats.scroll_by(48.0 * s, w, h, top, s),
+            Key::Named(NamedKey::PageUp) => stats.scroll_by(-page, w, h, top, s),
+            Key::Named(NamedKey::PageDown) | Key::Named(NamedKey::Space) => {
+                stats.scroll_by(page, w, h, top, s)
+            }
+            Key::Named(NamedKey::Home) => stats.scroll_to(false, w, h, top, s),
+            Key::Named(NamedKey::End) => stats.scroll_to(true, w, h, top, s),
+            Key::Character(c) => {
+                if let Some(p) = c
+                    .parse::<usize>()
+                    .ok()
+                    .and_then(|n| n.checked_sub(1))
+                    .and_then(|i| crate::stats::Period::ALL.get(i))
+                {
+                    stats.set_period(*p);
+                }
+            }
+            _ => {}
+        }
+        st.window.request_redraw();
+        false
+    }
+
+    fn on_stats_mouse_move(&mut self, geo: &crate::app::Geometry, x: f32, y: f32) {
+        let edge = self.resize_edge(x, y);
+        let st = self.st();
+        let (w, h) = st.renderer.size();
+        let top = geo.tab_bar.as_ref().map_or(0.0, |t| t.height);
+        let scale = st.scale;
+        let bar_hover = geo.tab_bar.as_ref().and_then(|tb| tb.hit(x, y));
+        if bar_hover != st.hover {
+            st.hover = bar_hover;
+            st.window.request_redraw();
+        }
+        let Some(stats) = st.stats.as_mut() else {
+            return;
+        };
+        let hit = stats.hit(x, y, w, h, top, scale);
+        stats.mouse = (x, y);
+        // La ventanita de detalles sigue al ratón: se redibuja también si no cambia lo de debajo.
+        let follows = matches!(
+            hit,
+            crate::stats::view::Hit::Bar(_) | crate::stats::view::Hit::Cell(..)
+        );
+        if stats.hover != Some(hit) || follows {
+            stats.hover = Some(hit);
+            st.window.request_redraw();
+        }
+        let icon = match edge {
+            Some(dir) => resize_cursor(dir),
+            None if hit.clickable() => CursorIcon::Pointer,
+            None => CursorIcon::Default,
+        };
+        if icon != st.cursor_icon {
+            st.cursor_icon = icon;
+            st.window.set_cursor(icon);
+        }
+    }
+
+    fn on_stats_click(&mut self, geo: &crate::app::Geometry, x: f32, y: f32) {
+        use crate::stats::view::Hit;
+        let st = self.st();
+        let (w, h) = st.renderer.size();
+        let top = geo.tab_bar.as_ref().map_or(0.0, |t| t.height);
+        let scale = st.scale;
+        let Some(stats) = st.stats.as_mut() else {
+            return;
+        };
+        match stats.hit(x, y, w, h, top, scale) {
+            Hit::Close => {
+                self.close_stats();
+                return;
+            }
+            Hit::Period(p) => stats.set_period(p),
+            Hit::Agent(a) => stats.toggle_agent(a),
+            _ => {}
+        }
+        // Lo de debajo del ratón puede haber cambiado (otras filas, otra escala).
+        stats.hover = Some(stats.hit(x, y, w, h, top, scale));
+        st.window.request_redraw();
     }
 }

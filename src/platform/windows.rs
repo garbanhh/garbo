@@ -475,6 +475,23 @@ pub fn trim_memory() {
     unsafe { K32EmptyWorkingSet(GetCurrentProcess()) };
 }
 
+/// Diferencia (segundos) entre la hora local y la UTC. Windows da la de ahora (con el horario de
+/// verano en curso): las horas de otra estación pueden quedar desplazadas una hora en las
+/// estadísticas.
+pub fn utc_offset(_at: i64) -> i32 {
+    use windows_sys::Win32::System::Time::{GetTimeZoneInformation, TIME_ZONE_INFORMATION};
+    let mut tz = TIME_ZONE_INFORMATION::default();
+    // SAFETY: solo escribe en `tz`, que es nuestro.
+    let bias = match unsafe { GetTimeZoneInformation(&mut tz) } {
+        // TIME_ZONE_ID_UNKNOWN (sin horario de verano), _STANDARD y _DAYLIGHT.
+        0 => tz.Bias,
+        1 => tz.Bias + tz.StandardBias,
+        2 => tz.Bias + tz.DaylightBias,
+        _ => 0,
+    };
+    -bias * 60
+}
+
 /// Extensiones ejecutables (`PATHEXT`, con un valor por defecto si no está puesta).
 fn path_exts() -> Vec<String> {
     std::env::var("PATHEXT")

@@ -99,6 +99,8 @@ pub struct State {
     /// llega su eco (lo escrito cambia).
     pub menu_auto: Option<(String, Instant)>,
     pub settings: Option<crate::settings::Settings>,
+    /// Apartado de estadísticas de los agentes (Ctrl+Shift+S).
+    pub stats: Option<crate::stats::view::StatsView>,
     pub update: Option<crate::update::UpdateState>,
     /// Búsqueda manual de actualizaciones (Ajustes).
     pub update_check: crate::update::CheckState,
@@ -195,6 +197,7 @@ impl App {
             menu: None,
             menu_auto: None,
             settings: None,
+            stats: None,
             update: None,
             update_check: Default::default(),
             panel: Default::default(),
@@ -218,6 +221,10 @@ impl App {
             fg: Vec::with_capacity(8192),
         });
         self.new_tab();
+        // Herramienta de desarrollo: abrir las estadísticas al arrancar (capturas sin teclear).
+        if std::env::var_os("GARBO_OPEN_STATS").is_some() {
+            self.toggle_stats();
+        }
         crate::update::ENABLED.store(self.cfg.check_updates, std::sync::atomic::Ordering::Relaxed);
         if self.cfg.check_updates {
             crate::update::start_checker(self.proxy.clone());
@@ -875,6 +882,7 @@ impl App {
                 st.window.request_redraw();
             }
             Action::ToggleAgents => self.toggle_panel(true),
+            Action::AgentStats => self.toggle_stats(),
             Action::Search => {
                 let st = self.st();
                 let tab = st.tabs.get(st.active).map(|t| (t.id, t.selected_block));
@@ -1057,7 +1065,10 @@ impl App {
                 );
             }
         }
-        if st.panel.agents && st.tabs.iter().any(|t| t.session.agent.is_some()) {
+        if st.panel.agents
+            && st.stats.is_none()
+            && st.tabs.iter().any(|t| t.session.agent.is_some())
+        {
             push(now + std::time::Duration::from_secs(1));
         }
         // Despliegue de una fila del panel: fotogramas solo mientras dura la animación.
@@ -1065,6 +1076,31 @@ impl App {
             push(now + std::time::Duration::from_millis(12));
         }
         next
+    }
+
+    /// Abre o cierra el apartado de estadísticas. Su hilo de lectura solo vive mientras está
+    /// abierto.
+    pub fn toggle_stats(&mut self) {
+        let proxy = self.proxy.clone();
+        let st = self.st();
+        st.palette = None;
+        st.menu = None;
+        if st.stats.take().is_some() {
+            crate::stats::stop();
+        } else {
+            st.stats = Some(crate::stats::view::StatsView::new());
+            crate::stats::start(proxy);
+        }
+        st.hover = None;
+        st.window.request_redraw();
+    }
+
+    pub fn close_stats(&mut self) {
+        let st = self.st();
+        if st.stats.take().is_some() {
+            crate::stats::stop();
+            st.window.request_redraw();
+        }
     }
 
     pub fn toggle_panel(&mut self, agents: bool) {
@@ -1385,12 +1421,15 @@ impl App {
             })
             .collect();
         let toggles = ui::Toggles {
+            stats: st.stats.is_some(),
             agents: st.panel.agents,
             ports: st.panel.ports,
             maximized: cfg!(windows) && st.window.is_maximized(),
         };
         let now = Instant::now();
         let phase = (now.duration_since(st.anim_epoch).as_millis() / 300) as usize;
+        // Con las estadísticas abiertas no se dibujan los terminales ni el panel lateral.
+        let stats_open = st.stats.is_some();
 
         for _attempt in 0..2 {
             st.out.clear();
@@ -1403,7 +1442,7 @@ impl App {
                 queue: &st.renderer.queue,
                 atlas: &st.renderer.atlas,
             };
-            if let Some(tb) = &geo.tab_bar {
+            if let Some(tb) = geo.tab_bar.as_ref().filter(|_| !stats_open) {
                 tb.draw(
                     &mut p,
                     theme,
@@ -1417,8 +1456,8 @@ impl App {
                     phase,
                 );
             }
-            let multi = geo.panes.len() > 1;
-            for pane in &geo.panes {
+            let multi = geo.panes.len() > 1 && !stats_open;
+            for pane in geo.panes.iter().filter(|_| !stats_open) {
                 let Some(tab) = st.tabs.get(pane.idx) else {
                     continue;
                 };
@@ -1542,7 +1581,7 @@ impl App {
                     }
                 }
             }
-            if let Some((px, py, pw, ph)) = geo.panel {
+            if let Some((px, py, pw, ph)) = geo.panel.filter(|_| !stats_open) {
                 let previewed: Vec<usize> = st.panel.previewed(now).collect();
                 let rows: Vec<crate::panel::AgentRow> = st
                     .tabs
@@ -1572,6 +1611,26 @@ impl App {
                     .collect();
                 st.panel
                     .draw(&mut p, theme, &rows, px, py, pw, ph, st.scale, now, phase);
+            }
+            if let Some(stats) = st.stats.as_mut() {
+                let top = geo.tab_bar.as_ref().map_or(0.0, |t| t.height);
+                stats.draw(&mut p, theme, w, h, top, st.scale);
+                // La barra de pestañas, encima: tapa lo que se desplazó hacia arriba.
+                p.out.append(p.fg);
+                if let Some(tb) = &geo.tab_bar {
+                    tb.draw(
+                        &mut p,
+                        theme,
+                        w,
+                        &views,
+                        st.group,
+                        st.hover,
+                        st.scale,
+                        st.update.as_ref(),
+                        toggles,
+                        phase,
+                    );
+                }
             }
             if let Some(pal) = &st.palette {
                 // El texto del terminal va debajo del overlay: se vuelca antes de pintarlo.

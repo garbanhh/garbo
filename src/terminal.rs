@@ -32,6 +32,8 @@ pub enum UserEvent {
     /// activación del escritorio). Ver `notify.rs` y `activation.rs`.
     NoticeShown(u64, u32),
     NoticeClicked(u64, Option<String>),
+    /// Estadísticas de los agentes leídas por su hilo (ver `stats.rs`).
+    Stats(crate::stats::StatsMsg),
 }
 
 /// Salida que llega justo después de que el usuario escriba es su eco (o el redibujado de la
