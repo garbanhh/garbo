@@ -470,6 +470,42 @@ impl App {
             st.next_blink = Instant::now() + BLINK;
         }
 
+        // Editor de aspecto: ↑ ↓ eligen la fila, ← → la opción, Esc cierra.
+        if self.st().look.is_some() {
+            use crate::keybindings::Action;
+            use crate::look::Nav;
+            let mods = self.st().mods;
+            match self.keys.lookup(&ev.logical_key, mods) {
+                Some(Action::Appearance) => return self.run_action(Action::Appearance),
+                Some(Action::Settings) => {
+                    self.close_look();
+                    return self.run_action(Action::Settings);
+                }
+                _ => {}
+            }
+            let shift = mods.shift_key();
+            let nav = match &ev.logical_key {
+                Key::Named(NamedKey::Escape) => {
+                    self.close_look();
+                    return false;
+                }
+                Key::Named(NamedKey::ArrowUp) => Some(Nav::Up),
+                Key::Named(NamedKey::ArrowDown) => Some(Nav::Down),
+                Key::Named(NamedKey::ArrowLeft) => Some(Nav::Left),
+                Key::Named(NamedKey::ArrowRight) => Some(Nav::Right),
+                Key::Named(NamedKey::Tab) if shift => Some(Nav::Up),
+                Key::Named(NamedKey::Tab) => Some(Nav::Down),
+                _ => None,
+            };
+            let st = self.st.as_mut().unwrap();
+            let change = match (nav, st.look.as_mut()) {
+                (Some(n), Some(look)) => look.nav(n, &mut self.cfg),
+                _ => crate::settings::Change::None,
+            };
+            st.window.request_redraw();
+            return self.apply_setting(change);
+        }
+
         // Ajustes abiertos: capturan el teclado.
         if self.st().settings.is_some() {
             let mods = self.st().mods;
@@ -847,6 +883,37 @@ impl App {
 
     fn on_mouse_move(&mut self, x: f32, y: f32) {
         let geo = self.geometry();
+        // Editor de aspecto: todo lo que queda bajo la barra de pestañas es suyo.
+        let in_bar = geo.tab_bar.as_ref().is_some_and(|tb| y < tb.height);
+        let dragging = self.st().look.as_ref().is_some_and(|l| l.dragging);
+        if self.st().look.is_some() && (!in_bar || dragging) {
+            use crate::look::Hit;
+            let top = geo.tab_bar.as_ref().map_or(0.0, |t| t.height);
+            let st = self.st();
+            st.mouse = (x, y);
+            let (_, h) = st.renderer.size();
+            let look = st.look.as_mut().unwrap();
+            if look.dragging {
+                look.drag_to(y, h, top);
+                st.window.request_redraw();
+            } else {
+                let hit = look.hit(x, y);
+                if look.hover != Some(hit) {
+                    look.hover = Some(hit);
+                    st.window.request_redraw();
+                }
+            }
+            let icon = if look.dragging || look.hover == Some(Hit::Divider) {
+                CursorIcon::RowResize
+            } else {
+                CursorIcon::Default
+            };
+            if st.cursor_icon != icon {
+                st.cursor_icon = icon;
+                st.window.set_cursor(icon);
+            }
+            return;
+        }
         if self.st().stats.is_some() && self.st().settings.is_none() {
             self.st().mouse = (x, y);
             self.on_stats_mouse_move(&geo, x, y);
@@ -978,6 +1045,48 @@ impl App {
         let pressed = state == ElementState::Pressed;
         let (x, y) = self.st().mouse;
         let geo = self.geometry();
+
+        // Editor de aspecto (la barra de pestañas sigue funcionando).
+        if self.st().look.is_some() {
+            use crate::look::Hit;
+            use crate::settings::Change;
+            let in_bar = geo.tab_bar.as_ref().is_some_and(|tb| y < tb.height);
+            let st = self.st.as_mut().unwrap();
+            let look = st.look.as_mut().unwrap();
+            if !pressed && look.dragging {
+                look.dragging = false;
+                st.look_ratio = look.ratio;
+                return false;
+            }
+            if !in_bar {
+                if !pressed || button != MouseButton::Left {
+                    return false;
+                }
+                let change = match look.hit(x, y) {
+                    Hit::Divider => {
+                        look.dragging = true;
+                        Change::None
+                    }
+                    Hit::Close => {
+                        self.close_look();
+                        return false;
+                    }
+                    Hit::Sample => {
+                        look.sample = !look.sample;
+                        Change::None
+                    }
+                    Hit::Keep => {
+                        look.keep = !look.keep;
+                        Change::None
+                    }
+                    Hit::Reset => look.reset(&mut self.cfg),
+                    Hit::Option(g, i) => look.choose(g, i, &mut self.cfg),
+                    Hit::Panel | Hit::Above => Change::None,
+                };
+                st.window.request_redraw();
+                return self.apply_setting(change);
+            }
+        }
 
         // Ajustes abiertos
         if self.st().settings.is_some() {
@@ -1414,6 +1523,19 @@ impl App {
             let n = menu.wheel(steps);
             if n != 0 {
                 menu.move_sel(-n);
+                st.window.request_redraw();
+            }
+            return;
+        }
+        if let Some(look) = st.look.as_mut() {
+            // Sobre las opciones, las desplaza; sobre el terminal, nada (se ve la zona del cursor).
+            if look.in_panel(st.mouse.1) {
+                let px = match delta {
+                    MouseScrollDelta::LineDelta(_, y) => y * 48.0 * st.scale,
+                    MouseScrollDelta::PixelDelta(p) => p.y as f32,
+                };
+                look.wheel(px);
+                look.hover = Some(look.hit(st.mouse.0, st.mouse.1));
                 st.window.request_redraw();
             }
             return;

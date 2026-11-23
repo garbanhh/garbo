@@ -52,7 +52,8 @@
   lo que se está haciendo; cada una se puede dividir en paneles (un agente a la izquierda y las
   pruebas a la derecha, sin tmux).
 - **A tu gusto.** Temas, fuentes, atajos y un panel de ajustes que aplica cada cambio al momento y
-  lo guarda en `config.toml`.
+  lo guarda en `config.toml`. En Linux, 19 temas con forma propia y un editor de aspecto con la
+  terminal en vivo arriba y las opciones debajo.
 - **Enlaces y rutas con Ctrl+clic.** Abre URL y lleva los errores de compilación
   (`src/main.rs:42:5`) a tu editor, en esa línea.
 - **Búsqueda en el historial.** `Ctrl+Shift+F` resalta todas las coincidencias y, con un bloque
@@ -312,6 +313,22 @@ ratón o con el teclado (`Tab` cambia de categoría, `↑` `↓` eligen, `←` `
 cierra). Si el archivo tiene errores, Ajustes muestra un aviso y conserva el archivo para que
 puedas corregirlo.
 
+### Aspecto (Linux)
+
+*Ajustes → Tema → Aspecto*, o "Editar el aspecto" en la paleta de comandos, parte la ventana en
+dos: arriba la terminal en vivo y debajo las opciones, con una barra divisoria que se arrastra para
+repartir el alto. Cada tema trae su propia forma y se puede cambiar opción a opción: estilo de las
+pestañas, etiqueta de la carpeta del prompt, marcas de los bloques, cursor, botones de ventana,
+alto de la barra, fondo liso o con degradado, radio de las esquinas y opacidad. Un punto señala lo
+que trae el tema. *Ver con un ejemplo* muestra una sesión de muestra (con un comando que falla) en
+lugar de la terminal; *Mantener mi forma* conserva la forma al probar los colores de otro tema, y
+*Forma del tema* deshace los cambios. Con el teclado, `↑` `↓` cambian de fila, `←` `→` de opción y
+`Esc` cierra. La terminal no cambia de tamaño mientras se edita: los programas abiertos no se
+enteran.
+
+Solo se guarda en la sección `[style]` de `config.toml` lo que difiere del tema elegido. En Windows
+llegará en una versión posterior; de momento allí se mantiene el aspecto de siempre.
+
 ## Configuración
 
 El archivo es `~/.config/garbo/config.toml` (en Windows, `%APPDATA%\garbo\config.toml`); todas
@@ -437,7 +454,8 @@ src/
   blocks.rs       bloques de comandos: marcas, anclas, rangos y copia
   shell.rs        bash, zsh y fish: detección y carga de la integración
   renderer.rs     renderizador wgpu
-  shader.wgsl     primitivas: rectángulos redondeados, glifos, emoji, arcos y segmentos
+  shader.wgsl     primitivas: rectángulos redondeados, glifos, emoji, arcos, segmentos, degradados
+                  y contornos
   atlas.rs        atlas de glifos
   font.rs         descubrimiento (fontdb) y rasterizado (swash) de fuentes
   colr.rs         rasterizado de emoji COLRv1 (skrifa + tiny-skia)
@@ -449,6 +467,8 @@ src/
   edit.rs         edición de la línea al estilo Warp (Shift+Intro, clic, palabras)
   keybindings.rs  atajos de teclado configurables
   config.rs       configuración y temas
+  style.rs        forma de la interfaz (pestañas, prompt, bloques, botones, barra, fondo)
+  look.rs         editor de aspecto (terminal en vivo arriba, opciones debajo)
   update.rs       comprobación e instalación de actualizaciones
   suggest.rs      sugerencias en gris desde el historial (con la carpeta de cada comando)
   complete.rs     menú de completado: candidatos según el contexto y búsqueda

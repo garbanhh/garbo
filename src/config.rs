@@ -1,6 +1,7 @@
 //! Configuración de usuario: `~/.config/garbo/config.toml`.
 //! Todo tiene valores por defecto razonables; el archivo es opcional.
 
+use crate::style::{Background, BarSize, Blocks, Buttons, Prompt, Style, Tabs};
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::fs;
@@ -18,6 +19,8 @@ pub struct Config {
     pub theme: String,
     /// Sobrescrituras de colores sobre el tema elegido.
     pub colors: ColorOverrides,
+    /// Cambios sobre la forma del tema (pestañas, prompt, bloques…). Ver `style.rs`.
+    pub style: crate::style::StyleOverrides,
     /// acción -> combinación, p.ej. `new_tab = "ctrl+shift+t"`.
     pub keybindings: HashMap<String, String>,
     /// Consultar en GitHub si hay versión nueva (al arrancar y cada 24 h).
@@ -69,6 +72,7 @@ impl Default for Config {
             terminal: TerminalConfig::default(),
             theme: "garbo-black".into(),
             colors: ColorOverrides::default(),
+            style: crate::style::StyleOverrides::default(),
             keybindings: HashMap::new(),
             check_updates: true,
             notifications: NotifyConfig::default(),
@@ -207,6 +211,35 @@ pub enum CursorStyle {
     Block,
     Beam,
     Underline,
+    /// Contorno de un bloque (el que se ve sin foco).
+    Hollow,
+}
+
+impl CursorStyle {
+    pub const ALL: [CursorStyle; 4] = [
+        CursorStyle::Block,
+        CursorStyle::Beam,
+        CursorStyle::Underline,
+        CursorStyle::Hollow,
+    ];
+
+    /// Los que se ofrecen en Ajustes (el hueco, de momento, solo donde `style::ENABLED`).
+    pub fn offered() -> &'static [CursorStyle] {
+        if crate::style::ENABLED {
+            &Self::ALL
+        } else {
+            &Self::ALL[..3]
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            CursorStyle::Block => "Bloque",
+            CursorStyle::Beam => "Barra",
+            CursorStyle::Underline => "Subrayado",
+            CursorStyle::Hollow => "Hueco",
+        }
+    }
 }
 
 /// Qué hace Tab en el prompt.
@@ -370,6 +403,10 @@ impl Config {
             if table.is_empty() {
                 doc[key] = item;
             } else {
+                // Una sección nueva, como `[sección]` (sin esto, toml_edit la escribe en línea).
+                if !doc.contains_key(table) {
+                    doc[table] = toml_edit::table();
+                }
                 doc[table][key] = item;
             }
         };
@@ -382,6 +419,7 @@ impl Config {
             CursorStyle::Block => "block",
             CursorStyle::Beam => "beam",
             CursorStyle::Underline => "underline",
+            CursorStyle::Hollow => "hollow",
         };
         let tab_key = |k: TabKey| match k {
             TabKey::Menu => "menu",
@@ -503,6 +541,26 @@ impl Config {
             value(t.garbo_prompt),
             t.garbo_prompt == dt.garbo_prompt,
         );
+        if !self.style.is_empty() && !doc.contains_key("style") {
+            doc["style"] = toml_edit::table();
+        }
+        for (key, item) in self.style.entries() {
+            match item {
+                Some(item) => doc["style"][key] = item,
+                None => {
+                    if let Some(t) = doc.get_mut("style").and_then(|t| t.as_table_like_mut()) {
+                        t.remove(key);
+                    }
+                }
+            }
+        }
+        if doc
+            .get("style")
+            .and_then(|t| t.as_table_like())
+            .is_some_and(|t| t.is_empty())
+        {
+            doc.remove("style");
+        }
         let parent = path
             .parent()
             .filter(|p| !p.as_os_str().is_empty())
@@ -551,6 +609,11 @@ impl Config {
                 }
             }
         }
+        t.style = if crate::style::ENABLED {
+            self.style.apply(t.style)
+        } else {
+            Style::default()
+        };
         t
     }
 }
@@ -600,6 +663,12 @@ mod tests {
         let back = Config::load_at(&path);
         assert_eq!(back.theme, "nord");
         assert_eq!(back.font.size, Config::default().font.size);
+        // Las secciones nuevas salen como tablas, no en línea.
+        let mut cfg = back;
+        cfg.terminal.scrollback = 2000;
+        cfg.save_at(&path).unwrap();
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(text.contains("[terminal]\nscrollback = 2000"), "{text}");
         // En un archivo nuevo, con todo por defecto, no se escribe nada.
         let fresh = dir.path().join("nuevo.toml");
         Config::default().save_at(&fresh).unwrap();
@@ -624,6 +693,62 @@ mod tests {
             "sin tocar"
         );
         assert!(fs::metadata(&path).unwrap().permissions().readonly());
+    }
+
+    /// `[style]` guarda solo lo que se cambió; lo que vuelve a ser del tema se borra (y la sección
+    /// entera si queda vacía), sin tocar el resto del archivo.
+    #[test]
+    fn guardar_la_forma_y_quitar_lo_que_vuelve_al_tema() {
+        let dir = crate::temp_dir::TempDir::new_in(&std::env::temp_dir()).unwrap();
+        let path = dir.path().join("config.toml");
+        fs::write(&path, "# mío\ntheme = \"duna\"\n").unwrap();
+        let mut cfg = Config::load_at(&path);
+        cfg.style.tabs = Some(Tabs::Pill);
+        cfg.style.radius = Some(10);
+        cfg.save_at(&path).unwrap();
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(text.contains("[style]"), "{text}");
+        assert!(text.contains("tabs = \"pill\""), "{text}");
+        assert!(text.contains("radius = 10"), "{text}");
+        let mut back = Config::load_at(&path);
+        assert_eq!(back.style.tabs, Some(Tabs::Pill));
+        assert_eq!(back.style.radius, Some(10));
+        back.style.radius = None;
+        back.save_at(&path).unwrap();
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(
+            text.contains("tabs = \"pill\"") && !text.contains("radius"),
+            "{text}"
+        );
+        back.style = crate::style::StyleOverrides::default();
+        back.save_at(&path).unwrap();
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(!text.contains("style"), "{text}");
+        assert!(text.contains("# mío"), "{text}");
+    }
+
+    #[test]
+    fn cada_tema_tiene_colores_y_nombre() {
+        for name in ALL_NAMES {
+            let t = Theme::builtin(name).unwrap_or_else(|| panic!("{name}"));
+            assert_ne!(t.foreground, t.background, "{name}");
+            assert!(!Theme::display_name(name).is_empty());
+        }
+        assert_eq!(Theme::display_name("fosforo"), "Fósforo");
+        assert_eq!(
+            Theme::builtin("garbo-black").unwrap().style,
+            Style::default()
+        );
+        // Fuera de Linux, de momento, la forma de siempre aunque el tema traiga otra.
+        let cfg = Config {
+            theme: "bosque".into(),
+            ..Config::default()
+        };
+        if crate::style::ENABLED {
+            assert_eq!(cfg.theme().style.tabs, Tabs::Folder);
+        } else {
+            assert_eq!(cfg.theme().style, Style::default());
+        }
     }
 
     // Los enlaces simbólicos de Windows necesitan permisos especiales.
@@ -688,21 +813,51 @@ pub struct Theme {
     pub tab_active: Rgb,
     pub accent: Rgb,
     pub palette: [Rgb; 16],
+    /// Forma de la interfaz (la del tema con los cambios de `[style]`).
+    pub style: Style,
 }
 
+/// Temas incorporados. Los 7 primeros existen desde siempre; los demás traen además su propia
+/// forma y, como ella, de momento solo se ofrecen donde `style::ENABLED`.
+const ALL_NAMES: &[&str] = &[
+    "garbo-black",
+    "garbo-dark",
+    "garbo-light",
+    "tokyo-night",
+    "catppuccin-mocha",
+    "gruvbox-dark",
+    "nord",
+    "grafito",
+    "abisal",
+    "fosforo",
+    "bosque",
+    "niebla",
+    "ciruela",
+    "papel",
+    "neon",
+    "duna",
+    "glaciar",
+    "tinta",
+    "cobalto",
+];
+
 impl Theme {
-    pub const NAMES: &'static [&'static str] = &[
-        "garbo-black",
-        "garbo-dark",
-        "garbo-light",
-        "tokyo-night",
-        "catppuccin-mocha",
-        "gruvbox-dark",
-        "nord",
-    ];
+    /// Temas que se ofrecen en este sistema.
+    pub fn names() -> &'static [&'static str] {
+        if crate::style::ENABLED {
+            ALL_NAMES
+        } else {
+            &ALL_NAMES[..7]
+        }
+    }
 
     /// Nombre para mostrar en la interfaz ("garbo-black" -> "Garbo Black").
     pub fn display_name(name: &str) -> String {
+        match name {
+            "fosforo" => return "Fósforo".into(),
+            "neon" => return "Neón".into(),
+            _ => {}
+        }
         name.split(['-', '_'])
             .filter(|w| !w.is_empty())
             .map(|w| {
@@ -817,8 +972,165 @@ impl Theme {
                     0x4C566A, 0xBF616A, 0xA3BE8C, 0xEBCB8B, 0x81A1C1, 0xB48EAD, 0x8FBCBB, 0xECEFF4,
                 ],
             ),
+            "grafito" => (
+                0xE4DFD6,
+                0x161514,
+                0xE8B866,
+                0x3B3427,
+                0x0F0E0D,
+                0x211F1C,
+                0xE8B866,
+                [
+                    0x22201E, 0xE06C5F, 0x9DBB7A, 0xE8B866, 0x7FA3C7, 0xC397B5, 0x7DB8AE, 0xCFC8BC,
+                    0x5C5650, 0xF08A7C, 0xB5D292, 0xF2CC88, 0x9CBDE0, 0xD7B0CA, 0x98D0C6, 0xF5F1EA,
+                ],
+            ),
+            "abisal" => (
+                0xCFE3F0,
+                0x0A1018,
+                0x5EE6D0,
+                0x173149,
+                0x070B11,
+                0x14243A,
+                0x5EE6D0,
+                [
+                    0x13202E, 0xFF6B81, 0x5EE6A8, 0xFFD479, 0x5AA8FF, 0xB591FF, 0x5EE6D0, 0xA9C4D6,
+                    0x3D566E, 0xFF8DA0, 0x86F2C2, 0xFFE3A3, 0x8CC4FF, 0xCDB3FF, 0x8FF3E3, 0xE8F6FF,
+                ],
+            ),
+            "fosforo" => (
+                0xFFB547,
+                0x0E0A04,
+                0xFFC870,
+                0x4A3210,
+                0x090602,
+                0x1E1508,
+                0xFFD08A,
+                [
+                    0x1A1208, 0xFF6A3D, 0xFFC870, 0xFFD98F, 0xE8A23E, 0xFF9E5E, 0xF2B860, 0xE6A84A,
+                    0x6B4A1E, 0xFF8A5E, 0xFFE0A6, 0xFFEAC2, 0xF5BD5E, 0xFFB98A, 0xFFD08A, 0xFFF1D6,
+                ],
+            ),
+            "bosque" => (
+                0xD3DDD4,
+                0x0F1512,
+                0xD9A066,
+                0x2A3B31,
+                0x090D0B,
+                0x18211C,
+                0xD9A066,
+                [
+                    0x1A231E, 0xE07A6A, 0x8FC48A, 0xD9B866, 0x78A8B8, 0xC493B0, 0x7EC0A8, 0xBCC8BE,
+                    0x4A5A50, 0xF09484, 0xA8DBA2, 0xEBCB80, 0x96C2D2, 0xD9ADC8, 0x9AD6C0, 0xEEF3EE,
+                ],
+            ),
+            "niebla" => (
+                0x24292F,
+                0xF4F5F7,
+                0x2F5BD3,
+                0xCCD8F5,
+                0xE4E7EC,
+                0xFFFFFF,
+                0x2F5BD3,
+                [
+                    0x24292F, 0xC93A3A, 0x2E8540, 0x9A6700, 0x2F5BD3, 0x8A44B8, 0x127F8C, 0xC9CED6,
+                    0x6A737D, 0xE0534F, 0x3BA357, 0xBF8500, 0x4F7AE8, 0xA260CF, 0x1E9AA8, 0xFFFFFF,
+                ],
+            ),
+            "ciruela" => (
+                0xE8DCEB,
+                0x1A1420,
+                0xFF9E7A,
+                0x3D2D4A,
+                0x130E18,
+                0x2A2033,
+                0xFF9E7A,
+                [
+                    0x241B2B, 0xFF6F8E, 0xA8D98A, 0xFFCB7A, 0x8FA8FF, 0xD69BFF, 0x7FD6D0, 0xCFC2D6,
+                    0x5A4866, 0xFF8FA8, 0xBFE8A6, 0xFFDCA0, 0xADBFFF, 0xE3B8FF, 0xA0E6E0, 0xF8F0FA,
+                ],
+            ),
+            "papel" => (
+                0x2D2B26,
+                0xEFEBE2,
+                0x29579C,
+                0xD3DAE6,
+                0xE2DDD1,
+                0xEFEBE2,
+                0x29579C,
+                [
+                    0x2D2B26, 0xB4442E, 0x4F7A35, 0x946300, 0x29579C, 0x8A4C8F, 0x2C7A78, 0xCFC8B8,
+                    0x77705F, 0xCC5A42, 0x61924A, 0xB07A0C, 0x3E6DB5, 0xA262A6, 0x3A9491, 0xFBF8F1,
+                ],
+            ),
+            "neon" => (
+                0xEDE4FF,
+                0x120A1F,
+                0xFF4FD8,
+                0x3A1F5C,
+                0x0C0616,
+                0x22123A,
+                0xFF4FD8,
+                [
+                    0x1E1233, 0xFF5C8A, 0x3DFFB0, 0xFFE15C, 0x4FB4FF, 0xFF4FD8, 0x3FF0FF, 0xCFC2EA,
+                    0x4E3B70, 0xFF85A8, 0x7DFFC9, 0xFFEA8F, 0x85CCFF, 0xFF85E4, 0x85F6FF, 0xFFFFFF,
+                ],
+            ),
+            "duna" => (
+                0xF0DCC6,
+                0x1C1410,
+                0xFF8A3D,
+                0x4A2E1E,
+                0x140E0B,
+                0x2A1E17,
+                0xFF8A3D,
+                [
+                    0x2A1E17, 0xE5533D, 0xA9B665, 0xF2B33D, 0x7DAEA3, 0xD3869B, 0x89B482, 0xDCC7B0,
+                    0x6B5345, 0xF2735E, 0xC2CF85, 0xFFCB66, 0x9CC9BE, 0xE5A3B5, 0xA6CCA0, 0xFFF1E2,
+                ],
+            ),
+            "glaciar" => (
+                0xDDEEF8,
+                0x0C1A26,
+                0x9AD8FF,
+                0x1F3A52,
+                0x091520,
+                0x1A3044,
+                0x9AD8FF,
+                [
+                    0x16293A, 0xFF7A8A, 0x7FE0B0, 0xFFD98A, 0x6FB8FF, 0xB9A2FF, 0x7FE3F0, 0xB8CCD8,
+                    0x4A6378, 0xFF9AA6, 0xA3EDC8, 0xFFE6AE, 0x9ACDFF, 0xCFC0FF, 0xA6EEF6, 0xF4FBFF,
+                ],
+            ),
+            "tinta" => (
+                0xE8E8E8,
+                0x0B0B0B,
+                0xFFFFFF,
+                0x3A3A3A,
+                0x0B0B0B,
+                0x1C1C1C,
+                0xFFFFFF,
+                [
+                    0x1A1A1A, 0xE06C6C, 0x9CC49C, 0xD8D8D8, 0xBDBDBD, 0xA8A8A8, 0xCFCFCF, 0xD0D0D0,
+                    0x555555, 0xF08A8A, 0xB5D8B5, 0xEFEFEF, 0xE0E0E0, 0xC8C8C8, 0xE8E8E8, 0xFFFFFF,
+                ],
+            ),
+            "cobalto" => (
+                0xE8EEFF,
+                0x0A2472,
+                0xFFD23F,
+                0x2D50B5,
+                0x071A55,
+                0x0F2E8A,
+                0xFFD23F,
+                [
+                    0x071A55, 0xFF6B6B, 0x5CE08A, 0xFFD23F, 0x8DBBFF, 0xE08AFF, 0x4FE0E0, 0xC9D4F2,
+                    0x4A5E9E, 0xFF8F8F, 0x8AF0AE, 0xFFE27A, 0xA6CAFF, 0xEDB0FF, 0x85F0F0, 0xFFFFFF,
+                ],
+            ),
             _ => return None,
         };
+        let style = Self::builtin_style(name);
         Some(Theme {
             foreground: Rgb::hex(fg),
             background: Rgb::hex(bg),
@@ -828,7 +1140,134 @@ impl Theme {
             tab_active: Rgb::hex(active),
             accent: Rgb::hex(accent),
             palette: pal.map(Rgb::hex),
+            style,
         })
+    }
+
+    /// Forma propia de cada tema; los de siempre, la de siempre.
+    fn builtin_style(name: &str) -> Style {
+        let s = |tabs, prompt, blocks, buttons, bar, background, radius| Style {
+            tabs,
+            prompt,
+            blocks,
+            buttons,
+            bar,
+            background,
+            radius,
+        };
+        use Background::{Gradient, Solid};
+        use BarSize::{Compact, Normal, Tall};
+        match name {
+            "grafito" => s(
+                Tabs::Underline,
+                Prompt::Border,
+                Blocks::Bar,
+                Buttons::Round,
+                Normal,
+                Solid,
+                4,
+            ),
+            "abisal" => s(
+                Tabs::Pill,
+                Prompt::Soft,
+                Blocks::Card,
+                Buttons::Round,
+                Normal,
+                Gradient,
+                10,
+            ),
+            "fosforo" => s(
+                Tabs::Brackets,
+                Prompt::Brackets,
+                Blocks::Dashed,
+                Buttons::Flat,
+                Normal,
+                Solid,
+                0,
+            ),
+            "bosque" => s(
+                Tabs::Folder,
+                Prompt::Solid,
+                Blocks::Plain,
+                Buttons::Color,
+                Normal,
+                Solid,
+                8,
+            ),
+            "niebla" => s(
+                Tabs::Segmented,
+                Prompt::Plain,
+                Blocks::Separator,
+                Buttons::Icons,
+                Tall,
+                Solid,
+                8,
+            ),
+            "ciruela" => s(
+                Tabs::Pill,
+                Prompt::Soft,
+                Blocks::Bar,
+                Buttons::Color,
+                Normal,
+                Solid,
+                12,
+            ),
+            "papel" => s(
+                Tabs::TopLine,
+                Prompt::Dimmed,
+                Blocks::Header,
+                Buttons::Icons,
+                Normal,
+                Solid,
+                4,
+            ),
+            "neon" => s(
+                Tabs::Outline,
+                Prompt::Soft,
+                Blocks::Dot,
+                Buttons::Color,
+                Normal,
+                Gradient,
+                6,
+            ),
+            "duna" => s(
+                Tabs::Folder,
+                Prompt::Tab,
+                Blocks::Status,
+                Buttons::Round,
+                Normal,
+                Gradient,
+                6,
+            ),
+            "glaciar" => s(
+                Tabs::Floating,
+                Prompt::Underline,
+                Blocks::Outline,
+                Buttons::Round,
+                Normal,
+                Gradient,
+                10,
+            ),
+            "tinta" => s(
+                Tabs::Underline,
+                Prompt::Plain,
+                Blocks::Fade,
+                Buttons::Icons,
+                Tall,
+                Solid,
+                2,
+            ),
+            "cobalto" => s(
+                Tabs::Dot,
+                Prompt::Solid,
+                Blocks::Errors,
+                Buttons::Flat,
+                Compact,
+                Solid,
+                0,
+            ),
+            _ => Style::default(),
+        }
     }
 
     /// Paleta xterm de 256 colores: 16 del tema + cubo 6x6x6 + 24 grises.

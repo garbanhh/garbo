@@ -5,6 +5,8 @@
 //   kind 3 = arco (esquinas redondeadas ╭╮╰╯): uv = (centro.x, centro.y, radio, grosor)
 //            en píxeles relativos a la esquina superior izquierda del quad
 //   kind 4 = segmento (iconos): uv = (x0, y0, x1, y1) relativos al quad, radius = medio grosor
+//   kind 5 = degradado vertical: `color` arriba, uv = color abajo
+//   kind 6 = contorno de rectángulo redondeado: uv.x = grosor, radius = radio
 
 struct Uniforms {
     screen: vec2<f32>,
@@ -74,6 +76,18 @@ fn fs_main(in: VOut) -> @location(0) vec4<f32> {
         let h = clamp(dot(pa, ba) / max(dot(ba, ba), 0.0001), 0.0, 1.0);
         let d = length(pa - ba * h) - in.radius;
         let a = clamp(0.5 - d, 0.0, 1.0) * in.color.a;
+        return vec4<f32>(in.color.rgb * a, a);
+    }
+    if (in.kind == 5u) {
+        let t = clamp((in.local.y + in.half_size.y) / max(2.0 * in.half_size.y, 1.0), 0.0, 1.0);
+        let c = mix(in.color, in.params, t);
+        return vec4<f32>(c.rgb * c.a, c.a);
+    }
+    if (in.kind == 6u) {
+        let q = abs(in.local) - in.half_size + vec2<f32>(in.radius);
+        let d = length(max(q, vec2<f32>(0.0))) + min(max(q.x, q.y), 0.0) - in.radius;
+        let t = in.params.x;
+        let a = clamp(t * 0.5 - abs(d + t * 0.5) + 0.5, 0.0, 1.0) * in.color.a;
         return vec4<f32>(in.color.rgb * a, a);
     }
     var alpha = in.color.a;

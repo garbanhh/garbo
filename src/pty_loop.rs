@@ -422,9 +422,9 @@ impl<U: EventListener + Send + 'static> PtyLoop<U> {
     }
 }
 
-/// Para las pruebas de otros módulos: procesa `bytes` como si llegasen del PTY.
-#[cfg(test)]
-pub(crate) fn feed_for_tests<U: EventListener + Send + 'static>(
+/// Procesa `bytes` como si llegasen del PTY (pruebas y la sesión de muestra del editor de
+/// aspecto).
+pub(crate) fn feed_bytes<U: EventListener + Send + 'static>(
     term: &mut Term<U>,
     blocks: &Mutex<BlockState>,
     bytes: &[u8],

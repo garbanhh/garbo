@@ -10,6 +10,8 @@ use crate::view::Painter;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Field {
+    /// Abre el editor de aspecto (solo donde `style::ENABLED`).
+    Appearance,
     Theme,
     FontFamily,
     FontSize,
@@ -56,11 +58,18 @@ pub enum Change {
     Updates,
     /// Botón "Buscar" / "Actualizar" de la categoría Actualizaciones.
     CheckNow,
+    /// Cambió la forma (`[style]`) o el tema desde el editor de aspecto.
+    Style,
+    /// Abrir el editor de aspecto.
+    OpenLook,
 }
 
 /// Categorías (columna izquierda) y sus opciones (derecha).
 const CATEGORIES: &[(&str, &[(Field, &str)])] = &[
-    ("Tema", &[(Field::Theme, "Tema")]),
+    (
+        "Tema",
+        &[(Field::Appearance, "Aspecto"), (Field::Theme, "Tema")],
+    ),
     (
         "Texto",
         &[
@@ -123,11 +132,21 @@ const CATEGORIES: &[(&str, &[(Field, &str)])] = &[
     ),
 ];
 
+/// ¿Se ofrece la opción en este sistema?
+fn visible(f: Field) -> bool {
+    f != Field::Appearance || crate::style::ENABLED
+}
+
 fn fields() -> Vec<Field> {
     CATEGORIES
         .iter()
         .flat_map(|(_, rows)| rows.iter().map(|r| r.0))
+        .filter(|f| visible(*f))
         .collect()
+}
+
+fn cat_len(cat: usize) -> usize {
+    CATEGORIES[cat].1.iter().filter(|r| visible(r.0)).count()
 }
 
 fn label_of(f: Field) -> &'static str {
@@ -140,8 +159,8 @@ fn label_of(f: Field) -> &'static str {
 
 /// Rango [inicio, fin) de los índices de `fields()` de una categoría.
 fn cat_range(cat: usize) -> (usize, usize) {
-    let start: usize = CATEGORIES[..cat].iter().map(|(_, r)| r.len()).sum();
-    (start, start + CATEGORIES[cat].1.len())
+    let start: usize = (0..cat).map(cat_len).sum();
+    (start, start + cat_len(cat))
 }
 
 fn cat_of(field_idx: usize) -> usize {
@@ -165,7 +184,7 @@ pub enum Hit {
     Row(usize),
     Dec(usize),
     Inc(usize),
-    /// Tarjeta de un tema (índice en `Theme::NAMES`).
+    /// Tarjeta de un tema (índice en `Theme::names()`).
     Theme(usize),
     Panel,
 }
@@ -297,7 +316,7 @@ impl Settings {
             Nav::PrevCategory => self.set_cat((self.cat + n_cats - 1) % n_cats),
             // En la cuadrícula de temas, ↑ ↓ cambian de fila de tarjetas.
             Nav::Up | Nav::Down if on_theme => {
-                let cur = Theme::NAMES
+                let cur = Theme::names()
                     .iter()
                     .position(|t| t.eq_ignore_ascii_case(&cfg.theme))
                     .unwrap_or(0) as i32;
@@ -307,10 +326,12 @@ impl Settings {
                     self.cols as i32
                 };
                 let next = cur + step;
-                if (0..Theme::NAMES.len() as i32).contains(&next) {
+                if (0..Theme::names().len() as i32).contains(&next) {
                     self.follow = true;
                     return self.pick_theme(next as usize, cfg);
                 }
+                // Pasada la primera o la última fila de tarjetas, a la opción de al lado.
+                self.move_sel(if n == Nav::Up { -1 } else { 1 });
             }
             Nav::Up => self.move_sel(-1),
             Nav::Down => self.move_sel(1),
@@ -323,7 +344,7 @@ impl Settings {
 
     /// Elige un tema de la cuadrícula.
     pub fn pick_theme(&mut self, i: usize, cfg: &mut Config) -> Change {
-        let Some(name) = Theme::NAMES.get(i) else {
+        let Some(name) = Theme::names().get(i) else {
             return Change::None;
         };
         self.theme_idx = i;
@@ -347,17 +368,14 @@ impl Settings {
             Field::LineHeight => trim_num(cfg.font.line_height),
             Field::Padding => format!("{} px", cfg.window.padding.round()),
             Field::Opacity => format!("{} %", (cfg.window.opacity * 100.0).round()),
-            Field::CursorStyle => match cfg.terminal.cursor_style {
-                CursorStyle::Block => "Bloque".into(),
-                CursorStyle::Beam => "Barra".into(),
-                CursorStyle::Underline => "Subrayado".into(),
-            },
+            Field::CursorStyle => cfg.terminal.cursor_style.label().into(),
             Field::Scrollback => format!("{} líneas", cfg.terminal.scrollback),
             Field::TabKey => match cfg.terminal.tab_key {
                 TabKey::Menu => "Menú".into(),
                 TabKey::Accept => "Sugerencia".into(),
             },
             Field::EditFile => "Abrir".into(),
+            Field::Appearance => "Editar".into(),
             Field::NotifyTest => "Enviar".into(),
             Field::NotifyAgents => match cfg.notifications.agents {
                 NotifyWhen::Unfocused => "Si no lo veo".into(),
@@ -404,7 +422,7 @@ impl Settings {
         };
         match f {
             Field::Theme => {
-                let names: Vec<String> = Theme::NAMES.iter().map(|s| s.to_string()).collect();
+                let names: Vec<String> = Theme::names().iter().map(|s| s.to_string()).collect();
                 cfg.theme = cycle(&names, &cfg.theme);
                 self.follow = true;
                 Change::Theme
@@ -437,16 +455,13 @@ impl Settings {
                 Change::Redraw
             }
             Field::CursorStyle => {
-                let order = [
-                    CursorStyle::Block,
-                    CursorStyle::Beam,
-                    CursorStyle::Underline,
-                ];
+                let order = CursorStyle::offered();
                 let pos = order
                     .iter()
                     .position(|c| *c == cfg.terminal.cursor_style)
                     .unwrap_or(0) as i32;
-                cfg.terminal.cursor_style = order[(pos + d).rem_euclid(3) as usize];
+                cfg.terminal.cursor_style =
+                    order[(pos + d).rem_euclid(order.len() as i32) as usize];
                 Change::TermOptions
             }
             Field::Scrollback => {
@@ -496,6 +511,8 @@ impl Settings {
                 Change::Restart
             }
             Field::EditFile => Change::OpenFile,
+            Field::Appearance if dir == 0 => Change::OpenLook,
+            Field::Appearance => Change::None,
             Field::NotifyAgents => {
                 let order = [NotifyWhen::Unfocused, NotifyWhen::Always, NotifyWhen::Never];
                 let pos = order
@@ -571,13 +588,17 @@ impl Settings {
         let name_h = (26.0 * s).round();
         let card_row_h = card_h + name_h + (8.0 * s).round();
         let (a, b) = cat_range(self.cat);
-        let its: Vec<Item> = if self.field(a) == Field::Theme {
-            (0..Theme::NAMES.len().div_ceil(cols))
-                .map(Item::Themes)
-                .collect()
-        } else {
-            (a..b).map(Item::Row).collect()
-        };
+        let its: Vec<Item> = (a..b)
+            .flat_map(|i| {
+                if self.field(i) == Field::Theme {
+                    (0..Theme::names().len().div_ceil(cols))
+                        .map(Item::Themes)
+                        .collect::<Vec<_>>()
+                } else {
+                    vec![Item::Row(i)]
+                }
+            })
+            .collect();
         let heights: Vec<f32> = its
             .iter()
             .map(|it| {
@@ -614,11 +635,15 @@ impl Settings {
         // Teclado: lo elegido, a la vista (en Tema, la fila de tarjetas del tema actual).
         if self.follow {
             self.follow = false;
-            let sel = match its.first() {
-                Some(Item::Themes(_)) => self.theme_row(cols),
-                _ => self.selected.saturating_sub(a),
-            }
-            .min(its.len().saturating_sub(1));
+            let on_theme = self.field(self.selected) == Field::Theme;
+            let sel = its
+                .iter()
+                .position(|it| match *it {
+                    Item::Themes(r) => on_theme && r == self.theme_row(cols),
+                    Item::Row(i) => i == self.selected,
+                })
+                .unwrap_or(0)
+                .min(its.len().saturating_sub(1));
             first = first.min(sel);
             while first < max_first.min(sel) && heights[first..=sel].iter().sum::<f32>() > body_h {
                 first += 1;
@@ -639,7 +664,7 @@ impl Settings {
                 Item::Themes(r) => {
                     for c in 0..cols {
                         let ti = r * cols + c;
-                        if ti >= Theme::NAMES.len() {
+                        if ti >= Theme::names().len() {
                             break;
                         }
                         cards.push((
@@ -741,7 +766,7 @@ impl Settings {
         top: f32,
         s: f32,
     ) {
-        self.theme_idx = Theme::NAMES
+        self.theme_idx = Theme::names()
             .iter()
             .position(|n| n.eq_ignore_ascii_case(&cfg.theme))
             .unwrap_or(0);
@@ -841,7 +866,7 @@ impl Settings {
 
         // --- Tarjetas de temas
         for &(ti, tx, ty, tw, tch) in &l.cards {
-            let name = Theme::NAMES[ti];
+            let name = Theme::names()[ti];
             let selected = cfg.theme.eq_ignore_ascii_case(name);
             let hovered = self.hover == Some(Hit::Theme(ti));
             if let Some(t) = Theme::builtin(name) {
@@ -882,6 +907,7 @@ impl Settings {
                 Field::CheckNow => update_button(upd).3,
                 Field::Decorations if self.restart_note => "Se aplica al reiniciar".into(),
                 Field::GarboPrompt if self.tabs_note => "Se aplica a las pestañas nuevas".into(),
+                Field::Appearance => "Pestañas, prompt, bloques, botones…".into(),
                 _ => String::new(),
             };
             if note.is_empty() {
@@ -913,7 +939,7 @@ impl Settings {
                 let t = self.value_text(f, cfg);
                 let tw = p.ui_measure(&t);
                 p.ui_text_in(right - tw, ry, rh, &t, dimc, tw + 2.0);
-            } else if matches!(f, Field::EditFile | Field::NotifyTest) {
+            } else if matches!(f, Field::EditFile | Field::NotifyTest | Field::Appearance) {
                 let t = &self.value_text(f, cfg);
                 let tw = p.ui_measure(t);
                 p.ui_text_in(right - tw - 12.0 * s, ry, rh, t, theme.accent, tw + 2.0);
@@ -1124,7 +1150,7 @@ fn stepper(
 
 /// Muestra de un tema: un terminal en miniatura con sus colores.
 #[allow(clippy::too_many_arguments)]
-fn theme_card(
+pub(crate) fn theme_card(
     p: &mut Painter,
     t: &Theme,
     ui: &Theme,
@@ -1227,7 +1253,7 @@ mod tests {
         let mut cfg = Config::load_at(&path);
         let mut set = Settings::with_fonts(vec![]);
         assert_eq!(set.adjust(idx(Field::Theme), 1, &mut cfg), Change::Theme);
-        assert_eq!(cfg.theme, Theme::NAMES[1]);
+        assert_eq!(cfg.theme, Theme::names()[1]);
         set.adjust(idx(Field::FontSize), 1, &mut cfg);
         set.adjust(idx(Field::Blocks), 0, &mut cfg);
         set.adjust(idx(Field::Autosuggest), 0, &mut cfg);
@@ -1238,7 +1264,7 @@ mod tests {
         assert!(text.contains("# mi comentario"), "{text}");
         assert!(text.contains("program = \"/bin/zsh\""), "{text}");
         let back = Config::load_at(&path);
-        assert_eq!(back.theme, Theme::NAMES[1]);
+        assert_eq!(back.theme, Theme::names()[1]);
         assert_eq!(back.font.size, Config::default().font.size + 0.5);
         assert!(!back.terminal.blocks);
         assert!(!back.terminal.autosuggest);
@@ -1270,12 +1296,13 @@ mod tests {
         assert_eq!(set.nav(Nav::Activate, &mut cfg), Change::CheckNow);
         // En Tema, ↓ baja una fila de tarjetas.
         set.set_cat(0);
+        set.selected = idx(Field::Theme);
         set.layout(1200.0, 900.0, 40.0, 1.0);
         let cols = set.cols;
         assert_eq!(set.nav(Nav::Down, &mut cfg), Change::Theme);
-        assert_eq!(cfg.theme, Theme::NAMES[cols]);
+        assert_eq!(cfg.theme, Theme::names()[cols]);
         assert_eq!(set.nav(Nav::Right, &mut cfg), Change::Theme);
-        assert_eq!(cfg.theme, Theme::NAMES[cols + 1]);
+        assert_eq!(cfg.theme, Theme::names()[cols + 1]);
     }
 
     #[test]
@@ -1315,13 +1342,17 @@ mod tests {
         let mut set = Settings::with_fonts(vec![]);
         set.set_cat(3);
         assert_eq!(set.pick_theme(4, &mut cfg), Change::Theme);
-        assert_eq!(cfg.theme, Theme::NAMES[4]);
+        assert_eq!(cfg.theme, Theme::names()[4]);
         assert_eq!(set.field(set.selected), Field::Theme);
         assert_eq!(set.cat, 0);
         assert_eq!(set.pick_theme(4, &mut cfg), Change::None);
         assert_eq!(set.pick_theme(99, &mut cfg), Change::None);
         let l = set.layout(1200.0, 1400.0, 40.0, 1.0);
-        assert_eq!(l.cards.len(), Theme::NAMES.len());
+        assert_eq!(l.cards.first().map(|c| c.0), Some(0));
+        // Desplazando se llega a la última tarjeta.
+        set.wheel(-100_000.0);
+        let l = set.layout(1200.0, 1400.0, 40.0, 1.0);
+        assert_eq!(l.cards.last().map(|c| c.0), Some(Theme::names().len() - 1));
         assert_eq!(Theme::display_name("catppuccin-mocha"), "Catppuccin Mocha");
     }
 

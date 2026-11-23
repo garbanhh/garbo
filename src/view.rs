@@ -6,6 +6,7 @@ use crate::complete::{Kind, Menu, MENU_ROWS};
 use crate::config::{Rgb, Theme};
 use crate::font::{CellMetrics, Style};
 use crate::renderer::Instance;
+use crate::style::{Blocks, Prompt};
 use alacritty_terminal::event::EventListener;
 use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::index::{Column, Line};
@@ -189,6 +190,36 @@ impl Painter<'_> {
             kind: 4,
             radius: thick / 2.0,
         });
+    }
+
+    /// Degradado vertical de `top` (con alfa `ta`) a `bottom` (con alfa `ba`).
+    #[allow(clippy::too_many_arguments)]
+    pub fn gradient(
+        &mut self,
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        top: Rgb,
+        ta: f32,
+        bottom: Rgb,
+        ba: f32,
+    ) {
+        self.out.push(Instance::gradient(
+            x,
+            y,
+            w,
+            h,
+            top.to_f32(ta),
+            bottom.to_f32(ba),
+        ));
+    }
+
+    /// Contorno redondeado de grosor `t` por dentro del rectángulo.
+    #[allow(clippy::too_many_arguments)]
+    pub fn outline(&mut self, x: f32, y: f32, w: f32, h: f32, c: Rgb, a: f32, r: f32, t: f32) {
+        self.out
+            .push(Instance::outline(x, y, w, h, c.to_f32(a), r, t));
     }
 
     pub fn circle(&mut self, cx: f32, cy: f32, r: f32, c: Rgb, a: f32) {
@@ -512,9 +543,7 @@ pub fn draw_prompts<T: EventListener>(
     let current = bs.idle_current();
     let dim = theme.foreground.lerp(theme.background, 0.5);
     let t = (1.3 * s).max(1.0);
-    let pad = (2.0 * s).round();
-    let r = (6.0 * s).round();
-    let hair = s.round().max(1.0);
+    let style = theme.style;
     for a in blocks::anchors(term, top, bottom) {
         let Some(info) = bs.info(a.id).filter(|i| i.styled) else {
             continue;
@@ -533,48 +562,14 @@ pub fn draw_prompts<T: EventListener>(
         let (iw, ih) = ((cw * 1.05).round(), (ch * 0.40).round());
         let (ix, iy) = ((v.x + 0.5 * cw).round(), (y + (ch - ih) / 2.0).round());
         if Some(a.id) == current {
-            let x0 = v.x - 0.1 * cw;
-            let x1 = v.x + (end + 1) as f32 * cw + 0.6 * cw;
-            let (cy, chh) = (y + pad, ch - 2.0 * pad);
-            p.rounded(x0, cy, x1 - x0, chh, theme.foreground, 0.26, r);
-            p.rounded(
-                x0 + hair,
-                cy + hair,
-                x1 - x0 - 2.0 * hair,
-                chh - 2.0 * hair,
-                crate::ui::surface(theme, 0.08),
-                1.0,
-                r - hair,
-            );
-            crate::ui::folder(p, ix, iy, iw, ih, t, theme.accent);
-            // Rama de git, si cabe.
-            if let Some(b) = branch {
-                let n = b.chars().count();
-                if end + 6 + n < cols {
-                    let bx0 = x1 + 0.6 * cw;
-                    let bx1 = bx0 + (n as f32 + 2.6) * cw;
-                    p.rounded(bx0, cy, bx1 - bx0, chh, theme.foreground, 0.06, r);
-                    let (bw, bh) = ((cw * 0.85).round(), (ch * 0.42).round());
-                    crate::ui::branch(
-                        p,
-                        (bx0 + 0.5 * cw).round(),
-                        (y + (ch - bh) / 2.0).round(),
-                        bw,
-                        bh,
-                        t,
-                        theme.palette[5],
-                    );
-                    p.text(
-                        bx0 + 1.8 * cw,
-                        y,
-                        b,
-                        theme.foreground.lerp(theme.background, 0.2),
-                        n as f32 * cw + 1.0,
-                    );
-                }
-            }
+            prompt_label(p, theme, cw, ch, cols, v, y, end, branch, s);
         } else {
-            crate::ui::folder(p, ix, iy, iw, ih, t, dim);
+            if style.prompt == Prompt::Brackets {
+                p.text(v.x + cw, y, "[", dim, cw + 1.0);
+                p.text(v.x + (end + 1) as f32 * cw, y, "]", dim, cw + 1.0);
+            } else {
+                crate::ui::folder(p, ix, iy, iw, ih, t, dim);
+            }
             let dur = info.duration.map(|d| {
                 if d.as_millis() == 0 {
                     "< 1 ms".into()
@@ -589,6 +584,23 @@ pub fn draw_prompts<T: EventListener>(
                 _ => continue,
             };
             let n = text.chars().count();
+            // "Estado a la derecha": pegado al borde, con ✓ si fue bien.
+            if style.blocks == Blocks::Status {
+                let ok = matches!(info.status(), Status::Ok);
+                let w = n + if ok { 2 } else { 0 };
+                let free = w + 2 < cols
+                    && (cols - w - 1..cols).all(|c| matches!(row[Column(c)].c, ' ' | '\0'))
+                    && end + 3 + w < cols;
+                if free {
+                    let x = v.x + (cols - w) as f32 * cw;
+                    if ok {
+                        p.text(x, y, "✓", theme.palette[2], cw + 1.0);
+                    }
+                    let x = if ok { x + 2.0 * cw } else { x };
+                    p.text(x, y, &text, color, n as f32 * cw + 1.0);
+                }
+                continue;
+            }
             if end + 3 + n < cols {
                 p.text(
                     v.x + (end + 3) as f32 * cw,
@@ -598,6 +610,159 @@ pub fn draw_prompts<T: EventListener>(
                     n as f32 * cw + 1.0,
                 );
             }
+        }
+    }
+}
+
+/// Etiqueta del prompt actual (la carpeta y la rama de git) según `Style::prompt`. La ruta es
+/// texto real de la rejilla: aquí solo se dibuja lo de alrededor; su color lo pone `draw_terminal`.
+#[allow(clippy::too_many_arguments)]
+fn prompt_label(
+    p: &mut Painter,
+    theme: &Theme,
+    cw: f32,
+    ch: f32,
+    cols: usize,
+    v: &TermView,
+    y: f32,
+    end: usize,
+    branch: Option<&str>,
+    s: f32,
+) {
+    let style = theme.style;
+    let t = (1.3 * s).max(1.0);
+    let pad = (2.0 * s).round();
+    let r = style.r(s);
+    let hair = s.round().max(1.0);
+    let strip = (3.0 * s).round();
+    let line = (2.0 * s).round().max(2.0);
+    let fg = theme.foreground;
+    let dimc = fg.lerp(theme.background, 0.5);
+    let (iw, ih) = ((cw * 1.05).round(), (ch * 0.40).round());
+    let (ix, iy) = ((v.x + 0.5 * cw).round(), (y + (ch - ih) / 2.0).round());
+    let x0 = v.x - 0.1 * cw;
+    let x1 = v.x + (end + 1) as f32 * cw + 0.6 * cw;
+    let (cy, chh) = (y + pad, ch - 2.0 * pad);
+    let mut icon = theme.accent;
+    // Etiqueta de la carpeta
+    match style.prompt {
+        Prompt::Border => {
+            p.rounded(x0, cy, x1 - x0, chh, fg, 0.26, r);
+            p.rounded(
+                x0 + hair,
+                cy + hair,
+                x1 - x0 - 2.0 * hair,
+                chh - 2.0 * hair,
+                crate::ui::surface(theme, 0.08),
+                1.0,
+                (r - hair).max(0.0),
+            );
+        }
+        Prompt::Soft => p.rounded(
+            x0,
+            cy,
+            x1 - x0,
+            chh,
+            theme.background.lerp(theme.accent, 0.16),
+            1.0,
+            r,
+        ),
+        Prompt::Solid => {
+            p.rounded(x0, cy, x1 - x0, chh, theme.accent, 1.0, r);
+            icon = theme.background;
+        }
+        Prompt::Tab => {
+            let fill = crate::ui::surface(theme, 0.08);
+            p.rounded(x0, cy, x1 - x0, chh, fill, 1.0, r);
+            p.rect(x0, cy, r, chh, fill, 1.0);
+            p.rect(x0, cy, strip, chh, theme.accent, 1.0);
+        }
+        Prompt::Underline => {
+            p.rect(
+                ix,
+                y + ch - pad - line,
+                v.x + (end + 1) as f32 * cw - ix,
+                line,
+                theme.accent,
+                1.0,
+            );
+        }
+        Prompt::Brackets => {
+            p.text(v.x + cw, y, "[", dimc, cw + 1.0);
+            p.text(v.x + (end + 1) as f32 * cw, y, "]", dimc, cw + 1.0);
+        }
+        Prompt::Dimmed | Prompt::Plain => {}
+    }
+    if style.prompt != Prompt::Brackets {
+        crate::ui::folder(p, ix, iy, iw, ih, t, icon);
+    }
+
+    // Rama de git, si cabe.
+    let Some(b) = branch else { return };
+    let n = b.chars().count();
+    if end + 7 + n >= cols {
+        return;
+    }
+    let mag = theme.palette[5];
+    let name_c = fg.lerp(theme.background, 0.2);
+    let (bw, bh) = ((cw * 0.85).round(), (ch * 0.42).round());
+    let by = (y + (ch - bh) / 2.0).round();
+    match style.prompt {
+        Prompt::Brackets => {
+            let x = v.x + (end + 2) as f32 * cw;
+            p.text(x, y, "─[", dimc, 2.0 * cw + 1.0);
+            p.text(x + 2.0 * cw, y, b, mag, n as f32 * cw + 1.0);
+            p.text(x + (2 + n) as f32 * cw, y, "]", dimc, cw + 1.0);
+        }
+        Prompt::Dimmed | Prompt::Plain | Prompt::Underline => {
+            let bx0 = v.x + (end + 3) as f32 * cw;
+            crate::ui::branch(p, (bx0 + 0.2 * cw).round(), by, bw, bh, t, mag);
+            let c = if style.prompt == Prompt::Underline {
+                name_c
+            } else {
+                dimc
+            };
+            p.text(bx0 + 1.5 * cw, y, b, c, n as f32 * cw + 1.0);
+            if style.prompt == Prompt::Underline {
+                p.rect(
+                    bx0,
+                    y + ch - pad - line,
+                    (n as f32 + 1.5) * cw,
+                    line,
+                    mag,
+                    1.0,
+                );
+            }
+        }
+        _ => {
+            let bx0 = x1 + 0.6 * cw;
+            let bx1 = bx0 + (n as f32 + 2.6) * cw;
+            match style.prompt {
+                Prompt::Soft => p.rounded(
+                    bx0,
+                    cy,
+                    bx1 - bx0,
+                    chh,
+                    theme.background.lerp(mag, 0.16),
+                    1.0,
+                    r,
+                ),
+                Prompt::Solid => p.outline(bx0, cy, bx1 - bx0, chh, fg, 0.26, r, hair),
+                Prompt::Tab => {
+                    let fill = crate::ui::surface(theme, 0.08);
+                    p.rounded(bx0, cy, bx1 - bx0, chh, fill, 1.0, r);
+                    p.rect(bx0, cy, r, chh, fill, 1.0);
+                    p.rect(bx0, cy, strip, chh, mag, 1.0);
+                }
+                _ => p.rounded(bx0, cy, bx1 - bx0, chh, fg, 0.06, r),
+            }
+            let lead = if style.prompt == Prompt::Tab {
+                0.3 * cw
+            } else {
+                0.0
+            };
+            crate::ui::branch(p, (bx0 + 0.5 * cw + lead).round(), by, bw, bh, t, mag);
+            p.text(bx0 + 1.8 * cw + lead, y, b, name_c, n as f32 * cw + 1.0);
         }
     }
 }
@@ -854,6 +1019,8 @@ pub fn draw_terminal<T: EventListener>(
         && hl.is_none()
         && resolve(default_bg, theme, colors) == theme.background;
     let visible = Flags::INVERSE | Flags::ALL_UNDERLINES | Flags::STRIKEOUT;
+    // Ruta atenuada: (línea, columna de la última '/') del prompt que se está dibujando.
+    let mut last_slash: Option<(i32, Option<usize>)> = None;
 
     for indexed in content.display_iter {
         let point = indexed.point;
@@ -938,8 +1105,33 @@ pub fn draw_terminal<T: EventListener>(
         {
             match kind {
                 b'p' if current_prompt == Some(id) => {
-                    fg = theme.foreground;
                     bold = true;
+                    fg = match theme.style.prompt {
+                        Prompt::Solid => theme.background,
+                        Prompt::Brackets => theme.accent,
+                        // Las carpetas de la ruta en gris; la última, en color.
+                        Prompt::Dimmed => {
+                            let line = point.line.0;
+                            if last_slash.is_none_or(|(l, _)| l != line) {
+                                let row = &term.grid()[point.line];
+                                let at = (0..term.columns()).rev().find(|&c| {
+                                    row[Column(c)].c == '/'
+                                        && blocks::cell_link(&row[Column(c)]) == Some((b'p', id))
+                                });
+                                last_slash = Some((line, at));
+                            }
+                            let parent = last_slash
+                                .and_then(|(_, at)| at)
+                                .is_some_and(|at| point.column.0 <= at);
+                            if parent {
+                                bold = false;
+                                theme.foreground.lerp(theme.background, 0.45)
+                            } else {
+                                theme.accent
+                            }
+                        }
+                        _ => theme.foreground,
+                    };
                 }
                 b'p' => fg = theme.foreground.lerp(theme.background, 0.5),
                 b'c' => bold = true,
@@ -1086,6 +1278,7 @@ pub fn draw_blocks<T: EventListener>(
         .max(span.0);
     let width = span.1 - span.0;
     let line_w = scale.round().max(1.0);
+    let style = theme.style;
 
     for (i, a) in anchors.iter().enumerate() {
         let end_line = match anchors.get(i + 1) {
@@ -1108,25 +1301,18 @@ pub fn draw_blocks<T: EventListener>(
         if is_sel {
             p.rect(span.0, y0, width, y1 - y0, theme.accent, 0.10);
         }
-        if starts_here && start_row > 0 {
-            p.rect(
-                v.x,
-                y0,
-                width - 2.0 * (v.x - span.0),
-                line_w,
-                theme.foreground,
-                0.10,
-            );
-        }
-        let bar = match status {
-            _ if is_sel => Some((theme.accent, 1.0)),
-            Status::Ok => Some((ok, 0.6)),
-            Status::Failed(_) => Some((err, 1.0)),
-            Status::Running => Some((theme.accent, 1.0)),
-            Status::Idle => None,
-        };
-        if let Some((c, a)) = bar {
-            let pad = (3.0 * scale).round();
+        let finished = matches!(status, Status::Ok | Status::Failed(_));
+        let failed = matches!(status, Status::Failed(_));
+        let fg = theme.foreground;
+        let s = scale;
+        let r = style.r(s);
+        let pad = (3.0 * s).round();
+        // Tarjetas y contornos: por fuera de las celdas, sin salirse del panel.
+        let (cx0, cx1) = (
+            (v.x - 6.0 * s).max(span.0),
+            (v.x + cols as f32 * m.width + 6.0 * s).min(span.1),
+        );
+        let status_bar = |p: &mut Painter, c: Rgb, a: f32| {
             p.rounded(
                 bar_x,
                 y0 + pad,
@@ -1136,6 +1322,86 @@ pub fn draw_blocks<T: EventListener>(
                 a,
                 bar_w / 2.0,
             );
+        };
+        match style.blocks {
+            Blocks::Classic => {
+                if starts_here && start_row > 0 {
+                    p.rect(v.x, y0, width - 2.0 * (v.x - span.0), line_w, fg, 0.10);
+                }
+                let bar = match status {
+                    _ if is_sel => Some((theme.accent, 1.0)),
+                    Status::Ok => Some((ok, 0.6)),
+                    Status::Failed(_) => Some((err, 1.0)),
+                    Status::Running => Some((theme.accent, 1.0)),
+                    Status::Idle => None,
+                };
+                if let Some((c, a)) = bar {
+                    status_bar(p, c, a);
+                }
+            }
+            Blocks::Bar => {
+                let (c, a) = match status {
+                    _ if is_sel => (theme.accent, 1.0),
+                    Status::Ok => (fg, 0.22),
+                    Status::Failed(_) => (err, 1.0),
+                    _ => (theme.accent, 1.0),
+                };
+                status_bar(p, c, a);
+            }
+            Blocks::Dot if starts_here => {
+                let c = match status {
+                    Status::Ok => ok,
+                    Status::Failed(_) => err,
+                    _ => theme.accent,
+                };
+                p.circle(bar_x + bar_w / 2.0, y0 + ch / 2.0, 3.0 * s, c, 1.0);
+            }
+            Blocks::Card if finished => {
+                let (h0, h1) = (y0 + 2.0 * s, y1 - 2.0 * s);
+                let (c, fa, la) = if failed {
+                    (err, 0.07, 0.32)
+                } else {
+                    (fg, 0.04, 0.08)
+                };
+                p.rounded(cx0, h0, cx1 - cx0, h1 - h0, c, fa, r);
+                p.outline(cx0, h0, cx1 - cx0, h1 - h0, c, la, r, line_w);
+            }
+            Blocks::Outline if finished => {
+                let (h0, h1) = (y0 + 2.0 * s, y1 - 2.0 * s);
+                let (c, a) = if failed { (err, 0.40) } else { (fg, 0.16) };
+                p.outline(cx0, h0, cx1 - cx0, h1 - h0, c, a, r, line_w);
+            }
+            Blocks::Header if finished && starts_here => {
+                let (c, a) = if failed { (err, 0.13) } else { (fg, 0.06) };
+                p.rect(span.0, y0, width, ch, c, a);
+            }
+            Blocks::Separator if starts_here && start_row > 0 => {
+                p.rect(span.0, y0, width, line_w, fg, 0.12);
+            }
+            Blocks::Dashed if starts_here && start_row > 0 => {
+                let (dash, step) = ((6.0 * s).round(), (11.0 * s).round());
+                let x_end = v.x + cols as f32 * m.width;
+                let mut x = v.x;
+                while x < x_end {
+                    p.rect(x, y0, dash.min(x_end - x), line_w, fg, 0.26);
+                    x += step;
+                }
+            }
+            Blocks::Errors if failed => {
+                p.rect(span.0, y0, width, y1 - y0, err, 0.10);
+                p.rect(span.0, y0, bar_w, y1 - y0, err, 1.0);
+            }
+            // Por encima del texto (capa `fg`): lo ya ejecutado se ve más apagado.
+            Blocks::Fade if finished && !is_sel => {
+                p.fg.push(Instance::rect(
+                    span.0,
+                    y0,
+                    width,
+                    y1 - y0,
+                    crate::ui::terminal_top(theme).to_f32(0.5),
+                ));
+            }
+            _ => {}
         }
 
         // Estado y duración a la derecha de la línea del prompt, si ese hueco está libre (con el
@@ -1500,7 +1766,7 @@ mod tests {
                 VoidListener,
             );
             let blocks = std::sync::Mutex::new(BlockState::new(0));
-            crate::pty_loop::feed_for_tests(&mut term, &blocks, text.as_bytes(), &VoidListener);
+            crate::pty_loop::feed_bytes(&mut term, &blocks, text.as_bytes(), &VoidListener);
             let bs = blocks.into_inner().unwrap();
             let v = TermView {
                 x: 0.0,

@@ -112,6 +112,34 @@ impl Instance {
             ..Self::rect(x, y, w, h, color)
         }
     }
+
+    /// Degradado vertical de `top` a `bottom` (colores con su alfa).
+    pub fn gradient(x: f32, y: f32, w: f32, h: f32, top: [f32; 4], bottom: [f32; 4]) -> Self {
+        Self {
+            uv: bottom,
+            kind: 5,
+            ..Self::rect(x, y, w, h, top)
+        }
+    }
+
+    /// Contorno de un rectángulo redondeado, de grosor `thick`, por dentro del borde.
+    #[allow(clippy::too_many_arguments)]
+    pub fn outline(
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        color: [f32; 4],
+        radius: f32,
+        thick: f32,
+    ) -> Self {
+        Self {
+            uv: [thick, 0.0, 0.0, 0.0],
+            kind: 6,
+            radius,
+            ..Self::rect(x, y, w, h, color)
+        }
+    }
 }
 
 #[repr(C)]

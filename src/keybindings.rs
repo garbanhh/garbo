@@ -31,6 +31,8 @@ pub enum Action {
     CopyBlockCommand,
     CopyBlock,
     Settings,
+    /// Editor de aspecto (solo donde `style::ENABLED`).
+    Appearance,
     ToggleAgents,
     TogglePorts,
     AgentStats,
@@ -169,6 +171,7 @@ impl Action {
             ),
             (CopyBlock, "copy_block", "Copiar bloque entero", ""),
             (Settings, "settings", "Ajustes", "ctrl+comma"),
+            (Appearance, "appearance", "Editar el aspecto", ""),
             (
                 ToggleAgents,
                 "toggle_agents",

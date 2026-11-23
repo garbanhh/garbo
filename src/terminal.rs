@@ -109,6 +109,7 @@ pub fn term_config(cfg: &Config) -> TermConfig {
         CursorStyle::Block => CursorShape::Block,
         CursorStyle::Beam => CursorShape::Beam,
         CursorStyle::Underline => CursorShape::Underline,
+        CursorStyle::Hollow => CursorShape::HollowBlock,
     };
     TermConfig {
         scrolling_history: cfg.terminal.scrollback,

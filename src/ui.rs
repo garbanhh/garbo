@@ -3,6 +3,7 @@
 
 use crate::config::{Rgb, Theme};
 use crate::palette::{Palette, MAX_VISIBLE};
+use crate::style::{Buttons, Style, Tabs};
 use crate::view::Painter;
 
 /// Color de superficie elevada (paneles, pestaña activa) derivado del tema.
@@ -12,6 +13,22 @@ pub fn surface(theme: &Theme, k: f32) -> Rgb {
 
 pub fn dim(theme: &Theme) -> Rgb {
     theme.foreground.lerp(theme.background, 0.45)
+}
+
+/// Intensidad del tinte de acento del fondo con degradado (arriba del todo).
+pub const GRADIENT: f32 = 0.10;
+
+/// Color del fondo del terminal justo bajo la barra (con el degradado, ya teñido).
+pub fn terminal_top(theme: &Theme) -> Rgb {
+    match theme.style.background {
+        crate::style::Background::Gradient => theme.background.lerp(theme.accent, GRADIENT),
+        crate::style::Background::Solid => theme.background,
+    }
+}
+
+/// Botones de ventana rectangulares a toda altura: los de Windows o el estilo "Planos".
+fn flat_controls(style: &Style) -> bool {
+    NATIVE_CONTROLS || style.buttons == Buttons::Flat
 }
 
 /// Lo que la barra necesita saber de cada pestaña.
@@ -75,26 +92,41 @@ const NATIVE_CONTROLS: bool = cfg!(windows);
 pub const BAR_HEIGHT: f32 = if NATIVE_CONTROLS { 34.0 } else { 40.0 };
 
 impl TabBar {
-    pub fn layout(n: usize, width: f32, scale: f32, integrated: bool, has_update: bool) -> Self {
+    pub fn layout(
+        n: usize,
+        width: f32,
+        scale: f32,
+        integrated: bool,
+        has_update: bool,
+        style: &Style,
+    ) -> Self {
         let s = scale;
-        let height = (BAR_HEIGHT * s).round();
-        let tab_h = ((if NATIVE_CONTROLS { 26.0 } else { 28.0 }) * s).round();
+        let logical_h = BAR_HEIGHT + style.bar_delta();
+        let height = (logical_h * s).round();
+        let tab_h = ((if NATIVE_CONTROLS {
+            26.0
+        } else {
+            logical_h - 12.0
+        }) * s)
+            .round();
         let tab_y = ((height - tab_h) / 2.0).round();
         let margin = (8.0 * s).round();
         let gap = (4.0 * s).round();
         let btn = tab_h;
-        let (ctl, ctl_gap) = if NATIVE_CONTROLS {
-            ((46.0 * s).round(), 0.0)
+        let flat = flat_controls(style);
+        // (ancho de cada botón, hueco entre ellos, distancia al borde derecho)
+        let (ctl, ctl_gap, edge) = if flat {
+            ((46.0 * s).round(), 0.0, 0.0)
         } else {
-            ((26.0 * s).round(), (8.0 * s).round())
+            match style.buttons {
+                Buttons::Color => ((16.0 * s).round(), (6.0 * s).round(), margin + 4.0 * s),
+                Buttons::Icons => ((30.0 * s).round(), (2.0 * s).round(), margin - 2.0 * s),
+                _ => ((26.0 * s).round(), (8.0 * s).round(), margin),
+            }
         };
 
         let controls = integrated.then(|| {
-            let x0 = if NATIVE_CONTROLS {
-                width - 3.0 * ctl
-            } else {
-                width - margin - 3.0 * ctl - 2.0 * ctl_gap
-            };
+            let x0 = (width - edge - 3.0 * ctl - 2.0 * ctl_gap).round();
             [
                 (x0, ctl),
                 (x0 + ctl + ctl_gap, ctl),
@@ -102,7 +134,7 @@ impl TabBar {
             ]
         });
         let right = controls.map_or(width - margin, |c| {
-            c[0].0 - ((if NATIVE_CONTROLS { 6.0 } else { 12.0 }) * s).round()
+            c[0].0 - ((if flat { 6.0 } else { 12.0 }) * s).round()
         });
         let settings = (right - btn, btn);
         let ports_btn = (settings.0 - gap - btn, btn);
@@ -175,6 +207,167 @@ impl TabBar {
         Some(TabHit::Empty)
     }
 
+    /// Fondo de una pestaña según la forma del tema. Devuelve el tramo de la línea inferior de la
+    /// barra que no hay que dibujar (la pestaña activa que se une al terminal).
+    #[allow(clippy::too_many_arguments)]
+    fn draw_tab_shape(
+        &self,
+        p: &mut Painter,
+        theme: &Theme,
+        i: usize,
+        active: usize,
+        hovered: bool,
+        s: f32,
+    ) -> Option<(f32, f32)> {
+        let (tx, tw) = self.tabs[i];
+        let is_active = i == active;
+        let st = theme.style;
+        let rr = st.r(s);
+        let hair = s.round().max(1.0);
+        let line = (2.0 * s).round().max(2.0);
+        let inset = (3.0 * s).round();
+        let (bx, bw) = (tx + inset, tw - 2.0 * inset);
+        let (y, h) = (self.tab_y, self.tab_h);
+        let fg = theme.foreground;
+        let top_bg = terminal_top(theme);
+        // Separador fino entre dos pestañas sin seleccionar.
+        let separator = |p: &mut Painter| {
+            if i + 1 < self.tabs.len() && !is_active && i + 1 != active {
+                p.rect(
+                    tx + tw - hair,
+                    10.0 * s,
+                    hair,
+                    self.height - 20.0 * s,
+                    fg,
+                    0.10,
+                );
+            }
+        };
+        match st.tabs {
+            Tabs::Flat => {
+                let pill = surface(theme, 0.08);
+                if is_active {
+                    p.rect(tx, 0.0, tw, self.height - hair, pill, 1.0);
+                } else if hovered {
+                    p.rect(tx, 0.0, tw, self.height - hair, pill, 0.5);
+                }
+                separator(p);
+            }
+            Tabs::Underline => {
+                if hovered && !is_active {
+                    p.rounded(bx, y, bw, h, fg, 0.05, rr);
+                }
+                if is_active {
+                    let m = (12.0 * s).round();
+                    p.rounded(
+                        tx + m,
+                        self.height - hair - line,
+                        tw - 2.0 * m,
+                        line,
+                        theme.accent,
+                        1.0,
+                        line / 2.0,
+                    );
+                }
+            }
+            Tabs::TopLine => {
+                if is_active {
+                    p.rect(tx, 0.0, tw, self.height, top_bg, 1.0);
+                    p.rect(tx, 0.0, tw, line, theme.accent, 1.0);
+                    return Some((tx, tx + tw));
+                }
+                if hovered {
+                    p.rect(tx, 0.0, tw, self.height - hair, fg, 0.04);
+                }
+                if i + 1 != active {
+                    p.rect(tx + tw - hair, 0.0, hair, self.height - hair, fg, 0.08);
+                }
+            }
+            Tabs::Pill | Tabs::Segmented => {
+                if is_active {
+                    p.rounded(bx, y, bw, h, theme.tab_active, 1.0, rr);
+                    p.outline(bx, y, bw, h, fg, 0.10, rr, hair);
+                } else if hovered {
+                    p.rounded(bx, y, bw, h, fg, 0.05, rr);
+                }
+            }
+            Tabs::Outline => {
+                if is_active {
+                    let g = (2.0 * s).round();
+                    p.outline(
+                        bx - g,
+                        y - g,
+                        bw + 2.0 * g,
+                        h + 2.0 * g,
+                        theme.accent,
+                        0.16,
+                        rr + g,
+                        g,
+                    );
+                    p.rounded(
+                        bx,
+                        y,
+                        bw,
+                        h,
+                        theme.tab_bar.lerp(theme.accent, 0.10),
+                        1.0,
+                        rr,
+                    );
+                    p.outline(bx, y, bw, h, theme.accent, 1.0, rr, hair.max(1.2 * s));
+                } else if hovered {
+                    p.outline(bx, y, bw, h, fg, 0.22, rr, hair);
+                }
+            }
+            Tabs::Floating => {
+                if is_active {
+                    p.rounded(bx, y + s, bw, h + s, Rgb(0, 0, 0), 0.28, rr);
+                    p.rounded(bx, y, bw, h, theme.tab_active, 1.0, rr);
+                    p.outline(bx, y, bw, h, fg, 0.12, rr, hair);
+                } else {
+                    let k = if hovered { 0.11 } else { 0.06 };
+                    p.rounded(bx, y, bw, h, theme.tab_bar.lerp(fg, k), 1.0, rr);
+                }
+            }
+            Tabs::Folder => {
+                let top = (6.0 * s).round();
+                if is_active {
+                    // Baja hasta el terminal (del mismo color) y los rincones de abajo se curvan
+                    // hacia fuera, como la solapa de una carpeta.
+                    p.rounded(tx, top, tw, self.height - top + rr, top_bg, 1.0, rr);
+                    if rr > 0.0 {
+                        let yb = self.height - rr;
+                        p.rect(tx - rr, yb, rr, rr, top_bg, 1.0);
+                        p.circle(tx - rr, yb, rr, theme.tab_bar, 1.0);
+                        p.rect(tx + tw, yb, rr, rr, top_bg, 1.0);
+                        p.circle(tx + tw + rr, yb, rr, theme.tab_bar, 1.0);
+                    }
+                    return Some((tx - rr, tx + tw + rr));
+                }
+                if hovered {
+                    p.rounded(tx, top, tw, self.height - top - hair, fg, 0.05, rr);
+                }
+                separator(p);
+            }
+            Tabs::Brackets => {}
+            Tabs::Dot => {
+                if hovered && !is_active {
+                    p.rounded(bx, y, bw, h, fg, 0.05, rr);
+                }
+                if is_active {
+                    let pad = (12.0 * s).round();
+                    p.circle(
+                        tx + pad + 3.5 * s,
+                        (self.height / 2.0).round(),
+                        3.5 * s,
+                        theme.accent,
+                        1.0,
+                    );
+                }
+            }
+        }
+        None
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn draw(
         &self,
@@ -191,40 +384,53 @@ impl TabBar {
     ) {
         use crate::sessions::Status;
         let s = scale;
-        let r = (7.0 * s).round();
+        let st = theme.style;
+        let r = (st.r(s) + s).round();
         let hair = s.round().max(1.0);
         let dimc = dim(theme);
         let pill = surface(theme, 0.08);
         p.rect(0.0, 0.0, width, self.height, theme.tab_bar, 1.0);
-        p.rect(0.0, self.height - hair, width, hair, theme.foreground, 0.08);
+
+        // Segmentos: un carril bajo todas las pestañas.
+        if st.tabs == Tabs::Segmented {
+            if let (Some(&(x0, _)), Some(&(lx, lw))) = (self.tabs.first(), self.tabs.last()) {
+                let pad = (3.0 * s).round();
+                p.rounded(
+                    x0,
+                    self.tab_y - pad,
+                    lx + lw - x0,
+                    self.tab_h + 2.0 * pad,
+                    theme.foreground,
+                    0.06,
+                    st.r(s) + pad,
+                );
+            }
+        }
 
         let hovered_tab = match hover {
             Some(TabHit::Tab(j) | TabHit::Close(j)) => Some(j),
             _ => None,
         };
-        for (i, &(tx, tw)) in self.tabs.iter().enumerate() {
+        let mut gap = None;
+        for i in 0..self.tabs.len() {
+            let (tx, tw) = self.tabs[i];
             let is_active = i == active;
             let hovered = hovered_tab == Some(i);
-            // Pestañas planas a toda altura; la activa, en un tono más claro.
-            if is_active {
-                p.rect(tx, 0.0, tw, self.height - hair, pill, 1.0);
-            } else if hovered {
-                p.rect(tx, 0.0, tw, self.height - hair, pill, 0.5);
-            }
-            if i + 1 < self.tabs.len() && !is_active && i + 1 != active {
-                p.rect(
-                    tx + tw - hair,
-                    10.0 * s,
-                    hair,
-                    self.height - 20.0 * s,
-                    theme.foreground,
-                    0.10,
-                );
+            if let Some(g) = self.draw_tab_shape(p, theme, i, active, hovered, s) {
+                gap = Some(g);
             }
 
             let tab = &tabs[i];
-            let color = if is_active { theme.foreground } else { dimc };
-            let pad = (12.0 * s).round();
+            let color = match (is_active, st.tabs) {
+                (true, Tabs::Brackets) => theme.accent,
+                (true, _) => theme.foreground,
+                (false, _) if hovered && st.tabs != Tabs::Flat => theme.foreground,
+                _ => dimc,
+            };
+            let mut pad = (12.0 * s).round();
+            if st.tabs == Tabs::Dot {
+                pad += (13.0 * s).round();
+            }
             let show_close = is_active || hovered;
             let mut right = tx + tw - pad / 2.0;
             if show_close {
@@ -267,11 +473,14 @@ impl TabBar {
                     _ => {}
                 }
             }
-            let label = if tab.exited {
+            let mut label = if tab.exited {
                 format!("{} (terminado)", tab.label)
             } else {
                 tab.label.clone()
             };
+            if st.tabs == Tabs::Brackets && is_active {
+                label = format!("[ {label} ]");
+            }
             p.ui_text_in(
                 tx + pad,
                 0.0,
@@ -280,6 +489,28 @@ impl TabBar {
                 color,
                 (right - tx - pad).max(0.0),
             );
+        }
+        // Línea inferior de la barra, salvo bajo la pestaña que se une al terminal.
+        match gap {
+            Some((a, b)) => {
+                p.rect(
+                    0.0,
+                    self.height - hair,
+                    a.max(0.0),
+                    hair,
+                    theme.foreground,
+                    0.08,
+                );
+                p.rect(
+                    b,
+                    self.height - hair,
+                    (width - b).max(0.0),
+                    hair,
+                    theme.foreground,
+                    0.08,
+                );
+            }
+            None => p.rect(0.0, self.height - hair, width, hair, theme.foreground, 0.08),
         }
 
         let cy = (self.tab_y + self.tab_h / 2.0).round();
@@ -421,43 +652,74 @@ impl TabBar {
         }
 
         if let Some(ctl) = &self.controls {
-            if NATIVE_CONTROLS {
+            if flat_controls(&st) {
                 self.draw_native_controls(p, theme, ctl, hover, s, toggles.maximized);
                 return;
             }
-            // Botones de ventana estilo GNOME: círculos con iconos finos.
             let kinds = [TabHit::Minimize, TabHit::Maximize, TabHit::CloseWindow];
+            let over_any = kinds.iter().any(|k| hover == Some(*k));
             for (i, &(bx, bw)) in ctl.iter().enumerate() {
                 let over = hover == Some(kinds[i]);
                 let cx = (bx + bw / 2.0).round();
                 let cy = (self.height / 2.0).round();
-                p.circle(
-                    cx,
-                    cy,
-                    12.0 * s,
-                    theme.foreground,
-                    if over { 0.18 } else { 0.08 },
-                );
-                let c = theme.foreground;
                 let t = 1.4 * s;
+                let (c, k) = match st.buttons {
+                    // Círculos con los colores del tema; los iconos, al pasar por encima.
+                    Buttons::Color => {
+                        let fill = [theme.palette[3], theme.palette[2], theme.palette[1]][i];
+                        p.circle(cx, cy, 6.5 * s, fill, if over { 1.0 } else { 0.92 });
+                        if !over_any {
+                            continue;
+                        }
+                        (Rgb(0, 0, 0), 2.6 * s)
+                    }
+                    Buttons::Icons => {
+                        if over {
+                            let close = kinds[i] == TabHit::CloseWindow;
+                            let (bgc, a) = if close {
+                                (theme.palette[1], 0.22)
+                            } else {
+                                (theme.foreground, 0.10)
+                            };
+                            p.rounded(bx, self.tab_y, bw, self.tab_h, bgc, a, r);
+                        }
+                        let c = if over { theme.foreground } else { dimc };
+                        (c, 3.8 * s)
+                    }
+                    // Botones de ventana estilo GNOME: círculos con iconos finos.
+                    _ => {
+                        p.circle(
+                            cx,
+                            cy,
+                            12.0 * s,
+                            theme.foreground,
+                            if over { 0.18 } else { 0.08 },
+                        );
+                        (theme.foreground, 3.6 * s)
+                    }
+                };
+                let t = if st.buttons == Buttons::Color {
+                    1.2 * s
+                } else {
+                    t
+                };
                 match kinds[i] {
                     TabHit::Minimize => p.line(
-                        cx - 4.0 * s,
+                        cx - k - 0.4 * s,
                         cy + 0.5 * s,
-                        cx + 4.0 * s,
+                        cx + k + 0.4 * s,
                         cy + 0.5 * s,
                         t,
                         c,
                         1.0,
                     ),
                     TabHit::Maximize => {
-                        let k = 3.6 * s;
                         p.line(cx - k, cy - k, cx + k, cy - k, t, c, 1.0);
                         p.line(cx + k, cy - k, cx + k, cy + k, t, c, 1.0);
                         p.line(cx + k, cy + k, cx - k, cy + k, t, c, 1.0);
                         p.line(cx - k, cy + k, cx - k, cy - k, t, c, 1.0);
                     }
-                    _ => cross(p, cx, cy, 3.6 * s, t, c),
+                    _ => cross(p, cx, cy, k, t, c),
                 }
             }
         }

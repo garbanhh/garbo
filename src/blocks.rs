@@ -298,6 +298,8 @@ pub struct BlockState {
     prompt_at: Option<(i64, usize)>,
     /// Se está escribiendo el prompt derecho: la próxima B solo lo cierra.
     right_prompt: bool,
+    /// Bloques de muestra (editor de aspecto): sus comandos no van al historial de sugerencias.
+    pub no_history: bool,
 }
 
 impl BlockState {
@@ -391,6 +393,13 @@ impl BlockState {
         self.current_mut()
     }
 
+    /// Muestra del editor de aspecto: fija la duración del último comando terminado.
+    pub fn set_current_duration(&mut self, d: Duration) {
+        if let Some(info) = self.current_mut() {
+            info.duration = Some(d);
+        }
+    }
+
     fn current_mut(&mut self) -> Option<&mut BlockInfo> {
         let id = self.current?;
         let i = self.infos.binary_search_by_key(&id, |b| b.id).ok()?;
@@ -482,7 +491,9 @@ impl BlockState {
                 term.set_hyperlink(None);
                 self.input_start = None;
                 if let Some((cmd, dir)) = self.pending_cmd.take() {
-                    crate::suggest::record(&cmd, code, dir.as_deref());
+                    if !self.no_history {
+                        crate::suggest::record(&cmd, code, dir.as_deref());
+                    }
                 }
                 if let Some(info) = self.current_mut() {
                     if let (Some(start), None) = (info.started, info.duration) {
@@ -738,9 +749,8 @@ mod tests {
             VoidListener,
         );
         let blocks = std::sync::Mutex::new(BlockState::new(0));
-        let mut feed = |s: &str| {
-            crate::pty_loop::feed_for_tests(&mut term, &blocks, s.as_bytes(), &VoidListener)
-        };
+        let mut feed =
+            |s: &str| crate::pty_loop::feed_bytes(&mut term, &blocks, s.as_bytes(), &VoidListener);
         // Salida previa sin bloque y tres comandos con salidas de distinta longitud; el último
         // sigue en marcha.
         feed("arranque\r\nbanner\r\n");
@@ -773,7 +783,7 @@ mod tests {
         // Con la pantalla alternativa no se decora nada.
         term.scroll_display(Scroll::Bottom);
         drop(bs);
-        crate::pty_loop::feed_for_tests(&mut term, &blocks, b"\x1b[?1049h", &VoidListener);
+        crate::pty_loop::feed_bytes(&mut term, &blocks, b"\x1b[?1049h", &VoidListener);
         assert!(term.mode().contains(TermMode::ALT_SCREEN));
         let bs = blocks.lock().unwrap();
         assert_eq!(block_above(&term, &bs, Line(0), None).map(|a| a.id), None);

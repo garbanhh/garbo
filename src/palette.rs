@@ -31,13 +31,14 @@ impl Palette {
         let mut entries: Vec<Entry> = Action::all()
             .into_iter()
             .filter(|(a, ..)| !matches!(a, Action::GotoTab(_) | Action::CommandPalette))
+            .filter(|(a, ..)| *a != Action::Appearance || crate::style::ENABLED)
             .map(|(a, name, desc, _)| Entry {
                 label: desc.to_string(),
                 hint: kb.labels.get(name).cloned().unwrap_or_default(),
                 item: Item::Action(a),
             })
             .collect();
-        for &t in Theme::NAMES {
+        for &t in Theme::names() {
             entries.push(Entry {
                 label: format!("Tema: {}", Theme::display_name(t)),
                 hint: String::new(),
