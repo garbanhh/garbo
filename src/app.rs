@@ -319,7 +319,7 @@ impl App {
                 }
             }
             Some(U::Installed(_)) => {
-                if std::process::Command::new(update::restart_path())
+                if crate::platform::command(update::restart_path())
                     .spawn()
                     .is_ok()
                 {
@@ -845,9 +845,8 @@ impl App {
                 // En Windows, `code` es `code.cmd`: se busca con las extensiones de PATHEXT.
                 let program = crate::platform::find_program(&cmd[0])
                     .map_or_else(|| cmd[0].clone().into(), std::ffi::OsString::from);
-                let mut c = std::process::Command::new(program);
                 // Son editores con ventana; en Windows, `code.cmd` abriría además una consola.
-                crate::platform::no_console(&mut c);
+                let mut c = crate::platform::command(program);
                 c.args(&cmd[1..])
                     .stdin(std::process::Stdio::null())
                     .stdout(std::process::Stdio::null())

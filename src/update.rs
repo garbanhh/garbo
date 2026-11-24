@@ -163,7 +163,7 @@ pub fn check_now(proxy: EventLoopProxy<UserEvent>) {
 }
 
 fn curl() -> Command {
-    let mut cmd = Command::new("curl");
+    let mut cmd = crate::platform::command("curl");
     cmd.args([
         "-q",
         "-fsSL",
@@ -349,7 +349,7 @@ fn install(rel: &Release, send: &dyn Fn(UpdateState)) -> Result<(), String> {
         Format::Rpm => &["dnf", "install", "-y", "--setopt=localpkg_gpgcheck=0"],
         Format::Deb => &["apt-get", "install", "-y"],
     };
-    let status = Command::new("pkexec")
+    let status = crate::platform::command("pkexec")
         .args(installer)
         .arg(&path)
         .status()
@@ -398,7 +398,7 @@ fn verify_deb_signature(dir: &Path, deb: &Path, sig: &Path, key: &str) -> Result
     let keyring = dir.join("garbo.gpg");
     let key = dearmor(key).ok_or("la clave de firma de Garbo no es válida")?;
     fs::write(&keyring, key).map_err(|e| e.to_string())?;
-    let verified = Command::new("gpgv")
+    let verified = crate::platform::command("gpgv")
         .arg("--keyring")
         .arg(&keyring)
         .arg(sig)
@@ -436,7 +436,7 @@ fn verify_rpm_signature(dir: &Path, rpm: &Path, key: &str) -> Result<(), String>
     fs::create_dir(&db).map_err(|e| e.to_string())?;
     // Solo la clave incorporada a esta compilación entra en el llavero temporal.
     let rpmkeys = || {
-        let mut cmd = Command::new("rpmkeys");
+        let mut cmd = crate::platform::command("rpmkeys");
         cmd.args(["--noplugins", "--define", "_keyring rpmdb", "--dbpath"])
             .arg(&db);
         cmd
@@ -462,7 +462,7 @@ fn verify_rpm_signature(dir: &Path, rpm: &Path, key: &str) -> Result<(), String>
 
 fn sha256(path: &Path) -> Result<String, String> {
     let file = fs::File::open(path).map_err(|e| e.to_string())?;
-    let out = Command::new("sha256sum")
+    let out = crate::platform::command("sha256sum")
         .stdin(file)
         .output()
         .map_err(|e| e.to_string())?;

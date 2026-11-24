@@ -12,8 +12,6 @@
 //! pegan como rutas.
 
 use std::path::{Path, PathBuf};
-#[cfg(not(windows))]
-use std::process::Command;
 use std::time::{Duration, SystemTime};
 
 /// Antigüedad a partir de la cual se borran las capturas guardadas.
@@ -24,7 +22,11 @@ type ReadImage = fn(&str) -> Option<Vec<u8>>;
 #[cfg(not(windows))]
 fn run(args: &[&str]) -> Option<Vec<u8>> {
     // `timeout`: si el dueño del portapapeles no responde, no nos quedamos colgados.
-    let out = Command::new("timeout").arg("3").args(args).output().ok()?;
+    let out = crate::platform::command("timeout")
+        .arg("3")
+        .args(args)
+        .output()
+        .ok()?;
     out.status.success().then_some(out.stdout)
 }
 

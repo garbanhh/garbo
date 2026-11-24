@@ -99,7 +99,7 @@ pub fn process_start(pid: i32) -> Option<String> {
 }
 
 /// Una orden de fondo (git) sin ventana de consola: en Linux no hace falta (ver `windows.rs`).
-pub fn no_console(_cmd: &mut std::process::Command) {}
+pub(super) fn no_console(_cmd: &mut std::process::Command) {}
 
 /// Diferencia (segundos) entre la hora local y la UTC en el instante `at` (segundos desde 1970),
 /// con el horario de verano que tocara entonces.
@@ -138,7 +138,7 @@ pub fn find_program(name: &str) -> Option<PathBuf> {
 
 /// Abre una URL, una carpeta o un archivo con el programa predeterminado del escritorio.
 pub fn open(target: &str) {
-    match std::process::Command::new("xdg-open")
+    match super::command("xdg-open")
         .arg(target)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())

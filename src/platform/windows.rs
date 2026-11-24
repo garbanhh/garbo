@@ -425,7 +425,7 @@ pub fn process_start(pid: i32) -> Option<String> {
 
 /// Una orden de fondo (git) sin ventana de consola: Garbo no tiene consola, así que cada programa
 /// de consola que lanza abriría la suya.
-pub fn no_console(cmd: &mut std::process::Command) {
+pub(super) fn no_console(cmd: &mut std::process::Command) {
     use std::os::windows::process::CommandExt;
     use windows_sys::Win32::System::Threading::CREATE_NO_WINDOW;
     cmd.creation_flags(CREATE_NO_WINDOW);
@@ -714,6 +714,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods)] // un cmd de verdad, con la consola de las pruebas
     fn primer_plano_de_un_shell() {
         // Un cmd que lanza otro proceso que espera: el primer plano es el nieto.
         let mut child = std::process::Command::new("cmd")

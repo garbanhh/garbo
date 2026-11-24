@@ -20,7 +20,7 @@ use std::collections::HashSet;
 #[cfg(not(windows))]
 use std::io::{BufRead, BufReader};
 #[cfg(not(windows))]
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 #[cfg(not(windows))]
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -230,7 +230,7 @@ fn clean(s: &str) -> String {
 /// (`NoticeClicked`, con el permiso de activación si el escritorio lo da).
 #[cfg(not(windows))]
 pub fn send(n: Notice, proxy: EventLoopProxy<UserEvent>) {
-    let mut cmd = Command::new("notify-send");
+    let mut cmd = crate::platform::command("notify-send");
     cmd.args(["-a", "Garbo", "-i", APP_ID, "-h"])
         .arg(format!("string:desktop-entry:{APP_ID}"));
     // El permiso de activación sale por stdout justo antes del nombre de la acción.

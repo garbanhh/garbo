@@ -1,0 +1,5 @@
+# Todos los programas se lanzan con `platform::command`: en Windows, sin ventana de consola
+# (Garbo no tiene consola y cada programa de consola abriría la suya).
+disallowed-methods = [
+    { path = "std::process::Command::new", reason = "usa crate::platform::command (en Windows, sin ventana de consola)" },
+]

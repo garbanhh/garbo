@@ -359,8 +359,7 @@ const NO_HOOKS: &str = if cfg!(windows) {
 };
 
 fn git(root: &Path) -> Command {
-    let mut c = Command::new("git");
-    crate::platform::no_console(&mut c);
+    let mut c = crate::platform::command("git");
     c.arg("-C")
         .arg(root)
         .args([
@@ -1013,7 +1012,7 @@ u UU N... 100644 100644 100644 100644 a b c conflicto.rs\0\
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("src")).unwrap();
         let sh = |args: &[&str]| {
-            Command::new("git")
+            crate::platform::command("git")
                 .arg("-C")
                 .arg(&dir)
                 .args([

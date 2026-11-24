@@ -15,6 +15,16 @@ pub use self::windows::*;
 
 use std::path::Path;
 
+/// Orden para ejecutar un programa. Todos los programas se lanzan por aquí (`clippy.toml` prohíbe
+/// `Command::new`): en Windows van sin ventana de consola. Garbo no tiene consola, así que cada
+/// programa de consola (curl, git…) abriría la suya, aunque fuera medio segundo.
+#[allow(clippy::disallowed_methods)]
+pub fn command(program: impl AsRef<std::ffi::OsStr>) -> std::process::Command {
+    let mut c = std::process::Command::new(program);
+    no_console(&mut c);
+    c
+}
+
 /// ¿Separa `c` componentes de una ruta? En Windows valen `\` y `/`.
 pub fn is_separator(c: char) -> bool {
     c == '/' || (cfg!(windows) && c == '\\')
