@@ -54,6 +54,7 @@ blocked = true           # avisar también cuando un agente espera tu permiso o 
 # position = "top"       # top | bottom | left | right: borde de la ventana en el que van
 # width    = "normal"    # narrow | normal | wide | max: lo más que mide cada pestaña (o la columna, a un lado)
 # align    = "left"      # left | center: dónde va el nombre dentro de la pestaña
+# working  = "dots"      # dots | wave | pulse | spin | bar | still: animación mientras trabaja un agente
 
 # Forma de la interfaz (solo en Linux de momento). Cada tema trae la suya; aquí se cambia opción a
 # opción. Lo más cómodo es el editor de aspecto: Ajustes → Tema → Aspecto, o "Editar el aspecto"
@@ -106,6 +107,7 @@ blocked = true           # avisar también cuando un agente espera tu permiso o 
 # next_theme       = "ctrl+shift+y"
 # settings         = "ctrl+comma"
 # agent_stats      = "ctrl+shift+s"   # estadísticas de los agentes
+# toggle_changes   = "ctrl+shift+g"   # cambios de git (solo Linux, de momento)
 # prev_block       = "ctrl+shift+up"
 # next_block       = "ctrl+shift+down"
 # copy_block_output  = "ctrl+shift+o"

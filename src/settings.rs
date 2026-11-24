@@ -17,6 +17,7 @@ pub enum Field {
     TabsPosition,
     TabsWidth,
     TabsAlign,
+    TabsWorking,
     RenameTab,
     FontFamily,
     FontSize,
@@ -83,6 +84,7 @@ const CATEGORIES: &[(&str, &[(Field, &str)])] = &[
             (Field::TabsPosition, "Posición"),
             (Field::TabsWidth, "Ancho"),
             (Field::TabsAlign, "Nombre"),
+            (Field::TabsWorking, "Agente trabajando"),
             (Field::RenameTab, "Cambiar el nombre"),
         ],
     ),
@@ -152,9 +154,11 @@ const CATEGORIES: &[(&str, &[(Field, &str)])] = &[
 fn visible(f: Field) -> bool {
     match f {
         Field::Appearance => crate::style::ENABLED,
-        Field::TabsPosition | Field::TabsWidth | Field::TabsAlign | Field::RenameTab => {
-            crate::tabs::ENABLED
-        }
+        Field::TabsPosition
+        | Field::TabsWidth
+        | Field::TabsAlign
+        | Field::TabsWorking
+        | Field::RenameTab => crate::tabs::ENABLED,
         _ => true,
     }
 }
@@ -423,6 +427,7 @@ impl Settings {
             Field::TabsPosition => cfg.tabs.position.label().into(),
             Field::TabsWidth => cfg.tabs.width.label().into(),
             Field::TabsAlign => cfg.tabs.align.label().into(),
+            Field::TabsWorking => cfg.tabs.working.label().into(),
             Field::RenameTab => "Esta pestaña".into(),
             Field::NotifyTest => "Enviar".into(),
             Field::NotifyAgents => match cfg.notifications.agents {
@@ -572,6 +577,11 @@ impl Settings {
             Field::TabsAlign => {
                 use crate::tabs::Align;
                 cfg.tabs.align = cycle_opt(Align::ALL, cfg.tabs.align, d);
+                Change::Redraw
+            }
+            Field::TabsWorking => {
+                use crate::tabs::Working;
+                cfg.tabs.working = cycle_opt(Working::ALL, cfg.tabs.working, d);
                 Change::Redraw
             }
             Field::RenameTab if dir == 0 => Change::RenameTab,
@@ -980,6 +990,7 @@ impl Settings {
                     "Ancho de la columna de pestañas".into()
                 }
                 Field::TabsWidth => "Lo más que mide cada pestaña".into(),
+                Field::TabsWorking => "Animación mientras trabaja".into(),
                 Field::RenameTab => "O doble clic en la pestaña".into(),
                 _ => String::new(),
             };
@@ -1376,6 +1387,12 @@ mod tests {
             Change::Redraw
         );
         assert_eq!(cfg.tabs.align, Align::Center);
+        assert_eq!(
+            set.adjust(idx(Field::TabsWorking), 1, &mut cfg),
+            Change::Redraw
+        );
+        assert_eq!(cfg.tabs.working, crate::tabs::Working::Wave);
+        assert_eq!(set.value_text(Field::TabsWorking, &cfg), "Onda");
         // "Cambiar el nombre" es un botón: solo con Intro o clic.
         assert_eq!(set.adjust(idx(Field::RenameTab), 1, &mut cfg), Change::None);
         assert_eq!(

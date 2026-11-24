@@ -117,6 +117,12 @@ pub struct State {
     /// Búsqueda manual de actualizaciones (Ajustes).
     pub update_check: crate::update::CheckState,
     pub panel: crate::panel::PanelState,
+    /// Cambios de git: lo leído de cada repositorio y el panel "Cambios".
+    pub git: crate::git::Git,
+    pub changes: crate::changes::ChangesPanel,
+    /// Indicadores de cambios del prompt dibujados en el último fotograma (terminal, rectángulo),
+    /// para el ratón.
+    pub git_chips: Vec<(u64, [f32; 4])>,
     pub anim_epoch: Instant,
     pub last_anim: Instant,
     pub clipboard: Box<dyn ClipboardProvider>,
@@ -145,6 +151,8 @@ pub struct Geometry {
     pub ws: WindowSize,
     /// Panel lateral (x, y, ancho, alto) si está abierto.
     pub panel: Option<(f32, f32, f32, f32)>,
+    /// Panel de los cambios de git (x, y, ancho, alto), entre los terminales y el lateral.
+    pub changes: Option<(f32, f32, f32, f32)>,
     /// Rectángulo del panel con el foco (con su margen).
     pub pane: crate::panes::Rect,
     /// Paneles de la pestaña activa.
@@ -235,6 +243,9 @@ impl App {
             update: None,
             update_check: Default::default(),
             panel: Default::default(),
+            git: crate::git::Git::new(self.proxy.clone()),
+            changes: Default::default(),
+            git_chips: Vec::new(),
             anim_epoch: now,
             last_anim: now,
             clipboard,
@@ -270,6 +281,10 @@ impl App {
                     look.set_section(n);
                 }
             }
+        }
+        // Igual con el panel de cambios de git.
+        if std::env::var_os("GARBO_OPEN_CHANGES").is_some() {
+            self.toggle_changes();
         }
         // Herramienta de desarrollo: varias pestañas al arrancar (capturas de la barra).
         let extra_tabs = std::env::var("GARBO_OPEN_TABS")
@@ -332,6 +347,29 @@ impl App {
         let (w, h) = st.renderer.size();
         let n_tabs = st.groups.len().max(1);
         let integrated = !st.decorations;
+        let panel_w = if st.panel.visible() {
+            crate::panel::PanelState::width(st.scale, w)
+        } else {
+            0.0
+        };
+        let changes_w = |avail: f32| {
+            if st.changes.open && crate::git::ENABLED {
+                st.changes.width(avail, st.scale)
+            } else {
+                0.0
+            }
+        };
+        // Paneles a la derecha del terminal (también el del editor de aspecto, que lo tapa): una
+        // fila de pestañas no pasa por encima. Con las estadísticas no se ven.
+        let side = if st.stats.is_some() {
+            0.0
+        } else {
+            let look = st
+                .look
+                .as_ref()
+                .map_or(0.0, |l| w - l.regions(w, st.scale).x);
+            (panel_w + changes_w(w - panel_w)).max(look)
+        };
         let tab_bar = (integrated || self.cfg.window.always_show_tabs || n_tabs > 1).then(|| {
             TabBar::layout(
                 n_tabs,
@@ -343,6 +381,7 @@ impl App {
                 &self.theme.style,
                 self.cfg.tabs.effective(),
                 st.stats.is_some(),
+                side,
             )
         });
         let top = tab_bar.as_ref().map_or(0.0, |t| t.height);
@@ -361,14 +400,17 @@ impl App {
             }
             None => (0.0, 0.0, 0.0),
         };
-        let panel_w = if st.panel.visible() {
-            crate::panel::PanelState::width(st.scale, w)
-        } else {
-            0.0
-        };
         let inner_h = (h - top - bottom).max(1.0);
         let panel = (panel_w > 0.0).then_some((w - right - panel_w, top, panel_w, inner_h));
-        let area = [left, top, (w - left - right - panel_w).max(1.0), inner_h];
+        let changes_w = changes_w(w - left - right - panel_w);
+        let changes =
+            (changes_w > 0.0).then_some((w - right - panel_w - changes_w, top, changes_w, inner_h));
+        let area = [
+            left,
+            top,
+            (w - left - right - panel_w - changes_w).max(1.0),
+            inner_h,
+        ];
         let gap = crate::panes::gap(st.scale);
         let (panes, dividers) = match st.groups.get(st.group) {
             Some(g) => (
@@ -390,6 +432,7 @@ impl App {
             y: f.y,
             ws: f.ws,
             panel,
+            changes,
             pane: f.rect,
             panes,
             dividers,
@@ -1045,6 +1088,7 @@ impl App {
                 }
             }
             Action::ToggleAgents => self.toggle_panel(true),
+            Action::ToggleChanges => self.toggle_changes(),
             Action::AgentStats => self.toggle_stats(),
             Action::Search => {
                 let st = self.st();
@@ -1196,9 +1240,11 @@ impl App {
                 );
             }
         }
-        // Animación del indicador "trabajando" (~7 fps, solo mientras algún agente trabaja).
+        // Animación del indicador "trabajando", solo mientras algún agente trabaja: ~7 fps los
+        // puntos, ~12 las que se mueven suave y ninguno la fija (`tabs::Working::frame`).
         let working = st.tabs.iter().any(|t| t.session.is_working());
-        if working && now.duration_since(st.last_anim).as_millis() >= 140 {
+        let frame = self.cfg.tabs.effective().working.frame();
+        if working && frame.is_some_and(|f| now.duration_since(st.last_anim) >= f) {
             st.last_anim = now;
             changed = true;
         }
@@ -1206,6 +1252,25 @@ impl App {
             st.window.request_redraw();
         }
         changed
+    }
+
+    /// ¿Necesita otro fotograma alguna animación (al despertar por `next_tick`)? El desplazamiento
+    /// del editor de aspecto y del panel de cambios, el despliegue de una fila del panel de
+    /// agentes, el nombre que se desplaza y las muestras animadas del editor.
+    pub fn animating(&self, now: Instant) -> bool {
+        let Some(st) = self.st.as_ref() else {
+            return false;
+        };
+        st.panel.animating(now)
+            || (st.changes.open && st.changes.animating())
+            || st
+                .look
+                .as_ref()
+                .is_some_and(|l| l.animating() || l.shows_working())
+            || st
+                .marquee
+                .next_frame(now)
+                .is_some_and(|t| t <= now + std::time::Duration::from_millis(2))
     }
 
     /// Próximo despertar necesario (animación, cambio de estado o "hace N s"). `None` = dormir.
@@ -1219,7 +1284,12 @@ impl App {
                 push(t);
             }
             if tab.session.is_working() {
-                push(now + std::time::Duration::from_millis(150));
+                let frame = self.cfg.tabs.effective().working.frame();
+                push(
+                    now + frame.map_or(std::time::Duration::from_millis(500), |f| {
+                        f + std::time::Duration::from_millis(10)
+                    }),
+                );
             } else if now.duration_since(tab.last_output) < crate::sessions::WORK_WINDOW {
                 push(
                     tab.last_output
@@ -1238,9 +1308,22 @@ impl App {
         if st.panel.animating(now) {
             push(now + std::time::Duration::from_millis(12));
         }
+        // Panel de cambios de git: su próxima lectura y la lista moviéndose tras la rueda.
+        if st.changes.open && st.stats.is_none() {
+            if let Some(t) = st.changes.poll_at {
+                push(t);
+            }
+            if st.changes.animating() {
+                push(now + std::time::Duration::from_millis(16));
+            }
+        }
         // Lista del editor de aspecto moviéndose tras la rueda o el teclado.
         if st.look.as_ref().is_some_and(|l| l.animating()) {
             push(now + std::time::Duration::from_millis(16));
+        }
+        // Las muestras animadas de "Agente trabajando" (editor de aspecto, sección Pestañas).
+        if st.look.as_ref().is_some_and(|l| l.shows_working()) {
+            push(now + std::time::Duration::from_millis(80));
         }
         // Nombre de pestaña que se desplaza: solo con el ratón encima y si no cabe.
         if let Some(t) = st.marquee.next_frame(now) {
@@ -1294,6 +1377,147 @@ impl App {
         }
         st.last_ws.num_cols = 0;
         self.relayout();
+    }
+
+    /// Abre o cierra el panel de los cambios de git (Ctrl+Shift+G).
+    pub fn toggle_changes(&mut self) {
+        if !crate::git::ENABLED {
+            return;
+        }
+        let st = self.st();
+        st.changes.open = !st.changes.open;
+        st.changes.hover = None;
+        st.changes.dragging = false;
+        // Al abrirlo, desde cero: `refresh_git` elige el repositorio y lo lee enseguida.
+        st.changes.set_root(None);
+        st.last_ws.num_cols = 0;
+        self.relayout();
+        self.refresh_git();
+        self.st().window.request_redraw();
+    }
+
+    /// Terminal cuyo indicador de cambios del prompt está bajo (x, y).
+    pub fn chip_at(&self, x: f32, y: f32) -> Option<u64> {
+        let st = self.st.as_ref()?;
+        st.git_chips
+            .iter()
+            .find(|(_, r)| x >= r[0] && x < r[0] + r[2] && y >= r[1] && y < r[1] + r[3])
+            .map(|(id, _)| *id)
+    }
+
+    /// Abre el panel de cambios (el indicador del prompt), si no lo está ya.
+    pub fn open_changes(&mut self) {
+        if !self.st().changes.open {
+            self.toggle_changes();
+        }
+    }
+
+    /// Sigue los repositorios de los terminales visibles: con cada prompt nuevo se lee el estado
+    /// de su repositorio (el indicador del prompt). Con el panel de cambios abierto, muestra el de
+    /// la pestaña activa y lo vuelve a leer cada poco. Barato si no hay nada que hacer: un candado
+    /// por terminal visible.
+    pub fn refresh_git(&mut self) {
+        if !crate::git::ENABLED {
+            return;
+        }
+        let Some(st) = self.st.as_mut() else { return };
+        let visible: Vec<u64> = st
+            .groups
+            .get(st.group)
+            .map(|g| g.layout.leaves())
+            .unwrap_or_default();
+        for tab in st.tabs.iter().filter(|t| visible.contains(&t.id)) {
+            let prompt = tab.blocks.lock().unwrap().idle_current();
+            st.git.track(tab.id, prompt, || tab.cwd());
+        }
+        if st.git.tracked() > st.tabs.len() {
+            let alive: Vec<u64> = st.tabs.iter().map(|t| t.id).collect();
+            st.git.forget(&alive, st.changes.root.as_deref());
+        }
+        if !st.changes.open || st.stats.is_some() {
+            return;
+        }
+        let root = match st.tabs.get(st.active) {
+            Some(tab) => st.git.root_of(tab.id, || tab.cwd()),
+            None => None,
+        };
+        if root != st.changes.root {
+            st.changes.set_root(root.clone());
+            st.window.request_redraw();
+        }
+        let now = Instant::now();
+        if let Some(root) = root {
+            if st.changes.poll_at.is_none_or(|t| now >= t) {
+                st.git.refresh(&root);
+                let took = st
+                    .git
+                    .repos
+                    .get(&root)
+                    .map_or_else(Default::default, |r| r.took);
+                st.changes.poll_at = Some(now + crate::changes::POLL.max(took * 20));
+            }
+        }
+    }
+
+    /// Clic en el panel de cambios.
+    pub fn on_changes_click(&mut self, hit: crate::changes::Hit) {
+        use crate::changes::Hit;
+        let st = self.st();
+        let Some(root) = st.changes.root.clone() else {
+            if hit == Hit::Close {
+                self.toggle_changes();
+            }
+            return;
+        };
+        let status = match st.git.status(&root) {
+            Some(Ok(s)) => Some(s),
+            _ => None,
+        };
+        let mut open = None;
+        match hit {
+            Hit::Close => {
+                self.toggle_changes();
+                return;
+            }
+            Hit::Divider => st.changes.dragging = true,
+            Hit::ToggleAll => {
+                if let Some(s) = status {
+                    for (path, kind) in st.changes.toggle_all(s) {
+                        st.git.diff(&root, &path, kind);
+                    }
+                }
+            }
+            Hit::File(i) => {
+                if let Some((path, kind)) = status.and_then(|s| st.changes.toggle(i, s)) {
+                    st.git.diff(&root, &path, kind);
+                }
+            }
+            Hit::Open(i) => {
+                if let Some(f) = status.and_then(|s| s.files.get(i)) {
+                    let line = st.changes.diff(&f.path).and_then(|d| d.first_change());
+                    open = Some((root.join(&f.path), line));
+                }
+            }
+            Hit::Line(i, j) => {
+                if let Some(f) = status.and_then(|s| s.files.get(i)) {
+                    let line = st
+                        .changes
+                        .diff(&f.path)
+                        .and_then(|d| d.lines.get(j))
+                        .map(|l| l.new.max(1));
+                    open = Some((root.join(&f.path), line));
+                }
+            }
+            Hit::Panel => {}
+        }
+        st.window.request_redraw();
+        if let Some((path, line)) = open {
+            self.open_link(crate::links::Target::File {
+                path,
+                line,
+                col: None,
+            });
+        }
     }
 
     /// Zona del panel lateral bajo el punto (x, y), si el panel está abierto y el punto dentro.
@@ -1610,12 +1834,16 @@ impl App {
             .collect();
         let toggles = ui::Toggles {
             stats: st.stats.is_some(),
+            changes: st.changes.open,
             agents: st.panel.agents,
             ports: st.panel.ports,
             maximized: cfg!(windows) && st.window.is_maximized(),
         };
         let now = Instant::now();
-        let phase = (now.duration_since(st.anim_epoch).as_millis() / 300) as usize;
+        let anim = crate::tabs::Anim {
+            ms: now.duration_since(st.anim_epoch).as_millis() as u64,
+            kind: cfg.tabs.effective().working,
+        };
         // Con las estadísticas abiertas no se dibujan los terminales ni el panel lateral.
         let stats_open = st.stats.is_some();
         let top = geo.tab_bar.as_ref().map_or(0.0, |t| t.height);
@@ -1675,7 +1903,7 @@ impl App {
                     st.scale,
                     st.update.as_ref(),
                     toggles,
-                    phase,
+                    anim,
                     &mut ui::TabsExtra {
                         marquee: &mut st.marquee,
                         rename: st.rename.as_ref(),
@@ -1684,6 +1912,7 @@ impl App {
                 );
             }
             let multi = geo.panes.len() > 1 && !stats_open && !showing_sample;
+            st.git_chips.clear();
             if let (true, Some(sample)) = (showing_sample, st.sample.as_ref()) {
                 let y0 = top + pad;
                 let rows = Rows::layout(
@@ -1710,6 +1939,7 @@ impl App {
                     &v,
                     bs,
                     Some(crate::look::SAMPLE_BRANCH),
+                    None,
                     st.scale,
                 );
                 view::draw_terminal(&mut p, term, theme, &v, Some(bs), None);
@@ -1739,13 +1969,27 @@ impl App {
                     cursor_on: st.cursor_on || !st.focused,
                     rows: pane.rows(&term, &bs, m.height, gaps),
                 };
-                // Rama de git para la etiqueta del prompt de Garbo (solo mientras se escribe).
+                // Rama de git para la etiqueta del prompt de Garbo (solo mientras se escribe) y, a
+                // su lado, cuántos cambios hay sin confirmar.
                 let branch = bs
                     .idle_current()
                     .filter(|id| bs.styled(*id))
                     .and_then(|_| bs.shell_cwd())
                     .and_then(|d| crate::complete::git_branch(&d));
-                view::draw_prompts(&mut p, &term, theme, &v, &bs, branch.as_deref(), st.scale);
+                let summary = branch.as_ref().and_then(|_| st.git.summary_for(tab.id));
+                let chip = view::draw_prompts(
+                    &mut p,
+                    &term,
+                    theme,
+                    &v,
+                    &bs,
+                    branch.as_deref(),
+                    summary,
+                    st.scale,
+                );
+                if let Some(r) = chip {
+                    st.git_chips.push((tab.id, r));
+                }
                 let search = st.search.as_mut().filter(|s| s.tab == tab.id);
                 let hl = search.map(|s| s.highlights(&term));
                 view::draw_terminal(&mut p, &term, theme, &v, Some(&bs), hl.as_ref());
@@ -1846,6 +2090,16 @@ impl App {
                     }
                 }
             }
+            if let Some(r) = geo.changes.filter(|_| !stats_open) {
+                let status = st
+                    .changes
+                    .root
+                    .as_ref()
+                    .and_then(|root| st.git.status(root));
+                let bottom_free = r.1 + r.3 >= h - 0.5;
+                st.changes
+                    .draw(&mut p, theme, status, r, st.scale, bottom_free);
+            }
             if let Some((px, py, pw, ph)) = geo.panel.filter(|_| !stats_open) {
                 let previewed: Vec<usize> = st.panel.previewed(now).collect();
                 let rows: Vec<crate::panel::AgentRow> = st
@@ -1875,7 +2129,7 @@ impl App {
                     })
                     .collect();
                 st.panel
-                    .draw(&mut p, theme, &rows, px, py, pw, ph, st.scale, now, phase);
+                    .draw(&mut p, theme, &rows, px, py, pw, ph, st.scale, now, anim);
             }
             if let Some(stats) = st.stats.as_mut() {
                 let top = geo.tab_bar.as_ref().map_or(0.0, |t| t.height);
@@ -1893,7 +2147,7 @@ impl App {
                         st.scale,
                         st.update.as_ref(),
                         toggles,
-                        phase,
+                        anim,
                         &mut ui::TabsExtra {
                             marquee: &mut st.marquee,
                             rename: st.rename.as_ref(),

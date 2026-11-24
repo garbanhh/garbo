@@ -563,6 +563,12 @@ impl Config {
             value(tb.align.key()),
             tb.align == dtb.align,
         );
+        put(
+            "tabs",
+            "working",
+            value(tb.working.key()),
+            tb.working == dtb.working,
+        );
         if !self.style.is_empty() && !doc.contains_key("style") {
             doc["style"] = toml_edit::table();
         }

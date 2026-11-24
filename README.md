@@ -45,6 +45,9 @@
   Aider y otros, con un árbol de subagentes para las sesiones compatibles. Cuando un agente
   termina y no estás viendo su sesión, aparece un aviso del escritorio que permite volver a su
   pestaña. Las capturas de pantalla se pegan como imagen.
+- **Cambios de git al estilo Warp.** En Linux, junto a la rama del prompt se ve cuántos archivos
+  y líneas has cambiado, y un panel a la derecha muestra cada archivo con su diff. Ideal para
+  revisar lo que acaba de hacer un agente: se actualiza mientras trabaja.
 - **Estadísticas de los agentes.** Tokens, peticiones y tiempo de trabajo de Claude Code, Codex y
   Gemini CLI por día, por hora de la semana, por modelo y por agente, calculados en el propio
   equipo a partir de sus sesiones.
@@ -123,6 +126,7 @@ de las versiones nuevas y abre su página para descargarlas.
 | `Alt+←` `→` `↑` `↓` | Cambiar de panel (si la pestaña está dividida) |
 | `Ctrl+Shift+A` / `Ctrl+Shift+E` | Panel de agentes / de puertos |
 | `Ctrl+Shift+S` | Estadísticas de los agentes |
+| `Ctrl+Shift+G` | Cambios de git (Linux) |
 
 **Línea de órdenes**
 
@@ -163,6 +167,8 @@ Todos los atajos de Garbo se cambian en la sección `[keybindings]` de la config
 - El clic central pega la selección primaria; sobre una pestaña, la cierra.
 - En Linux, doble clic en una pestaña le cambia el nombre; con el ratón encima de un nombre que no
   cabe, se desplaza solo, y más deprisa con la rueda.
+- En Linux, un clic en los cambios junto a la rama del prompt abre el panel de cambios de git; en
+  el panel, un clic en una línea del diff abre el archivo en tu editor en esa línea.
 - `Shift` fuerza la selección local en programas que capturan el ratón.
 - Arrastrar un archivo a la ventana escribe su ruta.
 - La barra de pestañas mueve la ventana y con doble clic la maximiza; los bordes la redimensionan.
@@ -307,6 +313,30 @@ Garbo la guarda en `~/.cache/garbo/capturas` (en Windows, `%LOCALAPPDATA%\garbo\
 su ruta, que Claude Code y otros agentes adjuntan como imagen. En Windows, los archivos copiados
 en el Explorador se pegan como rutas.
 
+### Cambios de git (Linux)
+
+Como en Warp, Garbo te enseña lo que has cambiado en el repositorio sin salir de la terminal:
+
+- **En el prompt**, junto a la rama, sale cuántos archivos tienen cambios sin confirmar y cuántas
+  líneas se han añadido y quitado (`4 +11 -5`). Se actualiza al terminar cada comando.
+- **El panel de cambios** (el botón de la hoja con `+` y `−` de la barra, `Ctrl+Shift+G` o un clic
+  en esos números) se abre a la derecha con los archivos cambiados del repositorio de la pestaña
+  activa: modificados (`M`), nuevos (`A`, o `U` si aún no se han añadido con `git add`), borrados
+  (`D`), renombrados (`R`) y en conflicto (`!`), con sus líneas `+` y `−`. Un clic en un archivo
+  despliega su diff, con los números de línea; *Desplegar todo* los abre todos. Si son pocos
+  cambios, se abren solos.
+- Un clic en una línea del diff abre el archivo en tu editor (`$EDITOR`) en esa línea, y el botón
+  *Abrir* de cada archivo, en su primer cambio.
+- Con el panel abierto, los cambios se vuelven a leer cada 2 segundos (más espaciado en
+  repositorios grandes), así que ves cómo avanza un agente mientras trabaja. El borde izquierdo del
+  panel se arrastra para hacerlo más ancho.
+
+Se muestran juntos los cambios preparados y los no preparados, frente al último commit. El panel
+solo lee: no prepara ni descarta nada. Garbo usa la orden `git` del sistema sin bloquear el
+repositorio (`--no-optional-locks`) y sin ejecutar programas que diga la configuración del propio
+repositorio (`fsmonitor`, diffs externos, `textconv` ni filtros); los filtros de tu configuración,
+como los de git-lfs, sí se usan. En Windows llegará en una versión posterior.
+
 ### Ajustes
 
 `Ctrl+,` o el botón de menú abren los ajustes, por categorías: Tema, Pestañas (en Linux), Texto,
@@ -322,8 +352,13 @@ puedas corregirlo.
 En *Ajustes → Pestañas* (o en el editor de aspecto) se elige:
 - **Posición**: arriba (como siempre), abajo o a un lado, en una columna con el nombre entero.
   Fuera de arriba, la barra de título se queda con los botones y el nombre de la pestaña activa.
-- **Ancho**: estrecho, normal, ancho o máximo (en una columna, su ancho).
+- **Ancho**: estrecho, normal, ancho o máximo (en una columna, su ancho). Con un panel abierto a
+  la derecha (cambios, agentes o el editor de aspecto), la fila de pestañas acaba donde acaba el
+  terminal.
 - **Nombre**: a la izquierda o centrado.
+- **Agente trabajando**: la animación de la pestaña (y de su fila en el panel de agentes) mientras
+  un agente trabaja: puntos (la de siempre), onda, pulso, giro, barra o fijo (un punto quieto, sin
+  animación). En el editor de aspecto se ve cada una en marcha.
 - **Cambiar el nombre**: también con doble clic en la pestaña o con "Cambiar el nombre de la
   pestaña" en la paleta. `Intro` lo guarda, `Esc` lo deja como estaba y un nombre vacío vuelve
   al automático.
@@ -338,7 +373,7 @@ cambian. Un nombre que no cabe se desplaza con el ratón encima, y más deprisa 
 *Ajustes → Tema → Aspecto*, o "Editar el aspecto" en la paleta de comandos, abre un panel a la
 derecha con la terminal en vivo al lado. El panel tiene cuatro secciones:
 - **Temas**: los 19 temas, con la opción de conservar tus cambios al cambiar de tema.
-- **Pestañas**: forma, posición, ancho y nombre.
+- **Pestañas**: forma, posición, ancho, nombre y la animación mientras trabaja un agente.
 - **Terminal**: etiqueta de la carpeta del prompt, espacio sobre la ruta, bajo ella y antes de la
   salida de cada comando, marcas de los bloques y cursor.
 - **Ventana**: altura de la barra, botones de ventana, fondo liso o con degradado, esquinas y
@@ -494,7 +529,10 @@ src/
   keybindings.rs  atajos de teclado configurables
   config.rs       configuración y temas
   style.rs        forma de la interfaz (pestañas, prompt, bloques, botones, barra, fondo)
-  look.rs         editor de aspecto (terminal en vivo arriba, opciones debajo)
+  look.rs         editor de aspecto (panel lateral con la terminal en vivo al lado)
+  tabs.rs         pestañas: posición, ancho, cambiar el nombre y nombre que se desplaza
+  git.rs          cambios de git sin confirmar: lectura en segundo plano con la orden git
+  changes.rs      panel de cambios de git (archivos y diffs)
   update.rs       comprobación e instalación de actualizaciones
   suggest.rs      sugerencias en gris desde el historial (con la carpeta de cada comando)
   complete.rs     menú de completado: candidatos según el contexto y búsqueda

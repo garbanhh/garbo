@@ -52,6 +52,7 @@ pub fn tab_sample(p: &mut crate::view::Painter, theme: &Theme, r: [f32; 4], k: f
         tab_y: 0.0,
         tab_h,
         stats_btn: (0.0, 0.0),
+        changes_btn: (0.0, 0.0),
         agents_btn: (0.0, 0.0),
         ports_btn: (0.0, 0.0),
         settings: (0.0, 0.0),
@@ -233,6 +234,8 @@ pub struct TabBar {
     pub tab_y: f32,
     pub tab_h: f32,
     pub stats_btn: (f32, f32),
+    /// Cambios de git (ancho 0 donde no está, ver `git::ENABLED`).
+    pub changes_btn: (f32, f32),
     pub agents_btn: (f32, f32),
     pub ports_btn: (f32, f32),
     pub settings: (f32, f32),
@@ -256,6 +259,8 @@ pub enum TabHit {
     Close(usize),
     NewTab,
     Stats,
+    /// Cambios de git.
+    Changes,
     Agents,
     Ports,
     Settings,
@@ -274,6 +279,7 @@ pub enum TabHit {
 #[derive(Clone, Copy, Default)]
 pub struct Toggles {
     pub stats: bool,
+    pub changes: bool,
     pub agents: bool,
     pub ports: bool,
     /// Solo en Windows: el botón de maximizar pasa a ser el de restaurar.
@@ -290,7 +296,9 @@ pub const BAR_HEIGHT: f32 = if NATIVE_CONTROLS { 34.0 } else { 40.0 };
 
 impl TabBar {
     /// Reparto de la barra de arriba y de la zona de las pestañas para una ventana de
-    /// `width` × `win_h` píxeles.
+    /// `width` × `win_h` píxeles. `side`: ancho de los paneles abiertos a la derecha del terminal
+    /// (cambios, agentes); una fila de pestañas (arriba o abajo) acaba donde acaba el terminal, sin
+    /// pasar por encima de ellos.
     #[allow(clippy::too_many_arguments)]
     pub fn layout(
         n: usize,
@@ -302,6 +310,7 @@ impl TabBar {
         style: &Style,
         cfg: TabsConfig,
         hide_tabs: bool,
+        side: f32,
     ) -> Self {
         let s = scale;
         let logical_h = BAR_HEIGHT + style.bar_delta();
@@ -342,7 +351,17 @@ impl TabBar {
         let settings = (right - btn, btn);
         let ports_btn = (settings.0 - gap - btn, btn);
         let agents_btn = (ports_btn.0 - gap - btn, btn);
-        let stats_btn = (agents_btn.0 - gap - btn, btn);
+        let changes_btn = if crate::git::ENABLED {
+            (agents_btn.0 - gap - btn, btn)
+        } else {
+            (agents_btn.0, 0.0)
+        };
+        let before_stats = if crate::git::ENABLED {
+            changes_btn.0
+        } else {
+            agents_btn.0
+        };
+        let stats_btn = (before_stats - gap - btn, btn);
         let update = has_update.then(|| {
             let w = (200.0 * s).round();
             (stats_btn.0 - 2.0 * gap - w, w)
@@ -361,7 +380,8 @@ impl TabBar {
         let inset = (3.0 * s).round();
         let (zone, thick, tabs, plus, pill, pill_inset) = match at {
             Position::Top => {
-                let (tabs, plus) = row(tabs_end - margin - 2.0 * gap - btn);
+                let end = tabs_end.min(width - side);
+                let (tabs, plus) = row(end - margin - 2.0 * gap - btn);
                 (
                     [0.0, 0.0, width, height],
                     height,
@@ -372,7 +392,7 @@ impl TabBar {
                 )
             }
             Position::Bottom => {
-                let (tabs, plus) = row(width - 2.0 * margin - 2.0 * gap - btn);
+                let (tabs, plus) = row(width - side - 2.0 * margin - 2.0 * gap - btn);
                 let y = (win_h - height).max(height);
                 (
                     [0.0, y, width, height],
@@ -424,6 +444,7 @@ impl TabBar {
             tab_y,
             tab_h,
             stats_btn,
+            changes_btn,
             agents_btn,
             ports_btn,
             settings,
@@ -521,6 +542,7 @@ impl TabBar {
                 (self.settings, TabHit::Settings),
                 (self.ports_btn, TabHit::Ports),
                 (self.agents_btn, TabHit::Agents),
+                (self.changes_btn, TabHit::Changes),
                 (self.stats_btn, TabHit::Stats),
             ] {
                 if in_row && x >= r.0 && x < r.0 + r.1 {
@@ -753,7 +775,7 @@ impl TabBar {
         scale: f32,
         update: Option<&crate::update::UpdateState>,
         toggles: Toggles,
-        phase: usize,
+        anim: crate::tabs::Anim,
         extra: &mut TabsExtra,
     ) {
         let s = scale;
@@ -781,7 +803,7 @@ impl TabBar {
             }
         }
         if !self.hide_tabs {
-            self.draw_tabs(p, theme, tabs, active, hover, s, phase, extra);
+            self.draw_tabs(p, theme, tabs, active, hover, s, anim, extra);
         }
 
         let cy = (self.tab_y + self.tab_h / 2.0).round();
@@ -817,6 +839,23 @@ impl TabBar {
         for (dx, bh) in [(-4.5, 6.0), (0.0, 11.0), (4.5, 8.0)] {
             let bx = (sx + dx * s - 1.5 * s).round();
             p.rounded(bx, floor - bh * s, 3.0 * s, bh * s, c, 1.0, 1.0 * s);
+        }
+
+        // Cambios de git: una hoja con + y −.
+        if crate::git::ENABLED {
+            let c = button(p, self.changes_btn, TabHit::Changes, toggles.changes);
+            let gx = (self.changes_btn.0 + self.changes_btn.1 / 2.0).round();
+            let (iw, ih) = ((12.0 * s).round(), (15.0 * s).round());
+            changes_icon(
+                p,
+                gx - (iw / 2.0).round(),
+                (cy - ih / 2.0).round(),
+                iw,
+                ih,
+                (1.4 * s).max(1.0),
+                c,
+                true,
+            );
         }
 
         let c = button(p, self.agents_btn, TabHit::Agents, toggles.agents);
@@ -995,7 +1034,7 @@ impl TabBar {
         active: usize,
         hover: Option<TabHit>,
         s: f32,
-        phase: usize,
+        anim: crate::tabs::Anim,
         extra: &mut TabsExtra,
     ) {
         use crate::sessions::Status;
@@ -1086,7 +1125,7 @@ impl TabBar {
                 match tab.status {
                     Status::Working => {
                         right -= 16.0 * s;
-                        crate::panel::spinner(p, right, cy, s * 0.9, theme.accent, phase);
+                        crate::panel::spinner(p, right, cy, s * 0.9, theme.accent, anim);
                         right -= 8.0 * s;
                         status_w = 24.0 * s;
                     }
@@ -1324,6 +1363,27 @@ pub fn folder(p: &mut Painter, x: f32, y: f32, w: f32, h: f32, t: f32, c: Rgb) {
     p.line(x1, ly, x1, y1, t, c, 1.0);
     p.line(x1, y1, x, y1, t, c, 1.0);
     p.line(x, y1, x, y, t, c, 1.0);
+}
+
+/// Cambios de git: una hoja con la esquina doblada en la caja (x, y, w, h), trazo `t`; con
+/// `signs`, un "+" y un "−" dentro (el botón de la barra; en el prompt no se distinguirían).
+#[allow(clippy::too_many_arguments)]
+pub fn changes_icon(p: &mut Painter, x: f32, y: f32, w: f32, h: f32, t: f32, c: Rgb, signs: bool) {
+    let (x1, y1) = (x + w, y + h);
+    let f = (w * 0.36).round().max(t);
+    p.line(x, y, x1 - f, y, t, c, 1.0);
+    p.line(x1 - f, y, x1, y + f, t, c, 1.0);
+    p.line(x1, y + f, x1, y1, t, c, 1.0);
+    p.line(x1, y1, x, y1, t, c, 1.0);
+    p.line(x, y1, x, y, t, c, 1.0);
+    if signs {
+        let cx = x + w / 2.0;
+        let k = (w * 0.2).max(t);
+        let (ya, yb) = (y + h * 0.42, y + h * 0.74);
+        p.line(cx - k, ya, cx + k, ya, t, c, 1.0);
+        p.line(cx, ya - k, cx, ya + k, t, c, 1.0);
+        p.line(cx - k, yb, cx + k, yb, t, c, 1.0);
+    }
 }
 
 /// Rama de git: tronco con dos nudos y una rama que sale hacia un tercero.

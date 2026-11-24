@@ -34,6 +34,8 @@ pub enum UserEvent {
     NoticeClicked(u64, Option<String>),
     /// Estadísticas de los agentes leídas por su hilo (ver `stats.rs`).
     Stats(crate::stats::StatsMsg),
+    /// Cambios de git leídos por su hilo (ver `git.rs`).
+    Git(crate::git::Msg),
 }
 
 /// Salida que llega justo después de que el usuario escriba es su eco (o el redibujado de la

@@ -9,6 +9,7 @@ use crate::config::{Rgb, Theme};
 use crate::ports::PortInfo;
 use crate::sessions::{self, Agent, Status};
 use crate::subagents::SubAgent;
+use crate::tabs::{Anim, Working};
 use crate::ui::{cross, dim};
 use crate::view::Painter;
 use std::time::{Duration, Instant, SystemTime};
@@ -309,7 +310,7 @@ impl PanelState {
         h: f32,
         s: f32,
         now: Instant,
-        phase: usize,
+        anim: Anim,
     ) {
         let m = Metrics::from_ui(p.ui_metrics().height);
         let lh = m.lh;
@@ -385,7 +386,7 @@ impl PanelState {
                 let Hit::Agent(i) = hit else { continue };
                 let hovered = self.hover == Some(hit);
                 self.draw_agent(
-                    p, theme, &agents[i], i, x, ry, w, rh, s, m, now, phase, hovered,
+                    p, theme, &agents[i], i, x, ry, w, rh, s, m, now, anim, hovered,
                 );
             }
         }
@@ -583,7 +584,7 @@ impl PanelState {
         s: f32,
         m: Metrics,
         now: Instant,
-        phase: usize,
+        anim: Anim,
         hovered: bool,
     ) {
         let dimc = dim(theme);
@@ -649,7 +650,7 @@ impl PanelState {
         let cy = l2 + lh / 2.0;
         let mut sx = tx + 4.0 * s;
         if a.status == Status::Working {
-            spinner(p, sx, cy, s, color, phase);
+            spinner(p, sx, cy, s, color, anim);
             sx += 18.0 * s;
         } else {
             p.circle(sx, cy, 3.5 * s, color, 1.0);
@@ -683,7 +684,7 @@ impl PanelState {
             trunk = mid;
             let ix = tx + 18.0 * s;
             if sub.running {
-                spinner(p, ix - 4.0 * s, mid, s * 0.7, theme.accent, phase);
+                spinner(p, ix - 4.0 * s, mid, s * 0.7, theme.accent, anim);
             } else {
                 let c = theme.palette[2];
                 p.line(
@@ -795,10 +796,52 @@ fn short_duration(d: Duration) -> String {
 }
 
 /// Tres puntos que se encienden por turnos.
-pub fn spinner(p: &mut Painter, x: f32, cy: f32, s: f32, c: Rgb, phase: usize) {
-    for i in 0..3 {
-        let a = if i == phase % 3 { 1.0 } else { 0.3 };
-        p.circle(x + i as f32 * 6.0 * s, cy, 2.2 * s, c, a);
+/// Animación "trabajando" (`tabs::Working`) en el sitio de los tres puntos: de `x` (centro del
+/// primero) a `x + 12·s`, centrada en `cy`.
+pub fn spinner(p: &mut Painter, x: f32, cy: f32, s: f32, c: Rgb, anim: Anim) {
+    use std::f32::consts::TAU;
+    let t = (anim.ms % 3_600_000) as f32 / 1000.0;
+    let cx = x + 6.0 * s;
+    match anim.kind {
+        Working::Dots => {
+            let phase = (anim.ms / 300) as usize;
+            for i in 0..3 {
+                let a = if i == phase % 3 { 1.0 } else { 0.3 };
+                p.circle(x + i as f32 * 6.0 * s, cy, 2.2 * s, c, a);
+            }
+        }
+        Working::Wave => {
+            for i in 0..3 {
+                let k = (t / 0.9 * TAU - i as f32 * 0.9).sin().max(0.0);
+                let y = cy + 1.2 * s - 3.6 * s * k;
+                p.circle(x + i as f32 * 6.0 * s, y, 2.0 * s, c, 0.45 + 0.55 * k);
+            }
+        }
+        Working::Pulse => {
+            let q = (t / 1.2).fract();
+            p.ring(cx, cy, (2.4 + 4.6 * q) * s, 1.2 * s, c, 0.7 * (1.0 - q));
+            p.circle(cx, cy, 2.2 * s, c, 1.0);
+        }
+        Working::Spin => {
+            let n = 8;
+            let head = (anim.ms / 90) as usize % n;
+            for k in 0..n {
+                let age = (head + n - k) % n;
+                let a = (1.0 - age as f32 / n as f32).powi(2);
+                let ang = k as f32 / n as f32 * TAU - TAU / 4.0;
+                let (px, py) = (cx + 4.8 * s * ang.cos(), cy + 4.8 * s * ang.sin());
+                p.circle(px, py, 1.25 * s, c, 0.12 + 0.88 * a);
+            }
+        }
+        Working::Bar => {
+            let (bw, bh) = (16.0 * s, (3.0 * s).round().max(2.0));
+            let (bx, by) = (cx - bw / 2.0, (cy - bh / 2.0).round());
+            p.rounded(bx, by, bw, bh, c, 0.22, bh / 2.0);
+            let seg = 6.0 * s;
+            let q = 0.5 - 0.5 * (t / 1.2 * TAU).cos();
+            p.rounded(bx + q * (bw - seg), by, seg, bh, c, 1.0, bh / 2.0);
+        }
+        Working::Still => p.circle(cx, cy, 2.6 * s, c, 1.0),
     }
 }
 

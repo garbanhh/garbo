@@ -579,6 +579,8 @@ pub fn draw_ghost<T: EventListener>(
 /// se dibuja como una etiqueta con borde, icono de carpeta y, al lado, la rama de git; en los
 /// comandos ya ejecutados, el icono en gris y tras la ruta la duración (o el código si falló).
 /// Va antes que `draw_terminal`: los fondos de la selección quedan por encima de la etiqueta.
+/// `changes`: cambios sin confirmar del repositorio, junto a la rama del prompt actual. Devuelve
+/// dónde quedó ese indicador (para el ratón).
 #[allow(clippy::too_many_arguments)]
 pub fn draw_prompts<T: EventListener>(
     p: &mut Painter,
@@ -587,10 +589,12 @@ pub fn draw_prompts<T: EventListener>(
     v: &TermView,
     bs: &BlockState,
     branch: Option<&str>,
+    changes: Option<crate::git::Summary>,
     scale: f32,
-) {
+) -> Option<[f32; 4]> {
+    let mut chip = None;
     if !bs.active {
-        return;
+        return None;
     }
     let m = p.metrics();
     let (cw, ch) = (m.width, m.height);
@@ -625,7 +629,7 @@ pub fn draw_prompts<T: EventListener>(
         let (iw, ih) = ((cw * 1.05).round(), (ch * 0.40).round());
         let (ix, iy) = ((v.x + 0.5 * cw).round(), (y + (ch - ih) / 2.0).round());
         if Some(a.id) == current {
-            prompt_label(p, theme, cw, ch, cols, v, y, end, branch, s);
+            chip = prompt_label(p, theme, cw, ch, cols, v, y, end, branch, changes, s);
         } else {
             if style.prompt == Prompt::Brackets {
                 p.text(v.x + cw, y, "[", dim, cw + 1.0);
@@ -675,10 +679,12 @@ pub fn draw_prompts<T: EventListener>(
             }
         }
     }
+    chip
 }
 
-/// Etiqueta del prompt actual (la carpeta y la rama de git) según `Style::prompt`. La ruta es
-/// texto real de la rejilla: aquí solo se dibuja lo de alrededor; su color lo pone `draw_terminal`.
+/// Etiqueta del prompt actual (la carpeta, la rama de git y sus cambios sin confirmar) según
+/// `Style::prompt`. La ruta es texto real de la rejilla: aquí solo se dibuja lo de alrededor; su
+/// color lo pone `draw_terminal`. Devuelve dónde quedó el indicador de cambios.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn prompt_label(
     p: &mut Painter,
@@ -690,8 +696,9 @@ pub(crate) fn prompt_label(
     y: f32,
     end: usize,
     branch: Option<&str>,
+    changes: Option<crate::git::Summary>,
     s: f32,
-) {
+) -> Option<[f32; 4]> {
     let style = theme.style;
     let t = (1.3 * s).max(1.0);
     let pad = (2.0 * s).round();
@@ -761,21 +768,28 @@ pub(crate) fn prompt_label(
     }
 
     // Rama de git, si cabe.
-    let Some(b) = branch else { return };
+    let b = branch?;
     let n = b.chars().count();
     if end + 7 + n >= cols {
-        return;
+        return None;
     }
     let mag = theme.palette[5];
     let name_c = fg.lerp(theme.background, 0.2);
     let (bw, bh) = ((cw * 0.85).round(), (ch * 0.42).round());
     let by = (y + (ch - bh) / 2.0).round();
-    match style.prompt {
+    let lead = if style.prompt == Prompt::Tab {
+        0.3 * cw
+    } else {
+        0.0
+    };
+    // Dónde acaba la etiqueta de la rama.
+    let bend = match style.prompt {
         Prompt::Brackets => {
             let x = v.x + (end + 2) as f32 * cw;
             p.text(x, y, "─[", dimc, 2.0 * cw + 1.0);
             p.text(x + 2.0 * cw, y, b, mag, n as f32 * cw + 1.0);
             p.text(x + (2 + n) as f32 * cw, y, "]", dimc, cw + 1.0);
+            x + (3 + n) as f32 * cw
         }
         Prompt::Dimmed | Prompt::Plain | Prompt::Underline => {
             let bx0 = v.x + (end + 3) as f32 * cw;
@@ -796,6 +810,7 @@ pub(crate) fn prompt_label(
                     1.0,
                 );
             }
+            bx0 + (1.5 + n as f32) * cw
         }
         _ => {
             let bx0 = x1 + 0.6 * cw;
@@ -819,15 +834,74 @@ pub(crate) fn prompt_label(
                 }
                 _ => p.rounded(bx0, cy, bx1 - bx0, chh, fg, 0.06, r),
             }
-            let lead = if style.prompt == Prompt::Tab {
-                0.3 * cw
-            } else {
-                0.0
-            };
             crate::ui::branch(p, (bx0 + 0.5 * cw + lead).round(), by, bw, bh, t, mag);
             p.text(bx0 + 1.8 * cw + lead, y, b, name_c, n as f32 * cw + 1.0);
+            bx1
         }
+    };
+
+    // Cambios sin confirmar, tras la rama y con su misma forma: "▤ 3 +45 -12". Si no cabe, nada.
+    let c = changes?;
+    let count = c.files.to_string();
+    let plus = (c.added > 0).then(|| format!("+{}", c.added));
+    let minus = (c.removed > 0).then(|| format!("-{}", c.removed));
+    let k = count.len()
+        + plus.as_ref().map_or(0, |t| t.len() + 1)
+        + minus.as_ref().map_or(0, |t| t.len() + 1);
+    let yellow = theme.palette[3];
+    // Icono, fin del texto y rectángulo del indicador (para el ratón).
+    let ix = match style.prompt {
+        Prompt::Brackets => bend + 2.0 * cw,
+        Prompt::Dimmed | Prompt::Plain | Prompt::Underline => bend + 1.2 * cw,
+        _ => bend + 0.6 * cw + 0.5 * cw + lead,
+    };
+    let text_end = ix + (1.3 + k as f32) * cw;
+    let rect = match style.prompt {
+        Prompt::Brackets => [bend, y, text_end + cw - bend, ch],
+        Prompt::Dimmed | Prompt::Plain | Prompt::Underline => {
+            [ix - 0.3 * cw, y, text_end - ix + 0.6 * cw, ch]
+        }
+        _ => {
+            let sx0 = bend + 0.6 * cw;
+            [sx0, cy, text_end + 0.8 * cw - sx0, chh]
+        }
+    };
+    if rect[0] + rect[2] > v.x + (cols as f32 - 0.5) * cw {
+        return None;
     }
+    let [rx, ry, rw, rh] = rect;
+    match style.prompt {
+        Prompt::Brackets => {
+            p.text(bend, y, "─[", dimc, 2.0 * cw + 1.0);
+            p.text(text_end, y, "]", dimc, cw + 1.0);
+        }
+        Prompt::Dimmed | Prompt::Plain => {}
+        Prompt::Underline => p.rect(rx, y + ch - pad - line, rw, line, yellow, 1.0),
+        Prompt::Soft => p.rounded(rx, ry, rw, rh, theme.background.lerp(yellow, 0.16), 1.0, r),
+        Prompt::Solid => p.outline(rx, ry, rw, rh, fg, 0.26, r, hair),
+        Prompt::Tab => {
+            let fill = crate::ui::surface(theme, 0.08);
+            p.rounded(rx, ry, rw, rh, fill, 1.0, r);
+            p.rect(rx, ry, r, rh, fill, 1.0);
+            p.rect(rx, ry, strip, rh, yellow, 1.0);
+        }
+        _ => p.rounded(rx, ry, rw, rh, fg, 0.06, r),
+    }
+    let (fw, fh) = ((cw * 0.6).round(), (ch * 0.46).round());
+    let fy = (y + (ch - fh) / 2.0).round();
+    crate::ui::changes_icon(p, (ix + 0.1 * cw).round(), fy, fw, fh, t, yellow, false);
+    let mut tx = ix + 1.3 * cw;
+    for (text, color) in [
+        (Some(count), name_c),
+        (plus, theme.palette[2]),
+        (minus, theme.palette[1]),
+    ] {
+        let Some(text) = text else { continue };
+        let w = text.len() as f32 * cw;
+        p.text(tx, y, &text, color, w + 1.0);
+        tx += w + cw;
+    }
+    Some(rect)
 }
 
 /// Muestra del prompt de Garbo para el editor de aspecto, con la fuente del terminal: la ruta
@@ -852,7 +926,7 @@ pub fn prompt_sample(p: &mut Painter, theme: &Theme, x: f32, y: f32, w: f32, s: 
         cursor_on: false,
         rows: Rows::default(),
     };
-    prompt_label(p, theme, cw, ch, cols, &v, y, end, Some(branch), s);
+    prompt_label(p, theme, cw, ch, cols, &v, y, end, Some(branch), None, s);
     let slash = path.rfind('/').unwrap_or(0);
     for (i, c) in path.chars().enumerate() {
         let (style, color) = match theme.style.prompt {
@@ -2126,7 +2200,7 @@ mod tests {
                     queue: &queue,
                     atlas: &atlas,
                 };
-                draw_prompts(&mut p, &term, &theme, &v, &bs, None, 1.67);
+                draw_prompts(&mut p, &term, &theme, &v, &bs, None, None, 1.67);
                 draw_terminal(&mut p, &term, &theme, &v, Some(&bs), None);
                 draw_blocks(&mut p, &term, &theme, &v, &bs, None, (0.0, 1800.0), 1.67);
                 p.finish();

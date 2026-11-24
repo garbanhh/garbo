@@ -39,6 +39,43 @@ options! {
     }
 }
 
+options! {
+    /// Animación de una pestaña (y de su fila en el panel de agentes) mientras el agente trabaja.
+    Working {
+        /// Tres puntos que se encienden por turnos (la de siempre).
+        Dots = "dots", "Puntos";
+        /// Tres puntos que saltan uno tras otro.
+        Wave = "wave", "Onda";
+        /// Un punto con un anillo que se abre.
+        Pulse = "pulse", "Pulso";
+        /// Ocho puntos en círculo con una estela que gira.
+        Spin = "spin", "Giro";
+        /// Una barrita que va y viene.
+        Bar = "bar", "Barra";
+        /// Un punto quieto: sin animación (y sin fotogramas mientras trabaja).
+        Still = "still", "Fijo";
+    }
+}
+
+impl Working {
+    /// Cada cuánto necesita un fotograma (`None`: no se mueve).
+    pub fn frame(self) -> Option<Duration> {
+        match self {
+            Working::Dots => Some(Duration::from_millis(140)),
+            Working::Still => None,
+            _ => Some(Duration::from_millis(80)),
+        }
+    }
+}
+
+/// Momento de la animación "trabajando" para dibujarla: milisegundos desde un origen fijo y el
+/// estilo elegido.
+#[derive(Clone, Copy, Debug)]
+pub struct Anim {
+    pub ms: u64,
+    pub kind: Working,
+}
+
 impl Position {
     /// A un lado: las pestañas van en una columna.
     pub fn vertical(self) -> bool {
@@ -77,6 +114,8 @@ pub struct TabsConfig {
     pub position: Position,
     pub width: Width,
     pub align: Align,
+    /// Animación mientras trabaja un agente.
+    pub working: Working,
 }
 
 impl Default for TabsConfig {
@@ -86,6 +125,7 @@ impl Default for TabsConfig {
             position: Position::Top,
             width: Width::Normal,
             align: Align::Left,
+            working: Working::Dots,
         }
     }
 }
@@ -107,6 +147,7 @@ struct RawTabs {
     position: Option<String>,
     width: Option<String>,
     align: Option<String>,
+    working: Option<String>,
 }
 
 fn lenient<T>(key: &str, v: Option<String>, parse: fn(&str) -> Option<T>, default: T) -> T {
@@ -124,6 +165,7 @@ impl From<RawTabs> for TabsConfig {
             position: lenient("position", r.position, Position::parse, d.position),
             width: lenient("width", r.width, Width::parse, d.width),
             align: lenient("align", r.align, Align::parse, d.align),
+            working: lenient("working", r.working, Working::parse, d.working),
         }
     }
 }

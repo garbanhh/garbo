@@ -14,7 +14,7 @@ use crate::settings::{theme_card, Change};
 use crate::style::{
     self, Background, BarSize, Blocks, Buttons, Prompt, Style, StyleOverrides, Tabs,
 };
-use crate::tabs::{Align, Position, Width};
+use crate::tabs::{Align, Position, Width, Working};
 use crate::ui::{cross, dim, surface};
 use crate::view::Painter;
 use alacritty_terminal::event::VoidListener;
@@ -57,6 +57,7 @@ impl Section {
                 Control::Position,
                 Control::Width,
                 Control::Align,
+                Control::Working,
             ],
             Section::Terminal => &[
                 Control::Prompt,
@@ -88,6 +89,8 @@ pub enum Control {
     Position,
     Width,
     Align,
+    /// Animación mientras trabaja un agente.
+    Working,
     Prompt,
     /// Espacio sobre la ruta (entre un bloque y el anterior).
     BlockGap,
@@ -148,7 +151,11 @@ impl Control {
             | Control::Cursor
             | Control::Buttons
             | Control::Background => Kind::Tiles,
-            Control::Position | Control::Width | Control::Align | Control::Bar => Kind::Segmented,
+            Control::Position
+            | Control::Width
+            | Control::Align
+            | Control::Working
+            | Control::Bar => Kind::Segmented,
             Control::BlockGap
             | Control::Gap
             | Control::OutputGap
@@ -159,7 +166,9 @@ impl Control {
 
     fn available(self) -> bool {
         match self {
-            Control::Position | Control::Width | Control::Align => crate::tabs::ENABLED,
+            Control::Position | Control::Width | Control::Align | Control::Working => {
+                crate::tabs::ENABLED
+            }
             _ => true,
         }
     }
@@ -172,6 +181,7 @@ impl Control {
             Control::Position => "Posición",
             Control::Width => "Ancho",
             Control::Align => "Nombre",
+            Control::Working => "Agente trabajando",
             Control::Prompt => "Prompt",
             Control::BlockGap => "Espacio sobre la ruta",
             Control::Gap => "Espacio bajo la ruta",
@@ -194,6 +204,7 @@ impl Control {
             Control::Position => Position::ALL.len(),
             Control::Width => Width::ALL.len(),
             Control::Align => Align::ALL.len(),
+            Control::Working => Working::ALL.len(),
             Control::Prompt => Prompt::ALL.len(),
             Control::BlockGap | Control::Gap | Control::OutputGap => style::GAPS.len(),
             Control::Blocks => Blocks::ALL.len(),
@@ -214,6 +225,7 @@ impl Control {
             Control::Position => Position::ALL[i].label().into(),
             Control::Width => Width::ALL[i].label().into(),
             Control::Align => Align::ALL[i].label().into(),
+            Control::Working => Working::ALL[i].label().into(),
             Control::Prompt => Prompt::ALL[i].label().into(),
             Control::BlockGap | Control::Gap | Control::OutputGap => {
                 format!("{} px", style::GAPS[i])
@@ -240,6 +252,7 @@ impl Control {
             Control::Position => pos(Position::ALL, &cfg.tabs.position),
             Control::Width => pos(Width::ALL, &cfg.tabs.width),
             Control::Align => pos(Align::ALL, &cfg.tabs.align),
+            Control::Working => pos(Working::ALL, &cfg.tabs.working),
             Control::Prompt => pos(Prompt::ALL, &style.prompt),
             Control::BlockGap => nearest(&style::GAPS, style.block_gap as f32),
             Control::Gap => nearest(&style::GAPS, style.prompt_gap as f32),
@@ -468,6 +481,11 @@ impl LookEditor {
         (self.target - self.scroll).abs() >= 0.5
     }
 
+    /// ¿Se ven las muestras animadas de "Agente trabajando"? (sección Pestañas)
+    pub fn shows_working(&self) -> bool {
+        crate::tabs::ENABLED && SECTIONS.get(self.section) == Some(&Section::Tabs)
+    }
+
     /// ¿Está `x` sobre el panel (para la rueda)?
     pub fn in_panel(&self, x: f32) -> bool {
         self.drawn.as_ref().is_some_and(|d| x >= d.x)
@@ -630,6 +648,10 @@ impl LookEditor {
             }
             Control::Align => {
                 cfg.tabs.align = Align::ALL[i];
+                return Change::Redraw;
+            }
+            Control::Working => {
+                cfg.tabs.working = Working::ALL[i];
                 return Change::Redraw;
             }
             Control::Cursor => {
@@ -1425,6 +1447,18 @@ fn option_icon(p: &mut Painter, c: Control, i: usize, r: [f32; 4], col: Rgb, s: 
                 0.9,
                 lh / 2.0,
             );
+        }
+        Control::Working => {
+            // La animación misma, en marcha (el editor pide fotogramas mientras se ve).
+            let ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_millis() as u64);
+            let k = s * 1.4;
+            let anim = crate::tabs::Anim {
+                ms,
+                kind: Working::ALL[i],
+            };
+            crate::panel::spinner(p, x + w / 2.0 - 6.0 * k, y + h / 2.0, k, col, anim);
         }
         Control::Bar => {
             // Una ventana con la barra de arriba más o menos alta.

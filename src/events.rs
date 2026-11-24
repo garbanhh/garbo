@@ -165,11 +165,17 @@ impl ApplicationHandler<UserEvent> for App {
                     st.window.request_redraw();
                 }
             }
+            // Animaciones con su propio ritmo: sin esto solo avanzaban con otro evento (el
+            // parpadeo del cursor, por ejemplo) y se veían a saltos.
+            if self.animating(Instant::now()) {
+                self.st().window.request_redraw();
+            }
         }
     }
 
     fn about_to_wait(&mut self, el: &ActiveEventLoop) {
         self.refresh_sessions();
+        self.refresh_git();
         // Devolver al sistema la memoria que ya no se usa, si toca (una sola vez por aviso).
         if let Some(st) = self.st.as_mut() {
             if st.trim_at.is_some_and(|t| Instant::now() >= t) {
@@ -200,6 +206,33 @@ impl ApplicationHandler<UserEvent> for App {
                     st.panel.ports_loaded = true;
                     if st.panel.ports_data != list {
                         st.panel.ports_data = list;
+                        st.window.request_redraw();
+                    }
+                }
+                return;
+            }
+            UserEvent::Git(msg) => {
+                if let Some(st) = self.st.as_mut() {
+                    let redraw = match msg {
+                        crate::git::Msg::Status(root, res, took) => {
+                            let mut changed = st.git.on_status(&root, res, took);
+                            if st.changes.open && st.changes.root.as_ref() == Some(&root) {
+                                let wanted = match st.git.status(&root) {
+                                    Some(Ok(status)) => st.changes.on_status(status),
+                                    _ => Vec::new(),
+                                };
+                                changed |= !wanted.is_empty();
+                                for (path, kind) in wanted {
+                                    st.git.diff(&root, &path, kind);
+                                }
+                            }
+                            changed
+                        }
+                        crate::git::Msg::Diff(root, path, res) => {
+                            st.changes.on_diff(&root, &path, res)
+                        }
+                    };
+                    if redraw {
                         st.window.request_redraw();
                     }
                 }
@@ -401,6 +434,10 @@ impl ApplicationHandler<UserEvent> for App {
             WindowEvent::Focused(f) => {
                 let st = self.st();
                 st.focused = f;
+                // Al volver a Garbo, los cambios de git se leen enseguida (quizá se editó fuera).
+                if f {
+                    st.changes.poll_at = None;
+                }
                 st.cursor_on = true;
                 st.next_blink = Instant::now() + BLINK;
                 if let Some(tab) = st.tabs.get(st.active) {
@@ -983,6 +1020,36 @@ impl App {
             }
             return;
         }
+        // Panel de cambios de git: arrastrar su borde, zonas que se pulsan.
+        if let Some((cx, _, cw, _)) = geo.changes {
+            let st = self.st();
+            if st.changes.dragging {
+                let right = cx + cw;
+                st.changes.drag_to(x, right, right - geo.area[0]);
+                st.last_ws.num_cols = 0;
+                self.relayout();
+                self.st().window.request_redraw();
+                return;
+            }
+            let hit = st.changes.hit(x, y);
+            if hit != st.changes.hover {
+                st.changes.hover = hit;
+                st.window.request_redraw();
+            }
+            if let Some(hit) = hit {
+                use crate::changes::Hit;
+                let icon = match hit {
+                    Hit::Divider => CursorIcon::ColResize,
+                    Hit::Panel => CursorIcon::Default,
+                    _ => CursorIcon::Pointer,
+                };
+                if st.cursor_icon != icon {
+                    st.cursor_icon = icon;
+                    st.window.set_cursor(icon);
+                }
+                return;
+            }
+        }
         if geo.panel.is_some() {
             let now = Instant::now();
             let hit = self.panel_hit(x, y, now);
@@ -1034,13 +1101,15 @@ impl App {
         let divider = (!in_bar)
             .then(|| divider_at(&geo, x, y, self.st().scale))
             .flatten();
-        let on_link = !in_bar && !in_gutter && divider.is_none() && self.update_link(x, y);
+        let on_chip = !in_bar && self.chip_at(x, y).is_some();
+        let on_link =
+            !in_bar && !in_gutter && divider.is_none() && !on_chip && self.update_link(x, y);
         let icon = match self.resize_edge(x, y) {
             Some(dir) => resize_cursor(dir),
             None if in_bar => CursorIcon::Default,
             None if divider.is_some_and(|d| d.side) => CursorIcon::ColResize,
             None if divider.is_some() => CursorIcon::RowResize,
-            None if in_gutter || on_link => CursorIcon::Pointer,
+            None if in_gutter || on_link || on_chip => CursorIcon::Pointer,
             None => CursorIcon::Text,
         };
         let st = self.st();
@@ -1276,6 +1345,20 @@ impl App {
             }
         }
 
+        // Panel de cambios de git
+        if self.st().changes.dragging && !pressed && button == MouseButton::Left {
+            self.st().changes.dragging = false;
+            return false;
+        }
+        if geo.changes.is_some() {
+            if let Some(hit) = self.st().changes.hit(x, y) {
+                if pressed && button == MouseButton::Left {
+                    self.on_changes_click(hit);
+                }
+                return false;
+            }
+        }
+
         // Panel lateral
         if let Some((px, py, pw, ph)) = geo.panel {
             // Dentro del panel (una columna de pestañas a la derecha queda fuera).
@@ -1324,6 +1407,10 @@ impl App {
                         self.close_stats();
                         self.toggle_panel(true)
                     }
+                    (Some(TabHit::Changes), MouseButton::Left) => {
+                        self.close_stats();
+                        self.toggle_changes()
+                    }
                     (Some(TabHit::Ports), MouseButton::Left) => {
                         self.close_stats();
                         self.toggle_panel(false)
@@ -1347,6 +1434,20 @@ impl App {
                 }
             }
             return false;
+        }
+
+        // Indicador de cambios junto a la rama del prompt: abre el panel de cambios (de ese terminal).
+        if pressed && button == MouseButton::Left && self.st().mods.is_empty() {
+            if let Some(id) = self.chip_at(x, y) {
+                let st = self.st();
+                if let Some(i) = st.tabs.iter().position(|t| t.id == id) {
+                    if i != st.active {
+                        self.select_tab(i);
+                    }
+                }
+                self.open_changes();
+                return false;
+            }
         }
 
         // Paneles: arrastrar una línea divisoria los redimensiona; un clic en otro panel le da el foco.
@@ -1639,6 +1740,21 @@ impl App {
             }
             return;
         }
+        // Sobre el panel de cambios, lo desplaza.
+        if st.changes.open
+            && st.stats.is_none()
+            && st.settings.is_none()
+            && st.palette.is_none()
+            && st.changes.contains(st.mouse.0, st.mouse.1)
+        {
+            let px = match delta {
+                MouseScrollDelta::LineDelta(_, y) => y * 48.0 * st.scale,
+                MouseScrollDelta::PixelDelta(p) => p.y as f32,
+            };
+            st.changes.wheel(px);
+            st.window.request_redraw();
+            return;
+        }
         if let Some(pal) = st.palette.as_mut() {
             // Un elemento por "muesca" de la rueda (o por cada ~36 px de touchpad), no por evento.
             let steps = match delta {
@@ -1746,6 +1862,7 @@ impl App {
                 | Action::MoveTabRight
                 | Action::ToggleAgents
                 | Action::TogglePorts
+                | Action::ToggleChanges
                 | Action::Search
                 | Action::SplitRight
                 | Action::SplitDown),

@@ -37,6 +37,8 @@ pub enum Action {
     RenameTab,
     ToggleAgents,
     TogglePorts,
+    /// Panel de los cambios de git (solo donde `git::ENABLED`).
+    ToggleChanges,
     AgentStats,
     Search,
     SplitRight,
@@ -191,6 +193,16 @@ impl Action {
                 "toggle_ports",
                 "Panel de puertos",
                 "ctrl+shift+e",
+            ),
+            (
+                ToggleChanges,
+                "toggle_changes",
+                "Cambios de git",
+                if crate::git::ENABLED {
+                    "ctrl+shift+g"
+                } else {
+                    ""
+                },
             ),
             (
                 AgentStats,
