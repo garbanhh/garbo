@@ -3,14 +3,10 @@
 //! esquinas. Cada tema trae la
 //! suya (`Theme::style`) y la sección `[style]` de config.toml la retoca opción a opción.
 //!
-//! De momento solo en Linux (`ENABLED`): en Windows se dibuja siempre la forma de siempre
-//! (`Style::default()`) y el editor de aspecto no aparece. El código es común a los dos sistemas,
-//! así que en Windows compila igual; activarlo allí es cambiar `ENABLED` y probarlo.
+//! Igual en Linux y en Windows. Lo único que cambia es la forma de siempre (`Style::default()`):
+//! en Windows, los botones de ventana son los del sistema ("Planos").
 
 use serde::Deserialize;
-
-/// Forma configurable y editor de aspecto disponibles en este sistema.
-pub const ENABLED: bool = cfg!(target_os = "linux");
 
 /// Enumeración de opciones con su clave en config.toml y su nombre en la interfaz.
 macro_rules! options {
@@ -111,7 +107,7 @@ options! {
         Round = "round", "Redondos";
         /// Círculos con los colores del tema.
         Color = "color", "De colores";
-        /// Rectángulos a toda altura pegados al borde.
+        /// Rectángulos a toda altura pegados al borde (los de siempre en Windows).
         Flat = "flat", "Planos";
         Icons = "icons", "Solo iconos";
     }
@@ -181,13 +177,18 @@ impl Gaps {
 }
 
 impl Default for Style {
-    /// La forma de siempre (la de Garbo hasta la 0.12).
+    /// La forma de siempre (la de Garbo hasta la 0.12). Los botones de ventana, los del sistema:
+    /// redondos como los de GNOME en Linux y rectángulos a toda altura en Windows.
     fn default() -> Self {
         Self {
             tabs: Tabs::Flat,
             prompt: Prompt::Border,
             blocks: Blocks::Classic,
-            buttons: Buttons::Round,
+            buttons: if cfg!(windows) {
+                Buttons::Flat
+            } else {
+                Buttons::Round
+            },
             bar: BarSize::Normal,
             background: Background::Solid,
             radius: 6,

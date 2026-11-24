@@ -2,8 +2,8 @@
 # Todo es opcional. Recarga en caliente con Ctrl+Shift+R.
 
 # Temas incluidos: garbo-black, garbo-dark, garbo-light, tokyo-night, catppuccin-mocha, gruvbox-dark, nord
-# En Linux, además: grafito, abisal, fosforo, bosque, niebla, ciruela, papel, neon, duna, glaciar,
-# tinta y cobalto, cada uno con su propia forma (pestañas, prompt, bloques…).
+# Y además: grafito, abisal, fosforo, bosque, niebla, ciruela, papel, neon, duna, glaciar, tinta y
+# cobalto, cada uno con su propia forma (pestañas, prompt, bloques…).
 theme = "garbo-black"
 
 [font]
@@ -31,7 +31,7 @@ always_show_tabs = true
 
 [terminal]
 scrollback = 10000
-cursor_style = "block"   # block | beam | underline | hollow (hollow, de momento solo en Linux)
+cursor_style = "block"   # block | beam | underline | hollow
 cursor_blink = false     # sin parpadeo = cero despertares cuando está inactiva
 scroll_multiplier = 3.0
 copy_on_select = false
@@ -49,21 +49,20 @@ min_work_secs = 5        # solo si trabajó al menos estos segundos
 sound = true
 blocked = true           # avisar también cuando un agente espera tu permiso o tu respuesta
 
-# Pestañas (solo en Linux de momento). También en Ajustes → Pestañas.
+# Pestañas. También en Ajustes → Pestañas.
 [tabs]
 # position = "top"       # top | bottom | left | right: borde de la ventana en el que van
 # width    = "normal"    # narrow | normal | wide | max: lo más que mide cada pestaña (o la columna, a un lado)
 # align    = "left"      # left | center: dónde va el nombre dentro de la pestaña
 # working  = "dots"      # dots | wave | pulse | spin | bar | still: animación mientras trabaja un agente
 
-# Forma de la interfaz (solo en Linux de momento). Cada tema trae la suya; aquí se cambia opción a
-# opción. Lo más cómodo es el editor de aspecto: Ajustes → Tema → Aspecto, o "Editar el aspecto"
+# Forma de la interfaz. Cada tema trae la suya; aquí se cambia opción a opción. Lo más cómodo es el editor de aspecto: Ajustes → Tema → Aspecto, o "Editar el aspecto"
 # en la paleta de comandos (Ctrl+Shift+P).
 [style]
 # tabs       = "flat"      # flat | underline | topline | pill | outline | floating | folder | brackets | segmented | dot
 # prompt     = "border"    # border | soft | solid | tab | underline | brackets | dimmed | plain
 # blocks     = "classic"   # classic | bar | dot | card | outline | header | separator | dashed | status | errors | fade | none
-# buttons    = "round"     # round | color | flat | icons
+# buttons    = "round"     # round | color | flat | icons (en Windows, flat por defecto)
 # bar        = "normal"    # compact | normal | tall
 # background = "solid"     # solid | gradient
 # radius     = 6           # radio de las esquinas en píxeles

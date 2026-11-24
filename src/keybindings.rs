@@ -31,13 +31,13 @@ pub enum Action {
     CopyBlockCommand,
     CopyBlock,
     Settings,
-    /// Editor de aspecto (solo donde `style::ENABLED`).
+    /// Editor de aspecto.
     Appearance,
-    /// Cambiar el nombre de la pestaña (solo donde `tabs::ENABLED`).
+    /// Cambiar el nombre de la pestaña.
     RenameTab,
     ToggleAgents,
     TogglePorts,
-    /// Panel de los cambios de git (solo donde `git::ENABLED`).
+    /// Panel de los cambios de git.
     ToggleChanges,
     AgentStats,
     Search,
@@ -198,11 +198,7 @@ impl Action {
                 ToggleChanges,
                 "toggle_changes",
                 "Cambios de git",
-                if crate::git::ENABLED {
-                    "ctrl+shift+g"
-                } else {
-                    ""
-                },
+                "ctrl+shift+g",
             ),
             (
                 AgentStats,

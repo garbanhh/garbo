@@ -47,8 +47,7 @@ impl Section {
         }
     }
 
-    /// Controles de la sección, en orden (los de colocar las pestañas, solo donde
-    /// `tabs::ENABLED`).
+    /// Controles de la sección, en orden.
     pub fn controls(self) -> Vec<Control> {
         let all: &[Control] = match self {
             Section::Themes => &[Control::Theme, Control::Keep],
@@ -75,7 +74,7 @@ impl Section {
                 Control::Opacity,
             ],
         };
-        all.iter().copied().filter(|c| c.available()).collect()
+        all.to_vec()
     }
 }
 
@@ -161,15 +160,6 @@ impl Control {
             | Control::OutputGap
             | Control::Radius
             | Control::Opacity => Kind::Slider,
-        }
-    }
-
-    fn available(self) -> bool {
-        match self {
-            Control::Position | Control::Width | Control::Align | Control::Working => {
-                crate::tabs::ENABLED
-            }
-            _ => true,
         }
     }
 
@@ -483,7 +473,7 @@ impl LookEditor {
 
     /// ¿Se ven las muestras animadas de "Agente trabajando"? (sección Pestañas)
     pub fn shows_working(&self) -> bool {
-        crate::tabs::ENABLED && SECTIONS.get(self.section) == Some(&Section::Tabs)
+        SECTIONS.get(self.section) == Some(&Section::Tabs)
     }
 
     /// ¿Está `x` sobre el panel (para la rueda)?
@@ -1811,7 +1801,24 @@ impl Sample {
         let mut state = BlockState::default();
         state.no_history = true;
         let blocks = std::sync::Mutex::new(state);
-        let prompt = "\x1b]133;A;garbo\x07  ~/Proyectos/garbo\r\n\x1b]133;B\x07";
+        // Como la escribe la integración de cada shell: en Windows, la de PowerShell.
+        let prompt = if cfg!(windows) {
+            "\x1b]133;A;garbo\x07  ~\\Proyectos\\garbo\r\n\x1b]133;B\x07"
+        } else {
+            "\x1b]133;A;garbo\x07  ~/Proyectos/garbo\r\n\x1b]133;B\x07"
+        };
+        // `ls` de PowerShell es una tabla larga y sin colores: allí, las ramas.
+        let listing = if cfg!(windows) {
+            ("git branch", "* \x1b[32mmain\x1b[m\r\n  windows\r\n", 0, 40)
+        } else {
+            (
+                "ls",
+                "\x1b[1;34massets\x1b[m  Cargo.lock  Cargo.toml  \x1b[1;34mdocs\x1b[m  \
+                 README.md  \x1b[1;34mscripts\x1b[m  \x1b[1;34msrc\x1b[m\r\n",
+                0,
+                2,
+            )
+        };
         let steps: [(&str, &str, i32, u64); 3] = [
             (
                 "git status",
@@ -1823,13 +1830,7 @@ impl Sample {
                 0,
                 4,
             ),
-            (
-                "ls",
-                "\x1b[1;34massets\x1b[m  Cargo.lock  Cargo.toml  \x1b[1;34mdocs\x1b[m  \
-                 README.md  \x1b[1;34mscripts\x1b[m  \x1b[1;34msrc\x1b[m\r\n",
-                0,
-                2,
-            ),
+            listing,
             (
                 "cargo test config",
                 "   \x1b[1;32mCompiling\x1b[m garbo v0.12.0\r\n\
@@ -1955,7 +1956,7 @@ mod tests {
             let st = cfg.theme().style;
             assert!(c.current(&cfg, &st) < c.len() || *c == Control::Keep);
         }
-        assert_eq!(all.contains(&Control::Position), crate::tabs::ENABLED);
+        assert!(all.contains(&Control::Position));
     }
 
     #[test]

@@ -31,9 +31,6 @@ impl Palette {
         let mut entries: Vec<Entry> = Action::all()
             .into_iter()
             .filter(|(a, ..)| !matches!(a, Action::GotoTab(_) | Action::CommandPalette))
-            .filter(|(a, ..)| *a != Action::Appearance || crate::style::ENABLED)
-            .filter(|(a, ..)| *a != Action::RenameTab || crate::tabs::ENABLED)
-            .filter(|(a, ..)| *a != Action::ToggleChanges || crate::git::ENABLED)
             .map(|(a, name, desc, _)| Entry {
                 label: desc.to_string(),
                 hint: kb.labels.get(name).cloned().unwrap_or_default(),

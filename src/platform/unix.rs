@@ -89,6 +89,18 @@ pub fn children(pid: i32) -> Vec<i32> {
 /// Devolver al sistema la memoria que no se usa: en Linux no hace falta (ver `windows.rs`).
 pub fn trim_memory() {}
 
+/// Momento en que empezó el proceso (campo 22 de `/proc/<pid>/stat`, en tics desde el arranque),
+/// para reconocerlo: es lo que Claude Code guarda como `procStart` en `sessions/<pid>.json`.
+pub fn process_start(pid: i32) -> Option<String> {
+    let stat = fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    // El nombre del proceso va entre paréntesis y puede llevar espacios: se cuenta desde el final.
+    let rest = &stat[stat.rfind(')')? + 2..];
+    rest.split_whitespace().nth(19).map(str::to_string)
+}
+
+/// Una orden de fondo (git) sin ventana de consola: en Linux no hace falta (ver `windows.rs`).
+pub fn no_console(_cmd: &mut std::process::Command) {}
+
 /// Diferencia (segundos) entre la hora local y la UTC en el instante `at` (segundos desde 1970),
 /// con el horario de verano que tocara entonces.
 pub fn utc_offset(at: i64) -> i32 {

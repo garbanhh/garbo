@@ -190,9 +190,10 @@ pub fn buttons_sample(
     }
 }
 
-/// Botones de ventana rectangulares a toda altura: los de Windows o el estilo "Planos".
+/// Botones de ventana rectangulares a toda altura, como los de Windows: el estilo "Planos" (el de
+/// siempre en Windows, ver `Style::default`).
 fn flat_controls(style: &Style) -> bool {
-    NATIVE_CONTROLS || style.buttons == Buttons::Flat
+    style.buttons == Buttons::Flat
 }
 
 /// Lo que la barra necesita saber de cada pestaña.
@@ -234,7 +235,7 @@ pub struct TabBar {
     pub tab_y: f32,
     pub tab_h: f32,
     pub stats_btn: (f32, f32),
-    /// Cambios de git (ancho 0 donde no está, ver `git::ENABLED`).
+    /// Cambios de git.
     pub changes_btn: (f32, f32),
     pub agents_btn: (f32, f32),
     pub ports_btn: (f32, f32),
@@ -286,13 +287,13 @@ pub struct Toggles {
     pub maximized: bool,
 }
 
-/// Botones de ventana como los del sistema: en Windows, rectángulos de 46 px a toda la altura y
-/// pegados al borde; en Linux, los redondos de GNOME.
-const NATIVE_CONTROLS: bool = cfg!(windows);
+/// Alto de la barra de pestañas en píxeles lógicos (con la barra "Normal"). En Windows, más baja:
+/// la escala suele ser 1 y la barra de Linux se ve pesada.
+pub const BAR_HEIGHT: f32 = if cfg!(windows) { 34.0 } else { 40.0 };
 
-/// Alto de la barra de pestañas en píxeles lógicos. En Windows, más baja: la escala suele ser 1 y
-/// la barra de Linux se ve pesada.
-pub const BAR_HEIGHT: f32 = if NATIVE_CONTROLS { 34.0 } else { 40.0 };
+/// Lo que la barra mide de más sobre el alto de una pestaña (lógicos): en Windows, 26 px de
+/// pestaña en la barra de 34.
+const TAB_MARGIN: f32 = if cfg!(windows) { 8.0 } else { 12.0 };
 
 impl TabBar {
     /// Reparto de la barra de arriba y de la zona de las pestañas para una ventana de
@@ -315,12 +316,7 @@ impl TabBar {
         let s = scale;
         let logical_h = BAR_HEIGHT + style.bar_delta();
         let height = (logical_h * s).round();
-        let tab_h = ((if NATIVE_CONTROLS {
-            26.0
-        } else {
-            logical_h - 12.0
-        }) * s)
-            .round();
+        let tab_h = ((logical_h - TAB_MARGIN) * s).round();
         let tab_y = ((height - tab_h) / 2.0).round();
         let margin = (8.0 * s).round();
         let gap = (4.0 * s).round();
@@ -351,17 +347,8 @@ impl TabBar {
         let settings = (right - btn, btn);
         let ports_btn = (settings.0 - gap - btn, btn);
         let agents_btn = (ports_btn.0 - gap - btn, btn);
-        let changes_btn = if crate::git::ENABLED {
-            (agents_btn.0 - gap - btn, btn)
-        } else {
-            (agents_btn.0, 0.0)
-        };
-        let before_stats = if crate::git::ENABLED {
-            changes_btn.0
-        } else {
-            agents_btn.0
-        };
-        let stats_btn = (before_stats - gap - btn, btn);
+        let changes_btn = (agents_btn.0 - gap - btn, btn);
+        let stats_btn = (changes_btn.0 - gap - btn, btn);
         let update = has_update.then(|| {
             let w = (200.0 * s).round();
             (stats_btn.0 - 2.0 * gap - w, w)
@@ -842,21 +829,19 @@ impl TabBar {
         }
 
         // Cambios de git: una hoja con + y −.
-        if crate::git::ENABLED {
-            let c = button(p, self.changes_btn, TabHit::Changes, toggles.changes);
-            let gx = (self.changes_btn.0 + self.changes_btn.1 / 2.0).round();
-            let (iw, ih) = ((12.0 * s).round(), (15.0 * s).round());
-            changes_icon(
-                p,
-                gx - (iw / 2.0).round(),
-                (cy - ih / 2.0).round(),
-                iw,
-                ih,
-                (1.4 * s).max(1.0),
-                c,
-                true,
-            );
-        }
+        let c = button(p, self.changes_btn, TabHit::Changes, toggles.changes);
+        let gx = (self.changes_btn.0 + self.changes_btn.1 / 2.0).round();
+        let (iw, ih) = ((12.0 * s).round(), (15.0 * s).round());
+        changes_icon(
+            p,
+            gx - (iw / 2.0).round(),
+            (cy - ih / 2.0).round(),
+            iw,
+            ih,
+            (1.4 * s).max(1.0),
+            c,
+            true,
+        );
 
         let c = button(p, self.agents_btn, TabHit::Agents, toggles.agents);
         let bx = (self.agents_btn.0 + self.agents_btn.1 / 2.0).round();

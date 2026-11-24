@@ -22,9 +22,6 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant};
 use winit::event_loop::EventLoopProxy;
 
-/// De momento solo en Linux (como la forma y las pestañas); en Windows lo activará el propietario.
-pub const ENABLED: bool = cfg!(target_os = "linux");
-
 /// Archivos que se listan como mucho.
 const MAX_FILES: usize = 2000;
 /// Lo más que se lee de un diff y las líneas que se muestran.
@@ -303,6 +300,14 @@ impl Git {
     }
 }
 
+/// Ruta completa de un archivo del repositorio (`rel` con `/`, como lo da git), con el separador
+/// del sistema: en Windows, `C:\repo\src\ui.rs` y no `C:\repo\src/ui.rs` (para el editor).
+pub fn file_path(root: &Path, rel: &str) -> PathBuf {
+    rel.split('/')
+        .filter(|c| !c.is_empty())
+        .fold(root.to_path_buf(), |p, c| p.join(c))
+}
+
 /// Raíz del repositorio (o *worktree*) que contiene `dir`: la carpeta con `.git`.
 pub fn repo_root(dir: &Path) -> Option<PathBuf> {
     dir.ancestors()
@@ -344,8 +349,18 @@ fn worker(rx: mpsc::Receiver<Request>, proxy: EventLoopProxy<UserEvent>) {
     }
 }
 
+/// Carpeta de *hooks* que no existe. En Windows, `/dev/null` sería `C:\dev\null` (git solo
+/// traduce `/dev/null` al abrir archivos, no en las rutas de los hooks); `NUL` no puede ser una
+/// carpeta.
+const NO_HOOKS: &str = if cfg!(windows) {
+    "core.hooksPath=NUL"
+} else {
+    "core.hooksPath=/dev/null"
+};
+
 fn git(root: &Path) -> Command {
     let mut c = Command::new("git");
+    crate::platform::no_console(&mut c);
     c.arg("-C")
         .arg(root)
         .args([
@@ -358,7 +373,7 @@ fn git(root: &Path) -> Command {
             "-c",
             "color.ui=false",
             "-c",
-            "core.hooksPath=/dev/null",
+            NO_HOOKS,
         ])
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("LC_ALL", "C")
@@ -970,6 +985,21 @@ u UU N... 100644 100644 100644 100644 a b c conflicto.rs\0\
     }
 
     #[test]
+    fn ruta_con_el_separador_del_sistema() {
+        let root = Path::new("repo");
+        assert_eq!(
+            file_path(root, "src/ui.rs"),
+            Path::new("repo").join("src").join("ui.rs")
+        );
+        if cfg!(windows) {
+            assert_eq!(
+                file_path(Path::new(r"C:\repo"), "src/ui.rs").to_string_lossy(),
+                r"C:\repo\src\ui.rs"
+            );
+        }
+    }
+
+    #[test]
     fn limpiar_lineas() {
         assert_eq!(clean("a\tb"), "a   b");
         assert_eq!(clean("\x1b[31mrojo"), "[31mrojo");
@@ -1066,6 +1096,21 @@ u UU N... 100644 100644 100644 100644 a b c conflicto.rs\0\
         read_diff(&dir, "src/a.rs", Kind::Modified, &cfg).unwrap();
         assert!(!mark.exists(), "se ejecutó el filtro del repositorio");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Banco de medida: lo que tarda leer el estado de este repositorio (configuración, `status` y
+    /// `numstat`), la primera vez y las siguientes.
+    #[test]
+    #[ignore = "banco de medida"]
+    fn bench_status() {
+        let root = repo_root(Path::new(env!("CARGO_MANIFEST_DIR"))).unwrap();
+        let mut cache = HashMap::new();
+        for i in 0..6 {
+            let t = Instant::now();
+            let cfg = repo_cfg(&root, &mut cache);
+            let s = read_status(&root, &cfg).unwrap();
+            println!("{i}: {:?} ({} archivos)", t.elapsed(), s.files.len());
+        }
     }
 
     #[test]

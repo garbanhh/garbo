@@ -1,15 +1,9 @@
 //! Pestañas: en qué borde de la ventana van, su ancho, dónde va el nombre, el nombre que se
 //! desplaza cuando no cabe, cambiarles el nombre y el nombre de las pestañas con un agente.
-//!
-//! De momento solo en Linux (`ENABLED`), como la forma (`style.rs`): en Windows la barra va
-//! siempre arriba, con el ancho, el nombre y los títulos de siempre, y no se pueden renombrar.
 
 use crate::style::options;
 use serde::Deserialize;
 use std::time::{Duration, Instant};
-
-/// Opciones de pestañas disponibles en este sistema.
-pub const ENABLED: bool = cfg!(target_os = "linux");
 
 options! {
     /// Borde de la ventana en el que van las pestañas.
@@ -126,17 +120,6 @@ impl Default for TabsConfig {
             width: Width::Normal,
             align: Align::Left,
             working: Working::Dots,
-        }
-    }
-}
-
-impl TabsConfig {
-    /// Lo que se usa en este sistema (donde no está `ENABLED`, lo de siempre).
-    pub fn effective(&self) -> Self {
-        if ENABLED {
-            *self
-        } else {
-            Self::default()
         }
     }
 }

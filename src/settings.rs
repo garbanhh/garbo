@@ -10,10 +10,10 @@ use crate::view::Painter;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Field {
-    /// Abre el editor de aspecto (solo donde `style::ENABLED`).
+    /// Abre el editor de aspecto.
     Appearance,
     Theme,
-    /// Pestañas (solo donde `tabs::ENABLED`): borde, ancho, nombre y cambiar el nombre.
+    /// Pestañas: borde, ancho, nombre, animación de "trabajando" y cambiar el nombre.
     TabsPosition,
     TabsWidth,
     TabsAlign,
@@ -150,24 +150,10 @@ const CATEGORIES: &[(&str, &[(Field, &str)])] = &[
     ),
 ];
 
-/// ¿Se ofrece la opción en este sistema?
-fn visible(f: Field) -> bool {
-    match f {
-        Field::Appearance => crate::style::ENABLED,
-        Field::TabsPosition
-        | Field::TabsWidth
-        | Field::TabsAlign
-        | Field::TabsWorking
-        | Field::RenameTab => crate::tabs::ENABLED,
-        _ => true,
-    }
-}
-
 fn fields() -> Vec<Field> {
     CATEGORIES
         .iter()
         .flat_map(|(_, rows)| rows.iter().map(|r| r.0))
-        .filter(|f| visible(*f))
         .collect()
 }
 
@@ -177,13 +163,8 @@ fn cycle_opt<T: Copy + PartialEq>(all: &[T], cur: T, d: i32) -> T {
     all[(pos + d).rem_euclid(all.len() as i32) as usize]
 }
 
-/// Categoría con alguna opción en este sistema (en Windows, Pestañas no tiene ninguna).
-fn cat_visible(cat: usize) -> bool {
-    cat_len(cat) > 0
-}
-
 fn cat_len(cat: usize) -> usize {
-    CATEGORIES[cat].1.iter().filter(|r| visible(r.0)).count()
+    CATEGORIES[cat].1.len()
 }
 
 fn label_of(f: Field) -> &'static str {
@@ -348,20 +329,10 @@ impl Settings {
     pub fn nav(&mut self, n: Nav, cfg: &mut Config) -> Change {
         let n_cats = CATEGORIES.len();
         let on_theme = self.field(self.selected) == Field::Theme;
-        // La siguiente (o anterior) con opciones, dando la vuelta.
-        let step = |from: usize, d: usize| {
-            let mut c = from;
-            for _ in 0..n_cats {
-                c = (c + d) % n_cats;
-                if cat_visible(c) {
-                    break;
-                }
-            }
-            c
-        };
         match n {
-            Nav::NextCategory => self.set_cat(step(self.cat, 1)),
-            Nav::PrevCategory => self.set_cat(step(self.cat, n_cats - 1)),
+            // La siguiente (o anterior), dando la vuelta.
+            Nav::NextCategory => self.set_cat((self.cat + 1) % n_cats),
+            Nav::PrevCategory => self.set_cat((self.cat + n_cats - 1) % n_cats),
             // En la cuadrícula de temas, ↑ ↓ cambian de fila de tarjetas.
             Nav::Up | Nav::Down if on_theme => {
                 let cur = Theme::names()
@@ -508,13 +479,8 @@ impl Settings {
                 Change::Redraw
             }
             Field::CursorStyle => {
-                let order = CursorStyle::offered();
-                let pos = order
-                    .iter()
-                    .position(|c| *c == cfg.terminal.cursor_style)
-                    .unwrap_or(0) as i32;
                 cfg.terminal.cursor_style =
-                    order[(pos + d).rem_euclid(order.len() as i32) as usize];
+                    cycle_opt(&CursorStyle::ALL, cfg.terminal.cursor_style, d);
                 Change::TermOptions
             }
             Field::Scrollback => {
@@ -649,9 +615,7 @@ impl Settings {
 
         let cat_h = (36.0 * s).round();
         let cats = (0..CATEGORIES.len())
-            .filter(|&c| cat_visible(c))
-            .enumerate()
-            .map(|(k, c)| (c, y + (64.0 * s).round() + k as f32 * cat_h, cat_h))
+            .map(|c| (c, y + (64.0 * s).round() + c as f32 * cat_h, cat_h))
             .collect();
 
         // Elementos de la categoría visible.
@@ -1362,9 +1326,6 @@ mod tests {
 
     #[test]
     fn opciones_de_las_pestanas() {
-        if !crate::tabs::ENABLED {
-            return;
-        }
         use crate::tabs::{Align, Position, Width};
         let mut cfg = Config::default();
         let mut set = Settings::with_fonts(vec![]);
@@ -1408,12 +1369,7 @@ mod tests {
         assert_eq!(CATEGORIES[set.cat].0, "Tema");
         // Tab recorre las categorías y elige su primera opción.
         set.nav(Nav::NextCategory, &mut cfg);
-        let next = if crate::tabs::ENABLED {
-            Field::TabsPosition
-        } else {
-            Field::FontFamily
-        };
-        assert_eq!(set.field(set.selected), next);
+        assert_eq!(set.field(set.selected), Field::TabsPosition);
         set.nav(Nav::PrevCategory, &mut cfg);
         set.nav(Nav::PrevCategory, &mut cfg);
         assert_eq!(CATEGORIES[set.cat].0, "Actualizaciones");

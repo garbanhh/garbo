@@ -226,15 +226,6 @@ impl CursorStyle {
         CursorStyle::Hollow,
     ];
 
-    /// Los que se ofrecen en Ajustes (el hueco, de momento, solo donde `style::ENABLED`).
-    pub fn offered() -> &'static [CursorStyle] {
-        if crate::style::ENABLED {
-            &Self::ALL
-        } else {
-            &Self::ALL[..3]
-        }
-    }
-
     pub fn label(self) -> &'static str {
         match self {
             CursorStyle::Block => "Bloque",
@@ -637,11 +628,7 @@ impl Config {
                 }
             }
         }
-        t.style = if crate::style::ENABLED {
-            self.style.apply(t.style)
-        } else {
-            Style::default()
-        };
+        t.style = self.style.apply(t.style);
         t
     }
 }
@@ -772,16 +759,13 @@ mod tests {
             Theme::builtin("garbo-black").unwrap().style,
             Style::default()
         );
-        // Fuera de Linux, de momento, la forma de siempre aunque el tema traiga otra.
+        // Cada tema trae su forma, en los dos sistemas.
         let cfg = Config {
             theme: "bosque".into(),
             ..Config::default()
         };
-        if crate::style::ENABLED {
-            assert_eq!(cfg.theme().style.tabs, Tabs::Folder);
-        } else {
-            assert_eq!(cfg.theme().style, Style::default());
-        }
+        assert_eq!(cfg.theme().style.tabs, Tabs::Folder);
+        assert_eq!(Theme::names(), ALL_NAMES);
     }
 
     // Los enlaces simbólicos de Windows necesitan permisos especiales.
@@ -850,8 +834,8 @@ pub struct Theme {
     pub style: Style,
 }
 
-/// Temas incorporados. Los 7 primeros existen desde siempre; los demás traen además su propia
-/// forma y, como ella, de momento solo se ofrecen donde `style::ENABLED`.
+/// Temas incorporados. Los 7 primeros existen desde siempre (con la forma de siempre); los demás
+/// traen además su propia forma.
 const ALL_NAMES: &[&str] = &[
     "garbo-black",
     "garbo-dark",
@@ -875,13 +859,9 @@ const ALL_NAMES: &[&str] = &[
 ];
 
 impl Theme {
-    /// Temas que se ofrecen en este sistema.
+    /// Temas que se ofrecen.
     pub fn names() -> &'static [&'static str] {
-        if crate::style::ENABLED {
-            ALL_NAMES
-        } else {
-            &ALL_NAMES[..7]
-        }
+        ALL_NAMES
     }
 
     /// Nombre para mostrar en la interfaz ("garbo-black" -> "Garbo Black").
@@ -1177,8 +1157,10 @@ impl Theme {
         })
     }
 
-    /// Forma propia de cada tema; los de siempre, la de siempre.
+    /// Forma propia de cada tema; los de siempre, la de siempre. Los temas sin botones de ventana
+    /// propios llevan los del sistema (`system`: redondos en Linux, rectangulares en Windows).
     fn builtin_style(name: &str) -> Style {
+        let system = Style::default().buttons;
         let s = |tabs, prompt, blocks, buttons, bar, background, radius| Style {
             tabs,
             prompt,
@@ -1198,7 +1180,7 @@ impl Theme {
                 Tabs::Underline,
                 Prompt::Border,
                 Blocks::Bar,
-                Buttons::Round,
+                system,
                 Normal,
                 Solid,
                 4,
@@ -1207,7 +1189,7 @@ impl Theme {
                 Tabs::Pill,
                 Prompt::Soft,
                 Blocks::Card,
-                Buttons::Round,
+                system,
                 Normal,
                 Gradient,
                 10,
@@ -1270,7 +1252,7 @@ impl Theme {
                 Tabs::Folder,
                 Prompt::Tab,
                 Blocks::Status,
-                Buttons::Round,
+                system,
                 Normal,
                 Gradient,
                 6,
@@ -1279,7 +1261,7 @@ impl Theme {
                 Tabs::Floating,
                 Prompt::Underline,
                 Blocks::Outline,
-                Buttons::Round,
+                system,
                 Normal,
                 Gradient,
                 10,

@@ -45,7 +45,7 @@
   Aider y otros, con un árbol de subagentes para las sesiones compatibles. Cuando un agente
   termina y no estás viendo su sesión, aparece un aviso del escritorio que permite volver a su
   pestaña. Las capturas de pantalla se pegan como imagen.
-- **Cambios de git al estilo Warp.** En Linux, junto a la rama del prompt se ve cuántos archivos
+- **Cambios de git al estilo Warp.** Junto a la rama del prompt se ve cuántos archivos
   y líneas has cambiado, y un panel a la derecha muestra cada archivo con su diff. Ideal para
   revisar lo que acaba de hacer un agente: se actualiza mientras trabaja.
 - **Estadísticas de los agentes.** Tokens, peticiones y tiempo de trabajo de Claude Code, Codex y
@@ -53,12 +53,12 @@
   equipo a partir de sus sesiones.
 - **Pestañas y paneles divididos.** Las pestañas van en la barra de título y se titulan solas con
   lo que se está haciendo; cada una se puede dividir en paneles (un agente a la izquierda y las
-  pruebas a la derecha, sin tmux). En Linux, además, se les cambia el nombre con doble clic, se
-  pueden poner abajo o a un lado y, con un agente, muestran lo que le pediste
+  pruebas a la derecha, sin tmux). Además, se les cambia el nombre con doble clic, se pueden
+  poner abajo o a un lado y, con un agente, muestran lo que le pediste
   ("Claude · Arregla el menú").
 - **A tu gusto.** Temas, fuentes, atajos y un panel de ajustes que aplica cada cambio al momento y
-  lo guarda en `config.toml`. En Linux, 19 temas con forma propia y un editor de aspecto con la
-  terminal en vivo al lado y un dibujo de cómo queda cada opción.
+  lo guarda en `config.toml`. 19 temas con forma propia y un editor de aspecto con la terminal en
+  vivo al lado y un dibujo de cómo queda cada opción.
 - **Enlaces y rutas con Ctrl+clic.** Abre URL y lleva los errores de compilación
   (`src/main.rs:42:5`) a tu editor, en esa línea.
 - **Búsqueda en el historial.** `Ctrl+Shift+F` resalta todas las coincidencias y, con un bloque
@@ -126,7 +126,7 @@ de las versiones nuevas y abre su página para descargarlas.
 | `Alt+←` `→` `↑` `↓` | Cambiar de panel (si la pestaña está dividida) |
 | `Ctrl+Shift+A` / `Ctrl+Shift+E` | Panel de agentes / de puertos |
 | `Ctrl+Shift+S` | Estadísticas de los agentes |
-| `Ctrl+Shift+G` | Cambios de git (Linux) |
+| `Ctrl+Shift+G` | Cambios de git |
 
 **Línea de órdenes**
 
@@ -165,9 +165,9 @@ Todos los atajos de Garbo se cambian en la sección `[keybindings]` de la config
   Windows también entiende `src\main.rs:42:5`, `C:\…` y `Programa.cs(12,5)`; sin `$EDITOR`, abre
   los archivos en VS Code o en el Bloc de notas, y nunca ejecuta programas ni scripts.
 - El clic central pega la selección primaria; sobre una pestaña, la cierra.
-- En Linux, doble clic en una pestaña le cambia el nombre; con el ratón encima de un nombre que no
-  cabe, se desplaza solo, y más deprisa con la rueda.
-- En Linux, un clic en los cambios junto a la rama del prompt abre el panel de cambios de git; en
+- Doble clic en una pestaña le cambia el nombre; con el ratón encima de un nombre que no cabe, se
+  desplaza solo, y más deprisa con la rueda.
+- Un clic en los cambios junto a la rama del prompt abre el panel de cambios de git; en
   el panel, un clic en una línea del diff abre el archivo en tu editor en esa línea.
 - `Shift` fuerza la selección local en programas que capturan el ratón.
 - Arrastrar un archivo a la ventana escribe su ruta.
@@ -313,7 +313,7 @@ Garbo la guarda en `~/.cache/garbo/capturas` (en Windows, `%LOCALAPPDATA%\garbo\
 su ruta, que Claude Code y otros agentes adjuntan como imagen. En Windows, los archivos copiados
 en el Explorador se pegan como rutas.
 
-### Cambios de git (Linux)
+### Cambios de git
 
 Como en Warp, Garbo te enseña lo que has cambiado en el repositorio sin salir de la terminal:
 
@@ -335,11 +335,11 @@ Se muestran juntos los cambios preparados y los no preparados, frente al último
 solo lee: no prepara ni descarta nada. Garbo usa la orden `git` del sistema sin bloquear el
 repositorio (`--no-optional-locks`) y sin ejecutar programas que diga la configuración del propio
 repositorio (`fsmonitor`, diffs externos, `textconv` ni filtros); los filtros de tu configuración,
-como los de git-lfs, sí se usan. En Windows llegará en una versión posterior.
+como los de git-lfs, sí se usan. En Windows hace falta Git para Windows en el `PATH`.
 
 ### Ajustes
 
-`Ctrl+,` o el botón de menú abren los ajustes, por categorías: Tema, Pestañas (en Linux), Texto,
+`Ctrl+,` o el botón de menú abren los ajustes, por categorías: Tema, Pestañas, Texto,
 Terminal, Completado, Bloques, Avisos, Ventana y Actualizaciones. Los cambios se aplican al momento y se guardan en
 `~/.config/garbo/config.toml` (en Windows, `%APPDATA%\garbo\config.toml`), respetando el resto del
 archivo y sus comentarios; solo se escriben los valores distintos de los de por defecto. Se manejan con el
@@ -347,7 +347,7 @@ ratón o con el teclado (`Tab` cambia de categoría, `↑` `↓` eligen, `←` `
 cierra). Si el archivo tiene errores, Ajustes muestra un aviso y conserva el archivo para que
 puedas corregirlo.
 
-### Pestañas (Linux)
+### Pestañas
 
 En *Ajustes → Pestañas* (o en el editor de aspecto) se elige:
 - **Posición**: arriba (como siempre), abajo o a un lado, en una columna con el nombre entero.
@@ -365,10 +365,10 @@ En *Ajustes → Pestañas* (o en el editor de aspecto) se elige:
 
 Las pestañas con un agente se titulan con su nombre y lo último que le pediste, resumido
 ("Claude · Quiero que se le pueda cambiar el nombre a las pestañas"). Lo leen de la conversación
-que el propio agente guarda (Claude Code y Codex): las respuestas como "sí" o "continúa" no lo
-cambian. Un nombre que no cabe se desplaza con el ratón encima, y más deprisa con la rueda.
+que el propio agente guarda (Claude Code y, en Linux, Codex): las respuestas como "sí" o
+"continúa" no lo cambian. Un nombre que no cabe se desplaza con el ratón encima, y más deprisa con la rueda.
 
-### Aspecto (Linux)
+### Aspecto
 
 *Ajustes → Tema → Aspecto*, o "Editar el aspecto" en la paleta de comandos, abre un panel a la
 derecha con la terminal en vivo al lado. El panel tiene cuatro secciones:
@@ -387,8 +387,9 @@ terminal. Con el teclado, `Tab` cambia de sección, `↑` `↓` de opción, `←
 mientras se edita: los programas abiertos no se enteran.
 
 Solo se guarda en la sección `[style]` de `config.toml` lo que difiere del tema elegido (y en
-`[tabs]`, la posición, el ancho y el nombre de las pestañas). En Windows llegará en una versión
-posterior; de momento allí se mantiene el aspecto de siempre.
+`[tabs]`, la posición, el ancho y el nombre de las pestañas). En Windows, los temas que no traen
+botones de ventana propios usan los del sistema (*Planos*), y la sesión de ejemplo es de
+PowerShell.
 
 ## Configuración
 

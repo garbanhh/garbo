@@ -353,7 +353,7 @@ impl App {
             0.0
         };
         let changes_w = |avail: f32| {
-            if st.changes.open && crate::git::ENABLED {
+            if st.changes.open {
                 st.changes.width(avail, st.scale)
             } else {
                 0.0
@@ -379,7 +379,7 @@ impl App {
                 integrated,
                 st.update.is_some(),
                 &self.theme.style,
-                self.cfg.tabs.effective(),
+                self.cfg.tabs,
                 st.stats.is_some(),
                 side,
             )
@@ -733,9 +733,6 @@ impl App {
 
     /// Empieza a cambiar el nombre de la pestaña `g` de la barra (campo de texto sobre ella).
     pub fn start_rename(&mut self, g: usize) {
-        if !crate::tabs::ENABLED {
-            return;
-        }
         let Some(current) = self.group_label(g) else {
             return;
         };
@@ -849,6 +846,8 @@ impl App {
                 let program = crate::platform::find_program(&cmd[0])
                     .map_or_else(|| cmd[0].clone().into(), std::ffi::OsString::from);
                 let mut c = std::process::Command::new(program);
+                // Son editores con ventana; en Windows, `code.cmd` abriría además una consola.
+                crate::platform::no_console(&mut c);
                 c.args(&cmd[1..])
                     .stdin(std::process::Stdio::null())
                     .stdout(std::process::Stdio::null())
@@ -983,9 +982,6 @@ impl App {
 
     /// Abre el editor de aspecto (y cierra lo que lo taparía).
     pub fn open_look(&mut self) {
-        if !crate::style::ENABLED {
-            return;
-        }
         let st = self.st();
         st.settings = None;
         st.palette = None;
@@ -1243,7 +1239,7 @@ impl App {
         // Animación del indicador "trabajando", solo mientras algún agente trabaja: ~7 fps los
         // puntos, ~12 las que se mueven suave y ninguno la fija (`tabs::Working::frame`).
         let working = st.tabs.iter().any(|t| t.session.is_working());
-        let frame = self.cfg.tabs.effective().working.frame();
+        let frame = self.cfg.tabs.working.frame();
         if working && frame.is_some_and(|f| now.duration_since(st.last_anim) >= f) {
             st.last_anim = now;
             changed = true;
@@ -1284,7 +1280,7 @@ impl App {
                 push(t);
             }
             if tab.session.is_working() {
-                let frame = self.cfg.tabs.effective().working.frame();
+                let frame = self.cfg.tabs.working.frame();
                 push(
                     now + frame.map_or(std::time::Duration::from_millis(500), |f| {
                         f + std::time::Duration::from_millis(10)
@@ -1381,9 +1377,6 @@ impl App {
 
     /// Abre o cierra el panel de los cambios de git (Ctrl+Shift+G).
     pub fn toggle_changes(&mut self) {
-        if !crate::git::ENABLED {
-            return;
-        }
         let st = self.st();
         st.changes.open = !st.changes.open;
         st.changes.hover = None;
@@ -1417,9 +1410,6 @@ impl App {
     /// la pestaña activa y lo vuelve a leer cada poco. Barato si no hay nada que hacer: un candado
     /// por terminal visible.
     pub fn refresh_git(&mut self) {
-        if !crate::git::ENABLED {
-            return;
-        }
         let Some(st) = self.st.as_mut() else { return };
         let visible: Vec<u64> = st
             .groups
@@ -1495,7 +1485,7 @@ impl App {
             Hit::Open(i) => {
                 if let Some(f) = status.and_then(|s| s.files.get(i)) {
                     let line = st.changes.diff(&f.path).and_then(|d| d.first_change());
-                    open = Some((root.join(&f.path), line));
+                    open = Some((crate::git::file_path(&root, &f.path), line));
                 }
             }
             Hit::Line(i, j) => {
@@ -1505,7 +1495,7 @@ impl App {
                         .diff(&f.path)
                         .and_then(|d| d.lines.get(j))
                         .map(|l| l.new.max(1));
-                    open = Some((root.join(&f.path), line));
+                    open = Some((crate::git::file_path(&root, &f.path), line));
                 }
             }
             Hit::Panel => {}
@@ -1842,7 +1832,7 @@ impl App {
         let now = Instant::now();
         let anim = crate::tabs::Anim {
             ms: now.duration_since(st.anim_epoch).as_millis() as u64,
-            kind: cfg.tabs.effective().working,
+            kind: cfg.tabs.working,
         };
         // Con las estadísticas abiertas no se dibujan los terminales ni el panel lateral.
         let stats_open = st.stats.is_some();

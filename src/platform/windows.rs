@@ -415,6 +415,22 @@ pub fn open_files(_pid: i32) -> Vec<PathBuf> {
     Vec::new()
 }
 
+/// Momento de creación del proceso (intervalos de 100 ns desde 1601), para reconocerlo: es lo que
+/// Claude Code guarda en Windows como `procStart` en `sessions/<pid>.json`.
+pub fn process_start(pid: i32) -> Option<String> {
+    let created =
+        Handle::open(u32::try_from(pid).ok()?, PROCESS_QUERY_LIMITED_INFORMATION)?.created()?;
+    Some(created.to_string())
+}
+
+/// Una orden de fondo (git) sin ventana de consola: Garbo no tiene consola, así que cada programa
+/// de consola que lanza abriría la suya.
+pub fn no_console(cmd: &mut std::process::Command) {
+    use std::os::windows::process::CommandExt;
+    use windows_sys::Win32::System::Threading::CREATE_NO_WINDOW;
+    cmd.creation_flags(CREATE_NO_WINDOW);
+}
+
 /// Hijos directos del proceso.
 pub fn children(pid: i32) -> Vec<i32> {
     with_table(|procs| {

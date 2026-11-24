@@ -316,7 +316,8 @@ fn session_from_registry(pid: i32) -> Option<(String, String)> {
     let path = config_dir(pid).join("sessions").join(format!("{pid}.json"));
     let text = fs::read_to_string(path).ok()?;
     let v: serde_json::Value = serde_json::from_str(&text).ok()?;
-    if let (Some(recorded), Some(actual)) = (v["procStart"].as_str(), process_start(pid)) {
+    let actual = crate::platform::process_start(pid);
+    if let (Some(recorded), Some(actual)) = (v["procStart"].as_str(), actual) {
         if recorded != actual {
             return None;
         }
@@ -324,14 +325,6 @@ fn session_from_registry(pid: i32) -> Option<(String, String)> {
     let id = v["sessionId"].as_str().filter(|id| is_uuid(id))?;
     let cwd = v["cwd"].as_str()?;
     Some((project_slug(cwd), id.to_string()))
-}
-
-/// Momento en que empezó el proceso (campo 22 de `/proc/<pid>/stat`), para reconocerlo.
-fn process_start(pid: i32) -> Option<String> {
-    let stat = fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
-    // El nombre del proceso va entre paréntesis y puede llevar espacios: se cuenta desde el final.
-    let rest = &stat[stat.rfind(')')? + 2..];
-    rest.split_whitespace().nth(19).map(str::to_string)
 }
 
 fn session_from_fds(pid: i32) -> Option<(String, String)> {
@@ -569,6 +562,31 @@ mod tests {
             user_prompt(Provider::Codex, &codex).as_deref(),
             Some("revisa el proyecto")
         );
+    }
+
+    /// Con un Claude Code de verdad (`GARBO_CLAUDE_PID=<pid>`): su sesión según
+    /// `sessions/<pid>.json` (comprobando `procStart`) y lo último que se le pidió.
+    #[test]
+    #[ignore = "necesita un Claude Code en marcha (GARBO_CLAUDE_PID)"]
+    fn tarea_de_un_claude_de_verdad() {
+        let Some(pid) = std::env::var("GARBO_CLAUDE_PID")
+            .ok()
+            .and_then(|p| p.parse::<i32>().ok())
+        else {
+            return;
+        };
+        let start = crate::platform::process_start(pid);
+        let found = session_from_registry(pid);
+        println!("procStart {start:?}; sesión {found:?}");
+        assert!(
+            found.is_some(),
+            "sessions/{pid}.json con el mismo procStart"
+        );
+        let t = std::time::Instant::now();
+        let mut r = Request::default();
+        r.refresh(Some((Provider::Claude, pid)), Instant::now());
+        println!("{:?} -> {:?} en {:?}", r.path, r.task, t.elapsed());
+        assert!(r.path.is_some());
     }
 
     #[test]

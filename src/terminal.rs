@@ -385,8 +385,7 @@ impl Tab {
             .session
             .agent
             .and_then(|a| a.subagents)
-            .zip(self.session.pid)
-            .filter(|_| crate::tabs::ENABLED);
+            .zip(self.session.pid);
         if self.request.refresh(asked, now) {
             self.task = self.compute_task();
             changed = true;
@@ -412,10 +411,9 @@ impl Tab {
     }
 
     /// Qué se está haciendo en la pestaña:
-    ///   - un agente (donde `tabs::ENABLED`): su nombre corto y lo último que se le pidió
-    ///     ("Claude · Arregla el menú"), o su título si aún no se sabe;
-    ///   - un programa que puso título (Claude Code pone el tema de la conversación): ese título;
-    ///   - un agente sin título: su nombre;
+    ///   - un agente: su nombre corto y lo último que se le pidió
+    ///     ("Claude · Arregla el menú"), o su título si aún no se sabe, o su nombre;
+    ///   - otro programa que puso título: ese título;
     ///   - otro programa: su orden ("cargo build --release");
     ///   - el shell esperando: el nombre de la carpeta.
     fn compute_task(&self) -> String {
@@ -423,7 +421,7 @@ impl Tab {
             Some(pg) if pg != self.child_pid as i32 => {
                 let title = clean_title(&self.title);
                 let agent = self.session.agent.filter(|_| self.session.pid == Some(pg));
-                if let Some(agent) = agent.filter(|_| crate::tabs::ENABLED) {
+                if let Some(agent) = agent {
                     let own_title =
                         (self.title_owner == Some(pg) && !title.is_empty()).then_some(title);
                     return match self.request.task.clone().or(own_title) {
@@ -433,10 +431,6 @@ impl Tab {
                 }
                 if self.title_owner == Some(pg) && !title.is_empty() {
                     title
-                } else if let Some(agent) =
-                    self.session.agent.filter(|_| self.session.pid == Some(pg))
-                {
-                    agent.name.to_string()
                 } else {
                     crate::sessions::command_label(pg).unwrap_or_default()
                 }

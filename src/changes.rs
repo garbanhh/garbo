@@ -421,11 +421,21 @@ impl ChangesPanel {
             if bh <= 0.0 {
                 continue;
             }
-            // Diff desplegado, sobre el fondo del terminal.
+            // Diff desplegado, sobre el fondo del terminal: solo lo que se ve de la lista. Desde
+            // `by`, con un diff largo desplazado, el fondo llegaba por encima de la ventana y
+            // tapaba los botones de la barra (la cabecera del panel solo tapa el panel).
             let by = ry + row_h;
+            let vis_top = by.max(body_y);
             let vis_end = (by + bh).min(bottom).min(y + h);
-            if vis_end > by.max(body_y) {
-                p.rect(x + hair, by, w - hair, vis_end - by, theme.background, 1.0);
+            if vis_end > vis_top {
+                p.rect(
+                    x + hair,
+                    vis_top,
+                    w - hair,
+                    vis_end - vis_top,
+                    theme.background,
+                    1.0,
+                );
             }
             let msg = |p: &mut Painter, text: &str| {
                 if shown(by + dpad, ch) {

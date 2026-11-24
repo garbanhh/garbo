@@ -910,7 +910,7 @@ pub(crate) fn prompt_label(
 pub fn prompt_sample(p: &mut Painter, theme: &Theme, x: f32, y: f32, w: f32, s: f32) {
     let m = p.metrics();
     let (cw, ch) = (m.width, m.height);
-    let (path, branch) = ("~/ui", "main");
+    let (path, branch) = (if cfg!(windows) { "~\\ui" } else { "~/ui" }, "main");
     let end = 1 + path.chars().count();
     // La rama solo si cabe de verdad (`prompt_label` pide más sitio del que usa).
     let (n, need) = (
@@ -927,7 +927,7 @@ pub fn prompt_sample(p: &mut Painter, theme: &Theme, x: f32, y: f32, w: f32, s: 
         rows: Rows::default(),
     };
     prompt_label(p, theme, cw, ch, cols, &v, y, end, Some(branch), None, s);
-    let slash = path.rfind('/').unwrap_or(0);
+    let slash = path.rfind(crate::platform::is_separator).unwrap_or(0);
     for (i, c) in path.chars().enumerate() {
         let (style, color) = match theme.style.prompt {
             Prompt::Solid => (Style::Bold, theme.background),
@@ -1360,7 +1360,7 @@ pub fn draw_terminal<T: EventListener>(
         && hl.is_none()
         && resolve(default_bg, theme, colors) == theme.background;
     let visible = Flags::INVERSE | Flags::ALL_UNDERLINES | Flags::STRIKEOUT;
-    // Ruta atenuada: (línea, columna de la última '/') del prompt que se está dibujando.
+    // Ruta atenuada: (línea, columna del último separador) del prompt que se está dibujando.
     let mut last_slash: Option<(i32, Option<usize>)> = None;
 
     for indexed in content.display_iter {
@@ -1455,8 +1455,9 @@ pub fn draw_terminal<T: EventListener>(
                             let line = point.line.0;
                             if last_slash.is_none_or(|(l, _)| l != line) {
                                 let row = &term.grid()[point.line];
+                                // En Windows, `\` (la ruta de PowerShell).
                                 let at = (0..term.columns()).rev().find(|&c| {
-                                    row[Column(c)].c == '/'
+                                    crate::platform::is_separator(row[Column(c)].c)
                                         && blocks::cell_link(&row[Column(c)]) == Some((b'p', id))
                                 });
                                 last_slash = Some((line, at));
