@@ -36,6 +36,7 @@ mod status;
 mod style;
 mod subagents;
 mod suggest;
+mod tabs;
 mod temp_dir;
 mod terminal;
 #[cfg(windows)]

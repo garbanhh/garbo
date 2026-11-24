@@ -27,6 +27,8 @@ pub struct Config {
     pub check_updates: bool,
     /// Avisos del escritorio (agente que termina).
     pub notifications: NotifyConfig,
+    /// Dónde van las pestañas, su ancho y dónde va el nombre. Ver `tabs.rs`.
+    pub tabs: crate::tabs::TabsConfig,
 }
 
 /// Cuándo avisar de que un agente terminó.
@@ -76,6 +78,7 @@ impl Default for Config {
             keybindings: HashMap::new(),
             check_updates: true,
             notifications: NotifyConfig::default(),
+            tabs: crate::tabs::TabsConfig::default(),
         }
     }
 }
@@ -429,6 +432,7 @@ impl Config {
         let (f, df) = (&self.font, &d.font);
         let (w, dw) = (&self.window, &d.window);
         let (t, dt) = (&self.terminal, &d.terminal);
+        let (tb, dtb) = (&self.tabs, &d.tabs);
         put("", "theme", value(&self.theme), self.theme == d.theme);
         put(
             "",
@@ -540,6 +544,24 @@ impl Config {
             "garbo_prompt",
             value(t.garbo_prompt),
             t.garbo_prompt == dt.garbo_prompt,
+        );
+        put(
+            "tabs",
+            "position",
+            value(tb.position.key()),
+            tb.position == dtb.position,
+        );
+        put(
+            "tabs",
+            "width",
+            value(tb.width.key()),
+            tb.width == dtb.width,
+        );
+        put(
+            "tabs",
+            "align",
+            value(tb.align.key()),
+            tb.align == dtb.align,
         );
         if !self.style.is_empty() && !doc.contains_key("style") {
             doc["style"] = toml_edit::table();
@@ -705,14 +727,19 @@ mod tests {
         let mut cfg = Config::load_at(&path);
         cfg.style.tabs = Some(Tabs::Pill);
         cfg.style.radius = Some(10);
+        cfg.style.prompt_gap = Some(6);
+        cfg.style.output_gap = Some(4);
         cfg.save_at(&path).unwrap();
         let text = fs::read_to_string(&path).unwrap();
         assert!(text.contains("[style]"), "{text}");
         assert!(text.contains("tabs = \"pill\""), "{text}");
         assert!(text.contains("radius = 10"), "{text}");
+        assert!(text.contains("prompt_gap = 6"), "{text}");
+        assert!(text.contains("output_gap = 4"), "{text}");
         let mut back = Config::load_at(&path);
         assert_eq!(back.style.tabs, Some(Tabs::Pill));
         assert_eq!(back.style.radius, Some(10));
+        assert_eq!(back.style.prompt_gap, Some(6));
         back.style.radius = None;
         back.save_at(&path).unwrap();
         let text = fs::read_to_string(&path).unwrap();
@@ -1154,6 +1181,9 @@ impl Theme {
             bar,
             background,
             radius,
+            prompt_gap: 0,
+            block_gap: 0,
+            output_gap: 0,
         };
         use Background::{Gradient, Solid};
         use BarSize::{Compact, Normal, Tall};

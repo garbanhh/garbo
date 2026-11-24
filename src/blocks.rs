@@ -524,7 +524,17 @@ pub fn cell_link(cell: &Cell) -> Option<(u8, u32)> {
     Some((*kind.as_bytes().first()?, id.parse().ok()?))
 }
 
-fn line_anchor<T>(term: &Term<T>, line: Line) -> Option<u32> {
+/// ¿Tiene `line` celdas de la clase `kind` (`b'p'` prompt, `b'c'` comando…) del bloque `id`?
+pub fn line_has<T>(term: &Term<T>, line: Line, kind: u8, id: u32) -> bool {
+    term.grid()[line][..]
+        .iter()
+        .take(term.columns())
+        .filter(|cell| cell.extra.is_some())
+        .any(|cell| cell_link(cell) == Some((kind, id)))
+}
+
+/// Bloque cuyo prompt ocupa `line` (sus celdas `p`), si hay alguno.
+pub fn line_anchor<T>(term: &Term<T>, line: Line) -> Option<u32> {
     term.grid()[line][..]
         .iter()
         .take(term.columns())

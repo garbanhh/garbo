@@ -46,6 +46,8 @@ pub struct Group {
     pub layout: Layout,
     /// Terminal con el foco.
     pub focus: u64,
+    /// Nombre puesto a mano (`None`: el automático, lo que se hace en el panel con el foco).
+    pub name: Option<String>,
 }
 
 impl Group {
@@ -53,6 +55,7 @@ impl Group {
         Self {
             layout: Layout::Leaf(id),
             focus: id,
+            name: None,
         }
     }
 }

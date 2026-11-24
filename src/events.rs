@@ -433,6 +433,7 @@ impl ApplicationHandler<UserEvent> for App {
             WindowEvent::CursorLeft { .. } => {
                 let st = self.st();
                 let panel = st.panel.set_hover(None, Instant::now());
+                st.marquee.hover(None, Instant::now());
                 if st.hover.take().is_some() || panel {
                     st.window.request_redraw();
                 }
@@ -470,7 +471,13 @@ impl App {
             st.next_blink = Instant::now() + BLINK;
         }
 
-        // Editor de aspecto: ↑ ↓ eligen la fila, ← → la opción, Esc cierra.
+        // Cambiando el nombre de una pestaña: el teclado va al campo.
+        if self.st().rename.is_some() {
+            self.on_rename_key(&ev);
+            return false;
+        }
+
+        // Editor de aspecto: ↑ ↓ eligen el control, ← → su valor, Tab la sección y Esc cierra.
         if self.st().look.is_some() {
             use crate::keybindings::Action;
             use crate::look::Nav;
@@ -493,8 +500,9 @@ impl App {
                 Key::Named(NamedKey::ArrowDown) => Some(Nav::Down),
                 Key::Named(NamedKey::ArrowLeft) => Some(Nav::Left),
                 Key::Named(NamedKey::ArrowRight) => Some(Nav::Right),
-                Key::Named(NamedKey::Tab) if shift => Some(Nav::Up),
-                Key::Named(NamedKey::Tab) => Some(Nav::Down),
+                Key::Named(NamedKey::Tab) if shift => Some(Nav::PrevSection),
+                Key::Named(NamedKey::Tab) => Some(Nav::NextSection),
+                Key::Named(NamedKey::Enter | NamedKey::Space) => Some(Nav::Activate),
                 _ => None,
             };
             let st = self.st.as_mut().unwrap();
@@ -865,14 +873,27 @@ impl App {
         self.st().window.request_redraw();
     }
 
+    /// Dónde se dibuja cada fila del terminal con el foco (ver `view::Rows`).
+    fn active_rows(&self, geo: &crate::app::Geometry) -> crate::view::Rows {
+        let st = self.st.as_ref().unwrap();
+        let gaps = self.theme.style.gaps(st.scale);
+        let pane = geo.panes.iter().find(|p| p.idx == st.active);
+        let (Some(pane), Some(tab), true) = (pane, st.tabs.get(st.active), gaps.any()) else {
+            return crate::view::Rows::default();
+        };
+        let term = tab.term.lock();
+        let bs = tab.blocks.lock().unwrap();
+        pane.rows(&term, &bs, st.glyphs.fonts.metrics.height, gaps)
+    }
+
     /// Pixel -> celda del viewport (columna, fila, lado).
     fn cell_at(&self, x: f32, y: f32) -> (usize, usize, Side) {
         let geo = self.geometry();
         let m = self.st.as_ref().unwrap().glyphs.fonts.metrics;
         let fx = ((x - geo.x) / m.width).max(0.0);
-        let fy = ((y - geo.y) / m.height).max(0.0);
         let col = (fx as usize).min(geo.ws.num_cols as usize - 1);
-        let row = (fy as usize).min(geo.ws.num_lines as usize - 1);
+        let lines = geo.ws.num_lines as usize;
+        let row = self.active_rows(&geo).row_at(y - geo.y, m.height, lines);
         let side = if fx.fract() < 0.5 {
             Side::Left
         } else {
@@ -885,33 +906,59 @@ impl App {
         let geo = self.geometry();
         // Editor de aspecto: todo lo que queda bajo la barra de pestañas es suyo.
         let in_bar = geo.tab_bar.as_ref().is_some_and(|tb| y < tb.height);
-        let dragging = self.st().look.as_ref().is_some_and(|l| l.dragging);
+        let dragging = self
+            .st()
+            .look
+            .as_ref()
+            .is_some_and(|l| l.dragging.is_some());
         if self.st().look.is_some() && (!in_bar || dragging) {
-            use crate::look::Hit;
-            let top = geo.tab_bar.as_ref().map_or(0.0, |t| t.height);
-            let st = self.st();
+            use crate::look::{Drag, Hit};
+            let st = self.st.as_mut().unwrap();
             st.mouse = (x, y);
-            let (_, h) = st.renderer.size();
+            let (w, _) = st.renderer.size();
             let look = st.look.as_mut().unwrap();
-            if look.dragging {
-                look.drag_to(y, h, top);
-                st.window.request_redraw();
-            } else {
-                let hit = look.hit(x, y);
-                if look.hover != Some(hit) {
-                    look.hover = Some(hit);
+            let mut change = crate::settings::Change::None;
+            match look.dragging {
+                Some(Drag::Divider) => {
+                    look.drag_to(x, w);
                     st.window.request_redraw();
                 }
+                Some(Drag::Slider(c)) => {
+                    change = look.slide(c, x, &mut self.cfg);
+                    st.window.request_redraw();
+                }
+                None => {
+                    let hit = look.hit(x, y);
+                    if look.hover != Some(hit) {
+                        look.hover = Some(hit);
+                        st.window.request_redraw();
+                    }
+                }
             }
-            let icon = if look.dragging || look.hover == Some(Hit::Divider) {
-                CursorIcon::RowResize
-            } else {
-                CursorIcon::Default
+            let icon = match (look.dragging, look.hover) {
+                (Some(Drag::Divider), _) | (None, Some(Hit::Divider)) => CursorIcon::ColResize,
+                (Some(Drag::Slider(_)), _)
+                | (
+                    None,
+                    Some(
+                        Hit::Option(..)
+                        | Hit::Slider(_)
+                        | Hit::Section(_)
+                        | Hit::Reset(_)
+                        | Hit::Keep
+                        | Hit::Sample
+                        | Hit::ResetAll
+                        | Hit::Done
+                        | Hit::Close,
+                    ),
+                ) => CursorIcon::Pointer,
+                _ => CursorIcon::Default,
             };
             if st.cursor_icon != icon {
                 st.cursor_icon = icon;
                 st.window.set_cursor(icon);
             }
+            self.apply_setting(change);
             return;
         }
         if self.st().stats.is_some() && self.st().settings.is_none() {
@@ -959,6 +1006,7 @@ impl App {
         let hover = geo.tab_bar.as_ref().and_then(|tb| tb.hit(x, y));
         if hover != st.hover {
             st.hover = hover;
+            st.marquee.hover(tab_under(hover), Instant::now());
             st.window.request_redraw();
         }
         // Arrastrando una línea divisoria: cambia el reparto de los paneles.
@@ -976,7 +1024,7 @@ impl App {
             self.relayout();
             return;
         }
-        let in_bar = geo.tab_bar.as_ref().is_some_and(|tb| y < tb.height);
+        let in_bar = geo.tab_bar.as_ref().is_some_and(|tb| tb.contains(x, y));
         let in_gutter = !in_bar
             && self.blocks_active()
             && geo
@@ -1046,16 +1094,32 @@ impl App {
         let (x, y) = self.st().mouse;
         let geo = self.geometry();
 
+        // Cambiando el nombre de una pestaña: un clic en el campo no hace nada; en otro sitio,
+        // guarda el nombre y sigue como un clic normal.
+        if let Some(g) = self.st().rename.as_ref().map(|r| r.group) {
+            let field = geo.tab_bar.as_ref().and_then(|tb| tb.tab_rect(g));
+            if field
+                .is_some_and(|[fx, fy, fw, fh]| x >= fx && x < fx + fw && y >= fy && y < fy + fh)
+            {
+                return false;
+            }
+            if pressed {
+                self.finish_rename(true);
+            }
+        }
+
         // Editor de aspecto (la barra de pestañas sigue funcionando).
         if self.st().look.is_some() {
-            use crate::look::Hit;
+            use crate::look::{Drag, Hit};
             use crate::settings::Change;
             let in_bar = geo.tab_bar.as_ref().is_some_and(|tb| y < tb.height);
             let st = self.st.as_mut().unwrap();
             let look = st.look.as_mut().unwrap();
-            if !pressed && look.dragging {
-                look.dragging = false;
-                st.look_ratio = look.ratio;
+            if !pressed && look.dragging.is_some() {
+                if look.dragging.take() == Some(Drag::Divider) {
+                    st.look_ratio = look.ratio;
+                }
+                st.window.request_redraw();
                 return false;
             }
             if !in_bar {
@@ -1064,10 +1128,10 @@ impl App {
                 }
                 let change = match look.hit(x, y) {
                     Hit::Divider => {
-                        look.dragging = true;
+                        look.dragging = Some(Drag::Divider);
                         Change::None
                     }
-                    Hit::Close => {
+                    Hit::Close | Hit::Done => {
                         self.close_look();
                         return false;
                     }
@@ -1079,9 +1143,18 @@ impl App {
                         look.keep = !look.keep;
                         Change::None
                     }
-                    Hit::Reset => look.reset(&mut self.cfg),
-                    Hit::Option(g, i) => look.choose(g, i, &mut self.cfg),
-                    Hit::Panel | Hit::Above => Change::None,
+                    Hit::ResetAll => look.reset(&mut self.cfg),
+                    Hit::Reset(c) => look.reset_control(c, &mut self.cfg),
+                    Hit::Section(i) => {
+                        look.set_section(i);
+                        Change::None
+                    }
+                    Hit::Option(c, i) => look.choose(c, i, &mut self.cfg),
+                    Hit::Slider(c) => {
+                        look.dragging = Some(Drag::Slider(c));
+                        look.slide(c, x, &mut self.cfg)
+                    }
+                    Hit::Panel | Hit::Outside => Change::None,
                 };
                 st.window.request_redraw();
                 return self.apply_setting(change);
@@ -1137,7 +1210,7 @@ impl App {
         }
 
         // Estadísticas: lo que queda bajo la barra de pestañas es suyo.
-        let in_bar = geo.tab_bar.as_ref().is_some_and(|tb| y < tb.height);
+        let in_bar = geo.tab_bar.as_ref().is_some_and(|tb| tb.contains(x, y));
         if self.st().stats.is_some() && !in_bar {
             if pressed && button == MouseButton::Left {
                 if let Some(dir) = self.resize_edge(x, y) {
@@ -1204,8 +1277,9 @@ impl App {
         }
 
         // Panel lateral
-        if let Some((px, py, _, _)) = geo.panel {
-            if x >= px && y >= py {
+        if let Some((px, py, pw, ph)) = geo.panel {
+            // Dentro del panel (una columna de pestañas a la derecha queda fuera).
+            if x >= px && x < px + pw && y >= py && y < py + ph {
                 if pressed && button == MouseButton::Left {
                     if let Some(hit) = self.panel_hit(x, y, Instant::now()) {
                         self.on_panel_click(hit);
@@ -1215,8 +1289,8 @@ impl App {
             }
         }
 
-        // Barra de pestañas
-        if let Some(tb) = geo.tab_bar.as_ref().filter(|tb| y < tb.height) {
+        // Barra de pestañas (y la franja o la columna de las pestañas)
+        if let Some(tb) = geo.tab_bar.as_ref().filter(|tb| tb.contains(x, y)) {
             if pressed {
                 let st = self.st();
                 let now = Instant::now();
@@ -1226,8 +1300,17 @@ impl App {
                 st.last_click = (now, if double { 0 } else { 1 });
                 match (tb.hit(x, y), button) {
                     (Some(TabHit::Tab(i)), MouseButton::Left) => {
+                        // Doble clic en la misma pestaña: cambiarle el nombre.
+                        let st = self.st();
+                        let again = st.tab_click.is_some_and(|(j, t)| {
+                            j == i && now.duration_since(t) < crate::platform::double_click_time()
+                        });
+                        st.tab_click = (!again).then_some((i, now));
                         self.close_stats();
-                        self.select_group(i)
+                        self.select_group(i);
+                        if again {
+                            self.start_rename(i);
+                        }
                     }
                     (Some(TabHit::Tab(i) | TabHit::Close(i)), MouseButton::Middle)
                     | (Some(TabHit::Close(i)), MouseButton::Left) => return self.close_tab(i),
@@ -1258,6 +1341,8 @@ impl App {
                         let _ = self.st().window.drag_window();
                     }
                     (Some(TabHit::Empty), MouseButton::Middle) => self.new_tab(),
+                    (Some(TabHit::Zone), MouseButton::Left) if double => self.new_tab(),
+                    (Some(TabHit::Zone), MouseButton::Middle) => self.new_tab(),
                     _ => {}
                 }
             }
@@ -1296,7 +1381,9 @@ impl App {
             && y >= geo.y
             && self.blocks_active()
         {
-            let row = ((y - geo.y) / self.st().glyphs.fonts.metrics.height).max(0.0) as i32;
+            let ch = self.st().glyphs.fonts.metrics.height;
+            let lines = geo.ws.num_lines as usize;
+            let row = self.active_rows(&geo).row_at(y - geo.y, ch, lines) as i32;
             let st = self.st();
             if let Some(tab) = st.tabs.get_mut(st.active) {
                 let term = tab.term.lock();
@@ -1505,6 +1592,18 @@ impl App {
         let mult = self.cfg.terminal.scroll_multiplier;
         let top = self.geometry().tab_bar.as_ref().map_or(0.0, |t| t.height);
         let st = self.st();
+        // Sobre una pestaña cuyo nombre no cabe, la rueda lo desplaza (hacia abajo, avanza).
+        if tab_under(st.hover).is_some() {
+            let step = crate::tabs::WHEEL_STEP * st.scale;
+            let px = match delta {
+                MouseScrollDelta::LineDelta(x, y) => (x - y) * step,
+                MouseScrollDelta::PixelDelta(p) => (p.x - p.y) as f32,
+            };
+            if st.marquee.wheel(px, Instant::now()) {
+                st.window.request_redraw();
+            }
+            return;
+        }
         let ch = st.glyphs.fonts.metrics.height;
         let lines = match delta {
             MouseScrollDelta::LineDelta(_, y) => y * mult,
@@ -1528,8 +1627,8 @@ impl App {
             return;
         }
         if let Some(look) = st.look.as_mut() {
-            // Sobre las opciones, las desplaza; sobre el terminal, nada (se ve la zona del cursor).
-            if look.in_panel(st.mouse.1) {
+            // Sobre el panel, lo desplaza; sobre el terminal, nada.
+            if look.in_panel(st.mouse.0) {
                 let px = match delta {
                     MouseScrollDelta::LineDelta(_, y) => y * 48.0 * st.scale,
                     MouseScrollDelta::PixelDelta(p) => p.y as f32,
@@ -1706,6 +1805,7 @@ impl App {
         let bar_hover = geo.tab_bar.as_ref().and_then(|tb| tb.hit(x, y));
         if bar_hover != st.hover {
             st.hover = bar_hover;
+            st.marquee.hover(tab_under(bar_hover), Instant::now());
             st.window.request_redraw();
         }
         let Some(stats) = st.stats.as_mut() else {
@@ -1753,6 +1853,59 @@ impl App {
         }
         // Lo de debajo del ratón puede haber cambiado (otras filas, otra escala).
         stats.hover = Some(stats.hit(x, y, w, h, top, scale));
+        st.window.request_redraw();
+    }
+}
+
+/// Pestaña de la barra bajo el ratón (sobre su nombre o su ×).
+fn tab_under(hit: Option<TabHit>) -> Option<usize> {
+    match hit {
+        Some(TabHit::Tab(i) | TabHit::Close(i)) => Some(i),
+        _ => None,
+    }
+}
+
+impl App {
+    /// Teclado mientras se cambia el nombre de una pestaña: Intro lo guarda, Esc lo deja como
+    /// estaba y el resto edita el texto (Ctrl+A lo selecciona todo y Ctrl+V pega).
+    fn on_rename_key(&mut self, ev: &KeyEvent) {
+        let ctrl = self.st().mods.control_key();
+        match &ev.logical_key {
+            Key::Named(NamedKey::Enter) => return self.finish_rename(true),
+            Key::Named(NamedKey::Escape) => return self.finish_rename(false),
+            _ => {}
+        }
+        let pasted = match &ev.logical_key {
+            Key::Character(c) if ctrl && c.eq_ignore_ascii_case("v") => {
+                self.st().clipboard.get_contents().ok()
+            }
+            _ => None,
+        };
+        let st = self.st();
+        let Some(rn) = st.rename.as_mut() else { return };
+        match &ev.logical_key {
+            Key::Named(NamedKey::Backspace) => rn.backspace(),
+            Key::Named(NamedKey::Delete) => rn.delete(),
+            Key::Named(NamedKey::ArrowLeft) => rn.step(-1),
+            Key::Named(NamedKey::ArrowRight) => rn.step(1),
+            Key::Named(NamedKey::Home) => rn.home(),
+            Key::Named(NamedKey::End) => rn.end(),
+            Key::Character(c) if ctrl && c.eq_ignore_ascii_case("a") => rn.select_all(),
+            _ if ctrl => {
+                if let Some(text) = pasted {
+                    rn.insert(text.lines().next().unwrap_or(""));
+                }
+            }
+            _ => {
+                if let Some(t) = ev
+                    .text
+                    .as_ref()
+                    .filter(|t| !t.chars().any(char::is_control))
+                {
+                    rn.insert(t);
+                }
+            }
+        }
         st.window.request_redraw();
     }
 }

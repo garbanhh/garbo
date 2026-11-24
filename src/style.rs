@@ -1,5 +1,6 @@
-//! Forma de la interfaz: cómo se dibujan las pestañas, la etiqueta del prompt, los bloques, los
-//! botones de ventana, el alto de la barra, el fondo y el radio de las esquinas. Cada tema trae la
+//! Forma de la interfaz: cómo se dibujan las pestañas, la etiqueta del prompt (y el hueco bajo la
+//! ruta), los bloques, los botones de ventana, el alto de la barra, el fondo y el radio de las
+//! esquinas. Cada tema trae la
 //! suya (`Theme::style`) y la sección `[style]` de config.toml la retoca opción a opción.
 //!
 //! De momento solo en Linux (`ENABLED`): en Windows se dibuja siempre la forma de siempre
@@ -44,6 +45,7 @@ macro_rules! options {
         }
     };
 }
+pub(crate) use options;
 
 options! {
     /// Pestañas de la barra.
@@ -136,6 +138,12 @@ options! {
 /// Radios de esquina que ofrece el editor (píxeles lógicos).
 pub const RADII: [u8; 8] = [0, 2, 4, 6, 8, 10, 12, 16];
 
+/// Huecos entre la ruta y el comando que ofrece el editor (píxeles lógicos).
+pub const GAPS: [u8; 8] = [0, 2, 4, 6, 8, 10, 12, 16];
+
+/// Hueco máximo que se acepta en config.toml (píxeles lógicos).
+const MAX_GAP: f64 = 32.0;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Style {
     pub tabs: Tabs,
@@ -146,6 +154,30 @@ pub struct Style {
     pub background: Background,
     /// Radio de las esquinas en píxeles lógicos.
     pub radius: u8,
+    /// Hueco entre la línea de la ruta del prompt de Garbo y la del comando, en píxeles lógicos.
+    pub prompt_gap: u8,
+    /// Hueco sobre la ruta (entre un bloque y el anterior), en píxeles lógicos.
+    pub block_gap: u8,
+    /// Hueco entre el comando y su salida, en píxeles lógicos.
+    pub output_gap: u8,
+}
+
+/// Huecos de los bloques en píxeles físicos (ver `view::Rows`).
+#[derive(Clone, Copy, Default, Debug, PartialEq)]
+pub struct Gaps {
+    /// Sobre la ruta.
+    pub above: f32,
+    /// Bajo la ruta (antes del comando).
+    pub path: f32,
+    /// Entre el comando y su salida.
+    pub output: f32,
+}
+
+impl Gaps {
+    /// ¿Hay algún hueco? Sin ninguno, las filas van seguidas.
+    pub fn any(&self) -> bool {
+        self.above >= 0.5 || self.path >= 0.5 || self.output >= 0.5
+    }
 }
 
 impl Default for Style {
@@ -159,6 +191,9 @@ impl Default for Style {
             bar: BarSize::Normal,
             background: Background::Solid,
             radius: 6,
+            prompt_gap: 0,
+            block_gap: 0,
+            output_gap: 0,
         }
     }
 }
@@ -167,6 +202,21 @@ impl Style {
     /// Radio de esquina en píxeles físicos.
     pub fn r(&self, scale: f32) -> f32 {
         (self.radius as f32 * scale).round()
+    }
+
+    /// Hueco bajo la ruta en píxeles físicos.
+    pub fn gap(&self, scale: f32) -> f32 {
+        (self.prompt_gap as f32 * scale).round()
+    }
+
+    /// Los tres huecos de los bloques en píxeles físicos.
+    pub fn gaps(&self, scale: f32) -> Gaps {
+        let px = |v: u8| (v as f32 * scale).round();
+        Gaps {
+            above: px(self.block_gap),
+            path: px(self.prompt_gap),
+            output: px(self.output_gap),
+        }
     }
 
     /// Diferencia del alto de la barra respecto al normal, en píxeles lógicos.
@@ -191,6 +241,9 @@ pub struct StyleOverrides {
     pub bar: Option<BarSize>,
     pub background: Option<Background>,
     pub radius: Option<u8>,
+    pub prompt_gap: Option<u8>,
+    pub block_gap: Option<u8>,
+    pub output_gap: Option<u8>,
 }
 
 #[derive(Deserialize, Default)]
@@ -203,6 +256,9 @@ struct RawStyle {
     bar: Option<String>,
     background: Option<String>,
     radius: Option<f64>,
+    prompt_gap: Option<f64>,
+    block_gap: Option<f64>,
+    output_gap: Option<f64>,
 }
 
 fn lenient<T>(key: &str, v: Option<String>, parse: fn(&str) -> Option<T>) -> Option<T> {
@@ -212,6 +268,11 @@ fn lenient<T>(key: &str, v: Option<String>, parse: fn(&str) -> Option<T>) -> Opt
         log::warn!("[style] {key} = \"{v}\" no es un valor válido: se usa el del tema");
     }
     parsed
+}
+
+/// Un hueco leído de config.toml, dentro de lo que se acepta.
+fn gap(v: Option<f64>) -> Option<u8> {
+    v.map(|v| v.clamp(0.0, MAX_GAP).round() as u8)
 }
 
 impl From<RawStyle> for StyleOverrides {
@@ -224,6 +285,9 @@ impl From<RawStyle> for StyleOverrides {
             bar: lenient("bar", r.bar, BarSize::parse),
             background: lenient("background", r.background, Background::parse),
             radius: r.radius.map(|v| v.clamp(0.0, 24.0).round() as u8),
+            prompt_gap: gap(r.prompt_gap),
+            block_gap: gap(r.block_gap),
+            output_gap: gap(r.output_gap),
         }
     }
 }
@@ -239,6 +303,9 @@ impl StyleOverrides {
             bar: self.bar.unwrap_or(base.bar),
             background: self.background.unwrap_or(base.background),
             radius: self.radius.unwrap_or(base.radius),
+            prompt_gap: self.prompt_gap.unwrap_or(base.prompt_gap),
+            block_gap: self.block_gap.unwrap_or(base.block_gap),
+            output_gap: self.output_gap.unwrap_or(base.output_gap),
         }
     }
 
@@ -247,7 +314,7 @@ impl StyleOverrides {
     }
 
     /// Las claves y su valor para config.toml (`None` = no escribir y borrar si estaba).
-    pub fn entries(&self) -> [(&'static str, Option<toml_edit::Item>); 7] {
+    pub fn entries(&self) -> [(&'static str, Option<toml_edit::Item>); 10] {
         use toml_edit::value;
         let s = |v: Option<&'static str>| v.map(value);
         [
@@ -258,6 +325,9 @@ impl StyleOverrides {
             ("bar", s(self.bar.map(BarSize::key))),
             ("background", s(self.background.map(Background::key))),
             ("radius", self.radius.map(|r| value(r as i64))),
+            ("prompt_gap", self.prompt_gap.map(|g| value(g as i64))),
+            ("block_gap", self.block_gap.map(|g| value(g as i64))),
+            ("output_gap", self.output_gap.map(|g| value(g as i64))),
         ]
     }
 }
@@ -268,16 +338,22 @@ mod tests {
 
     #[test]
     fn valores_desconocidos_no_invalidan_el_archivo() {
-        let o: StyleOverrides =
-            toml::from_str("tabs = \"pill\"\nprompt = \"nada\"\nradius = 99\nbar = \"TALL\"")
-                .unwrap();
+        let o: StyleOverrides = toml::from_str(
+            "tabs = \"pill\"\nprompt = \"nada\"\nradius = 99\nbar = \"TALL\"\nprompt_gap = 7.6\nblock_gap = 4\noutput_gap = 40",
+        )
+        .unwrap();
         assert_eq!(o.tabs, Some(Tabs::Pill));
         assert_eq!(o.prompt, None);
         assert_eq!(o.radius, Some(24));
         assert_eq!(o.bar, Some(BarSize::Tall));
+        assert_eq!(o.prompt_gap, Some(8));
+        assert_eq!((o.block_gap, o.output_gap), (Some(4), Some(32)));
         let s = o.apply(Style::default());
         assert_eq!(s.tabs, Tabs::Pill);
         assert_eq!(s.prompt, Prompt::Border);
+        assert_eq!(s.prompt_gap, 8);
+        let lejos: StyleOverrides = toml::from_str("prompt_gap = -3").unwrap();
+        assert_eq!(lejos.prompt_gap, Some(0));
     }
 
     #[test]

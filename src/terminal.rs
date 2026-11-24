@@ -92,6 +92,8 @@ pub struct Tab {
     pub session: crate::sessions::Session,
     /// Subagentes de Claude Code (solo se consultan con el panel de agentes abierto).
     pub subagents: crate::subagents::Watch,
+    /// Lo último que se le pidió al agente en primer plano (nombre de la pestaña).
+    pub request: crate::subagents::Request,
     /// Aviso del escritorio cuando el agente termina.
     pub notice: crate::notify::Tracker,
     /// Directorio actual abreviado (título de la pestaña).
@@ -255,6 +257,7 @@ impl Tab {
             title_owner: None,
             session: Default::default(),
             subagents: Default::default(),
+            request: Default::default(),
             notice: Default::default(),
             cwd_label: String::new(),
             cwd_checked: None,
@@ -375,6 +378,17 @@ impl Tab {
         let mut changed =
             self.session
                 .refresh(Some(&self.probe), self.last_output, viewing, now, report);
+        // Lo que se le pidió al agente, para el nombre de la pestaña.
+        let asked = self
+            .session
+            .agent
+            .and_then(|a| a.subagents)
+            .zip(self.session.pid)
+            .filter(|_| crate::tabs::ENABLED);
+        if self.request.refresh(asked, now) {
+            self.task = self.compute_task();
+            changed = true;
+        }
         if self
             .cwd_checked
             .is_none_or(|t| now.duration_since(t).as_millis() >= 1000)
@@ -396,6 +410,8 @@ impl Tab {
     }
 
     /// Qué se está haciendo en la pestaña:
+    ///   - un agente (donde `tabs::ENABLED`): su nombre corto y lo último que se le pidió
+    ///     ("Claude · Arregla el menú"), o su título si aún no se sabe;
     ///   - un programa que puso título (Claude Code pone el tema de la conversación): ese título;
     ///   - un agente sin título: su nombre;
     ///   - otro programa: su orden ("cargo build --release");
@@ -404,6 +420,15 @@ impl Tab {
         match self.probe.foreground() {
             Some(pg) if pg != self.child_pid as i32 => {
                 let title = clean_title(&self.title);
+                let agent = self.session.agent.filter(|_| self.session.pid == Some(pg));
+                if let Some(agent) = agent.filter(|_| crate::tabs::ENABLED) {
+                    let own_title =
+                        (self.title_owner == Some(pg) && !title.is_empty()).then_some(title);
+                    return match self.request.task.clone().or(own_title) {
+                        Some(what) => format!("{} · {what}", crate::tabs::agent_short(agent.name)),
+                        None => agent.name.to_string(),
+                    };
+                }
                 if self.title_owner == Some(pg) && !title.is_empty() {
                     title
                 } else if let Some(agent) =
@@ -416,6 +441,11 @@ impl Tab {
             }
             _ => short_dir(&self.cwd_label),
         }
+    }
+
+    /// Lo que se le pidió al agente (sin su nombre), si se sabe: para los avisos.
+    pub fn agent_task(&self) -> Option<&str> {
+        self.request.task.as_deref()
     }
 
     /// Directorio actual abreviado (para el panel de agentes).

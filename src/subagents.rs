@@ -112,6 +112,145 @@ impl Watch {
     }
 }
 
+/// Cada cuánto se mira si hay un mensaje nuevo para el agente (nombre de la pestaña).
+const ASK_EVERY: Duration = Duration::from_secs(2);
+/// Lo que se lee como mucho de la conversación de una vez (la primera vez, su final).
+const ASK_TAIL: u64 = 4 * 1024 * 1024;
+
+/// Lo último que se le pidió al agente en primer plano, para el nombre de la pestaña ("Claude ·
+/// Arregla el menú"). Se mira como mucho cada `ASK_EVERY`, y de la conversación solo se lee lo
+/// que se ha añadido desde la última vez (la primera, su final).
+#[derive(Default)]
+pub struct Request {
+    target: Option<(Provider, i32)>,
+    path: Option<PathBuf>,
+    resolved: Option<Instant>,
+    checked: Option<Instant>,
+    /// Hasta dónde se ha leído la conversación (byte tras el último salto de línea).
+    scanned: u64,
+    /// Lo que se le pidió (ver `tabs::task_from_prompt`): el último mensaje que decía algo.
+    pub task: Option<String>,
+}
+
+impl Request {
+    /// Devuelve `true` si cambió la tarea.
+    pub fn refresh(&mut self, target: Option<(Provider, i32)>, now: Instant) -> bool {
+        let mut changed = false;
+        if target != self.target {
+            changed = self.task.is_some();
+            *self = Self {
+                target,
+                ..Self::default()
+            };
+        }
+        let Some((provider, pid)) = target else {
+            return changed;
+        };
+        if self
+            .checked
+            .is_some_and(|t| now.duration_since(t) < ASK_EVERY)
+        {
+            return changed;
+        }
+        self.checked = Some(now);
+        if self
+            .resolved
+            .is_none_or(|t| now.duration_since(t) >= RESOLVE_EVERY)
+        {
+            self.resolved = Some(now);
+            let path = transcript_path(provider, pid);
+            // Otra conversación (/clear, /resume): lo de antes ya no vale.
+            if path != self.path {
+                self.path = path;
+                self.scanned = 0;
+                changed |= self.task.take().is_some();
+            }
+        }
+        let Some(path) = self.path.clone() else {
+            return changed;
+        };
+        if let Some(task) = self.read_new(provider, &path) {
+            if self.task.as_ref() != Some(&task) {
+                self.task = Some(task);
+                changed = true;
+            }
+        }
+        changed
+    }
+
+    /// Lee lo nuevo de la conversación (la primera vez, su final) y devuelve la tarea del último
+    /// mensaje que diga algo.
+    fn read_new(&mut self, provider: Provider, path: &Path) -> Option<String> {
+        let len = fs::metadata(path).ok()?.len();
+        if len < self.scanned {
+            self.scanned = 0;
+        }
+        let from = self.scanned.max(len.saturating_sub(ASK_TAIL));
+        if from >= len {
+            return None;
+        }
+        let mut f = fs::File::open(path).ok()?;
+        f.seek(SeekFrom::Start(from)).ok()?;
+        let mut buf = Vec::with_capacity((len - from) as usize);
+        f.take(len - from).read_to_end(&mut buf).ok()?;
+        // Solo líneas completas: la última puede estar a medio escribir y, si se empezó a leer a
+        // mitad de una, la primera también.
+        let end = buf.iter().rposition(|&b| b == b'\n')? + 1;
+        let start = if from > self.scanned {
+            buf[..end]
+                .iter()
+                .position(|&b| b == b'\n')
+                .map_or(end, |i| i + 1)
+        } else {
+            0
+        };
+        self.scanned = from + end as u64;
+        String::from_utf8_lossy(&buf[start..end])
+            .lines()
+            .rev()
+            .filter_map(|line| user_prompt(provider, line))
+            .find_map(|p| crate::tabs::task_from_prompt(&p))
+    }
+}
+
+/// Conversación de la sesión que ejecuta `pid` (Claude Code y Codex; Gemini CLI, no).
+fn transcript_path(provider: Provider, pid: i32) -> Option<PathBuf> {
+    match provider {
+        Provider::Claude => {
+            // `<proyectos>/<proyecto>/<sesión>/subagents` -> `<proyectos>/<proyecto>/<sesión>.jsonl`
+            let session = session_dir(pid)?.parent()?.to_path_buf();
+            let mut name = session.file_name()?.to_os_string();
+            name.push(".jsonl");
+            Some(session.with_file_name(name)).filter(|p| p.is_file())
+        }
+        Provider::Codex => match Location::resolve(provider, pid)? {
+            Location::Codex { root, pid, session } => {
+                transcripts::codex_rollout(&root, pid, &session)
+            }
+            _ => None,
+        },
+        Provider::Gemini => None,
+    }
+}
+
+/// Mensaje del usuario en una línea de la conversación, si lo es. En Claude Code, la entrada
+/// `last-prompt` (lo último que se escribió); en Codex, los mensajes del usuario.
+fn user_prompt(provider: Provider, line: &str) -> Option<String> {
+    match provider {
+        Provider::Claude => {
+            if !line.contains("\"last-prompt\"") {
+                return None;
+            }
+            let v: serde_json::Value = serde_json::from_str(line).ok()?;
+            (v["type"] == "last-prompt")
+                .then(|| v["lastPrompt"].as_str().map(str::to_string))
+                .flatten()
+        }
+        Provider::Codex => transcripts::codex_user_text(line),
+        Provider::Gemini => None,
+    }
+}
+
 #[derive(serde::Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 struct Meta {
@@ -124,7 +263,8 @@ struct Meta {
 fn session_dir(pid: i32) -> Option<PathBuf> {
     let cwd = crate::platform::process_cwd(pid)?;
     let slug = project_slug(&cwd.to_string_lossy());
-    let (slug, session) = match session_from_fds(pid) {
+    let found = session_from_registry(pid).or_else(|| session_from_fds(pid));
+    let (slug, session) = match found {
         Some(found) => found,
         None => {
             let base = config_dir(pid).join("projects").join(&slug);
@@ -169,6 +309,31 @@ fn is_uuid(s: &str) -> bool {
 }
 
 /// Busca entre los archivos abiertos una ruta `…/claude-<uid>/<proyecto>/<sesión>/…`.
+/// Sesión actual según Claude Code: `<config>/sessions/<pid>.json` (cambia con /clear y
+/// /resume, al contrario que los descriptores abiertos, que pueden seguir siendo los de la sesión
+/// anterior). Si el archivo es de otro proceso con el mismo pid (`procStart` distinto), no vale.
+fn session_from_registry(pid: i32) -> Option<(String, String)> {
+    let path = config_dir(pid).join("sessions").join(format!("{pid}.json"));
+    let text = fs::read_to_string(path).ok()?;
+    let v: serde_json::Value = serde_json::from_str(&text).ok()?;
+    if let (Some(recorded), Some(actual)) = (v["procStart"].as_str(), process_start(pid)) {
+        if recorded != actual {
+            return None;
+        }
+    }
+    let id = v["sessionId"].as_str().filter(|id| is_uuid(id))?;
+    let cwd = v["cwd"].as_str()?;
+    Some((project_slug(cwd), id.to_string()))
+}
+
+/// Momento en que empezó el proceso (campo 22 de `/proc/<pid>/stat`), para reconocerlo.
+fn process_start(pid: i32) -> Option<String> {
+    let stat = fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    // El nombre del proceso va entre paréntesis y puede llevar espacios: se cuenta desde el final.
+    let rest = &stat[stat.rfind(')')? + 2..];
+    rest.split_whitespace().nth(19).map(str::to_string)
+}
+
 fn session_from_fds(pid: i32) -> Option<(String, String)> {
     for target in crate::platform::open_files(pid) {
         let t = target.to_string_lossy();
@@ -352,6 +517,59 @@ fn describe_tool(name: &str, input: Option<&serde_json::Value>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// El último mensaje que dice algo, leyendo solo lo nuevo de la conversación; las líneas a
+    /// medio escribir se leen cuando se completan.
+    #[test]
+    fn lo_que_se_le_pidio_al_agente() {
+        use std::io::Write;
+        let dir = crate::temp_dir::TempDir::new_in(&std::env::temp_dir()).unwrap();
+        let path = dir.path().join("sesion.jsonl");
+        let prompt = |t: &str| {
+            format!(
+                "{{\"type\":\"last-prompt\",\"lastPrompt\":{}}}\n",
+                serde_json::json!(t)
+            )
+        };
+        let relleno = format!(
+            "{{\"type\":\"assistant\",\"x\":\"{}\"}}\n",
+            "a".repeat(5000)
+        );
+        let mut f = fs::File::create(&path).unwrap();
+        write!(f, "{}{}", prompt("Arregla el menú de completado"), relleno).unwrap();
+        let mut r = Request::default();
+        let task = |r: &mut Request| r.read_new(Provider::Claude, &path);
+        assert_eq!(
+            task(&mut r).as_deref(),
+            Some("Arregla el menú de completado")
+        );
+        // Nada nuevo: no relee.
+        assert_eq!(task(&mut r), None);
+        // "sí" no dice qué se hace: no cambia nada.
+        write!(f, "{}", prompt("sí")).unwrap();
+        assert_eq!(task(&mut r), None);
+        // Una línea a medias no se lee hasta que se completa.
+        let nuevo = prompt("Quiero pestañas a la izquierda");
+        let (a, b) = nuevo.split_at(20);
+        write!(f, "{a}").unwrap();
+        assert_eq!(task(&mut r), None);
+        write!(f, "{b}{relleno}").unwrap();
+        assert_eq!(
+            task(&mut r).as_deref(),
+            Some("Quiero pestañas a la izquierda")
+        );
+        // Codex: sus mensajes, sin los bloques que añade él.
+        let codex = r#"{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<environment_context>x</environment_context>"}]}}"#;
+        assert_eq!(user_prompt(Provider::Codex, codex), None);
+        let codex = codex.replace(
+            "<environment_context>x</environment_context>",
+            "revisa el proyecto",
+        );
+        assert_eq!(
+            user_prompt(Provider::Codex, &codex).as_deref(),
+            Some("revisa el proyecto")
+        );
+    }
 
     #[test]
     fn rutas_y_sesiones() {

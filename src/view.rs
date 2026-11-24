@@ -159,6 +159,65 @@ impl Painter<'_> {
         self.ui_text(x, (y + (h - lh) / 2.0).round(), s, color, max_w)
     }
 
+    /// Texto de interfaz centrado verticalmente en [y, y + h], sin recortar con "…": lo que queda
+    /// fuera de `clip` (x inicial y final) no se ve y los glifos del borde se cortan. `fade`:
+    /// difumina el borde izquierdo y el derecho (por donde el texto sigue).
+    #[allow(clippy::too_many_arguments)]
+    pub fn ui_text_clipped(
+        &mut self,
+        x: f32,
+        y: f32,
+        h: f32,
+        s: &str,
+        color: Rgb,
+        clip: (f32, f32),
+        fade: (bool, bool),
+    ) {
+        let v = UiVariant::Normal;
+        let lh = self.glyphs.ui.metrics.height;
+        let top = (y + (h - lh) / 2.0).round();
+        let baseline = top + (self.glyphs.ui.metrics.baseline * v.scale()).round();
+        let fade_w = lh.max(1.0);
+        let mut cx = x;
+        for ch in s.chars() {
+            if cx >= clip.1 {
+                break;
+            }
+            let adv = self.glyphs.ui_advance(ch, v);
+            if ch != ' ' && cx + adv > clip.0 {
+                if let (Some(g), _) = self.glyphs.get_ui(self.queue, self.atlas, ch, v) {
+                    let gx = (cx + g.left).round();
+                    let (x0, x1) = (gx.max(clip.0), (gx + g.width).min(clip.1));
+                    if x1 > x0 && g.width > 0.0 {
+                        let (f0, f1) = ((x0 - gx) / g.width, (x1 - gx) / g.width);
+                        let mid = (x0 + x1) / 2.0;
+                        let mut a: f32 = 1.0;
+                        if fade.0 {
+                            a = a.min(((mid - clip.0) / fade_w).clamp(0.0, 1.0));
+                        }
+                        if fade.1 {
+                            a = a.min(((clip.1 - mid) / fade_w).clamp(0.0, 1.0));
+                        }
+                        self.fg.push(Instance {
+                            pos: [x0, (baseline - g.top).round()],
+                            size: [x1 - x0, g.height],
+                            uv: [
+                                g.uv[0] + f0 * g.uv[2],
+                                g.uv[1],
+                                (f1 - f0) * g.uv[2],
+                                g.uv[3],
+                            ],
+                            color: color.to_f32(a),
+                            kind: if g.is_color { 2 } else { 1 },
+                            radius: 0.0,
+                        });
+                    }
+                }
+            }
+            cx += adv;
+        }
+    }
+
     fn ui_glyph(&mut self, ch: char, x: f32, baseline: f32, color: Rgb, v: UiVariant) {
         if ch == ' ' {
             return;
@@ -488,12 +547,12 @@ pub fn draw_ghost<T: EventListener>(
     let m = p.metrics();
     let cur = term.grid().cursor.point;
     let row = cur.line.0;
-    if row < 0 || row as usize >= v.lines {
+    if !v.shows(row) {
         return;
     }
     let cols = term.columns();
     let color = theme.foreground.lerp(theme.background, 0.55);
-    let y = v.y + row as f32 * m.height;
+    let y = v.row_y(row, m.height);
     let line = &term.grid()[cur.line];
     for (k, ch) in text.chars().enumerate() {
         let col = cur.column.0 + k;
@@ -558,7 +617,11 @@ pub fn draw_prompts<T: EventListener>(
         else {
             continue;
         };
-        let y = v.y + (a.line.0 + offset) as f32 * ch;
+        let shown = a.line.0 + offset;
+        if !v.shows(shown) {
+            continue;
+        }
+        let y = v.row_y(shown, ch);
         let (iw, ih) = ((cw * 1.05).round(), (ch * 0.40).round());
         let (ix, iy) = ((v.x + 0.5 * cw).round(), (y + (ch - ih) / 2.0).round());
         if Some(a.id) == current {
@@ -617,7 +680,7 @@ pub fn draw_prompts<T: EventListener>(
 /// Etiqueta del prompt actual (la carpeta y la rama de git) según `Style::prompt`. La ruta es
 /// texto real de la rejilla: aquí solo se dibuja lo de alrededor; su color lo pone `draw_terminal`.
 #[allow(clippy::too_many_arguments)]
-fn prompt_label(
+pub(crate) fn prompt_label(
     p: &mut Painter,
     theme: &Theme,
     cw: f32,
@@ -767,6 +830,67 @@ fn prompt_label(
     }
 }
 
+/// Muestra del prompt de Garbo para el editor de aspecto, con la fuente del terminal: la ruta
+/// (con su etiqueta según `theme.style.prompt`, la rama al lado si cabe), el hueco bajo la ruta y
+/// un comando debajo. `y` es el borde de arriba.
+pub fn prompt_sample(p: &mut Painter, theme: &Theme, x: f32, y: f32, w: f32, s: f32) {
+    let m = p.metrics();
+    let (cw, ch) = (m.width, m.height);
+    let (path, branch) = ("~/ui", "main");
+    let end = 1 + path.chars().count();
+    // La rama solo si cabe de verdad (`prompt_label` pide más sitio del que usa).
+    let (n, need) = (
+        branch.chars().count(),
+        end as f32 + branch.len() as f32 + 4.0,
+    );
+    let cols = if need * cw <= w { end + 8 + n } else { 0 };
+    let v = TermView {
+        x,
+        y,
+        lines: 2,
+        focused: true,
+        cursor_on: false,
+        rows: Rows::default(),
+    };
+    prompt_label(p, theme, cw, ch, cols, &v, y, end, Some(branch), s);
+    let slash = path.rfind('/').unwrap_or(0);
+    for (i, c) in path.chars().enumerate() {
+        let (style, color) = match theme.style.prompt {
+            Prompt::Solid => (Style::Bold, theme.background),
+            Prompt::Brackets => (Style::Bold, theme.accent),
+            Prompt::Dimmed if i <= slash => (
+                Style::Regular,
+                theme.foreground.lerp(theme.background, 0.45),
+            ),
+            Prompt::Dimmed => (Style::Bold, theme.accent),
+            _ => (Style::Bold, theme.foreground),
+        };
+        p.glyph(
+            c,
+            style,
+            false,
+            false,
+            x + (2 + i) as f32 * cw,
+            y,
+            color,
+            1.0,
+        );
+    }
+    let cy = y + ch + theme.style.gap(s);
+    for (i, c) in "ls".chars().enumerate() {
+        p.glyph(
+            c,
+            Style::Bold,
+            false,
+            false,
+            x + i as f32 * cw,
+            cy,
+            theme.foreground,
+            1.0,
+        );
+    }
+}
+
 /// Menú de completado bajo la palabra que se completa (encima si no cabe debajo). Guarda en
 /// `menu.rect` dónde quedó, para el ratón.
 pub fn draw_menu<T: EventListener>(
@@ -785,7 +909,7 @@ pub fn draw_menu<T: EventListener>(
     let m = p.metrics();
     let s = scale;
     let cur = term.grid().cursor.point;
-    let row = cur.line.0.max(0) as f32;
+    let row = cur.line.0.max(0);
     let area_w = term.columns() as f32 * m.width;
     let n = items.len();
     let vis = n.min(MENU_ROWS);
@@ -821,9 +945,9 @@ pub fn draw_menu<T: EventListener>(
     let x = (v.x + col * m.width - pad - mark_w)
         .clamp(v.x, (v.x + area_w - w).max(v.x))
         .round();
-    let bottom = v.y + v.lines as f32 * m.height;
-    let below = v.y + (row + 1.0) * m.height + 2.0 * s;
-    let above = v.y + row * m.height - h - 2.0 * s;
+    let bottom = v.row_y(v.lines as i32, m.height);
+    let below = v.row_y(row, m.height) + m.height + 2.0 * s;
+    let above = v.row_y(row, m.height) - h - 2.0 * s;
     let y = if below + h <= bottom || above < v.y {
         below
     } else {
@@ -935,6 +1059,151 @@ pub struct TermView {
     pub lines: usize,
     pub focused: bool,
     pub cursor_on: bool,
+    /// Dónde va cada fila (con el hueco bajo la ruta del prompt de Garbo: ver `Rows`).
+    pub rows: Rows,
+}
+
+impl TermView {
+    /// Borde superior de la fila `row` del viewport (`lines`: el inferior de la última).
+    pub fn row_y(&self, row: i32, ch: f32) -> f32 {
+        self.y + self.rows.y(row, ch)
+    }
+
+    /// ¿Se dibuja la fila `row` del viewport?
+    pub fn shows(&self, row: i32) -> bool {
+        row >= self.rows.first as i32 && row < self.lines as i32
+    }
+}
+
+/// Posición vertical de las filas del terminal. Sin huecos van seguidas (fila · alto). Con los de
+/// `Style` (`Gaps`), cada bloque del prompt de Garbo puede llevar un hueco sobre la ruta, otro bajo
+/// la ruta y otro entre el comando y su salida, y lo de debajo baja; si así no cabe hasta el cursor
+/// (o hasta lo último escrito), se ocultan filas enteras por arriba. La rejilla no cambia: los
+/// programas ven las mismas filas, solo cambia dónde se dibujan.
+#[derive(Default, Debug, Clone, PartialEq)]
+pub struct Rows {
+    /// y de cada fila respecto a `TermView::y` y, al final, el borde inferior de la última.
+    /// Vacío: sin huecos.
+    ys: Vec<f32>,
+    /// Primera fila que se dibuja (las anteriores quedan por encima del panel).
+    pub first: usize,
+}
+
+impl Rows {
+    /// Reparto para lo que se ve de `term`: `lines` filas de `ch` píxeles, los huecos `gaps` y
+    /// `room` píxeles de alto disponibles.
+    pub fn layout<T>(
+        term: &Term<T>,
+        bs: &BlockState,
+        lines: usize,
+        ch: f32,
+        gaps: crate::style::Gaps,
+        room: f32,
+    ) -> Self {
+        if !gaps.any() || !bs.active || lines == 0 {
+            return Self::default();
+        }
+        let offset = term.grid().display_offset() as i32;
+        let bottom = Line(-offset + lines as i32 - 1);
+        let line = |r: usize| Line(r as i32 - offset);
+        let cursor = term.grid().cursor.point.line.0 + offset;
+        let mut ys: Vec<f32> = (0..=lines).map(|r| r as f32 * ch).collect();
+        let mut any = false;
+        // Un hueco antes de la fila `from` (todo lo de debajo baja).
+        let mut add = |ys: &mut Vec<f32>, from: usize, gap: f32| {
+            if gap >= 0.5 && from < lines {
+                any = true;
+                for y in &mut ys[from..] {
+                    *y += gap;
+                }
+            }
+        };
+        let anchors = blocks::anchors(term, Line(-offset), bottom);
+        for (k, a) in anchors.iter().enumerate() {
+            if !bs.styled(a.id) {
+                continue;
+            }
+            let start = (a.line.0 + offset) as usize;
+            // Sobre la ruta, si hay algo encima a la vista.
+            if start > 0 {
+                add(&mut ys, start, gaps.above);
+            }
+            // La ruta ocupa más de una fila si no cabe en una: el hueco va tras la última.
+            let mut l = a.line;
+            while l < bottom && blocks::line_anchor(term, l + 1) == Some(a.id) {
+                l += 1;
+            }
+            let path_end = (l.0 + offset) as usize;
+            add(&mut ys, path_end + 1, gaps.path);
+            // Antes de la salida: tras la última fila del comando, si ya se ejecutó y debajo hay
+            // salida (o va a haberla: el cursor está ahí). Sin salida (`cd`) no hay hueco.
+            let started = bs.info(a.id).is_some_and(|i| i.started.is_some());
+            if gaps.output >= 0.5 && started {
+                let next = anchors
+                    .get(k + 1)
+                    .map_or(lines, |n| (n.line.0 + offset) as usize)
+                    .min(lines);
+                let mut cmd_end = path_end + 1;
+                let mut r = path_end + 1;
+                while r < next && blocks::line_has(term, line(r), b'c', a.id) {
+                    cmd_end = r;
+                    r += 1;
+                }
+                let out = cmd_end + 1;
+                let used = out as i32 <= cursor || !term.grid()[line(out)].is_clear();
+                if out < next && used {
+                    add(&mut ys, out, gaps.output);
+                }
+            }
+        }
+        if !any {
+            return Self::default();
+        }
+        // Tiene que verse hasta el cursor y lo último escrito (los programas de pantalla completa
+        // usan la pantalla alternativa, que no tiene prompts ni huecos).
+        let grid = term.grid();
+        let mut last = (0..lines)
+            .rev()
+            .find(|&r| !grid[Line(r as i32 - offset)].is_clear())
+            .unwrap_or(0);
+        let cursor = grid.cursor.point.line.0 + offset;
+        if (0..lines as i32).contains(&cursor) {
+            last = last.max(cursor as usize);
+        }
+        let mut first = 0;
+        let over = ys[last + 1] - room;
+        if over > 0.0 {
+            // Filas enteras: la primera que se dibuja empieza justo arriba.
+            first = ys.partition_point(|&y| y < over).min(last);
+            let shift = ys[first];
+            for y in &mut ys {
+                *y -= shift;
+            }
+        }
+        Self { ys, first }
+    }
+
+    /// Borde superior de la fila `row` respecto a `TermView::y`.
+    pub fn y(&self, row: i32, ch: f32) -> f32 {
+        let Some(last) = self.ys.len().checked_sub(1) else {
+            return row as f32 * ch;
+        };
+        let r = row.clamp(0, last as i32);
+        self.ys[r as usize] + (row - r) as f32 * ch
+    }
+
+    /// Fila del viewport a la altura `y` (respecto a `TermView::y`). El hueco cuenta como la fila
+    /// de encima (la ruta).
+    pub fn row_at(&self, y: f32, ch: f32, lines: usize) -> usize {
+        let max = lines.saturating_sub(1);
+        if self.ys.is_empty() {
+            return ((y / ch).max(0.0) as usize).min(max);
+        }
+        self.ys
+            .partition_point(|&t| t <= y)
+            .saturating_sub(1)
+            .clamp(self.first.min(max), max)
+    }
 }
 
 /// `bs`: bloques de la pestaña, para dar estilo al prompt de Garbo (ver `draw_prompts`).
@@ -955,7 +1224,7 @@ pub fn draw_underline<T: EventListener>(
     let t = (1.5 * scale).round().max(1.0);
     for l in start.line.0..=end.line.0 {
         let row = l + off;
-        if row < 0 || row >= v.lines as i32 {
+        if !v.shows(row) {
             continue;
         }
         let a = if l == start.line.0 { start.column.0 } else { 0 };
@@ -964,7 +1233,7 @@ pub fn draw_underline<T: EventListener>(
         } else {
             cols
         };
-        let y = v.y + row as f32 * m.height + m.underline_pos.min(m.height - t);
+        let y = v.row_y(row, m.height) + m.underline_pos.min(m.height - t);
         p.rect(
             v.x + a as f32 * m.width,
             y.round(),
@@ -995,9 +1264,7 @@ pub fn draw_terminal<T: EventListener>(
 
     let cursor = content.cursor;
     let cursor_row = cursor.point.line.0 + offset;
-    let show_cursor = v.cursor_on
-        && cursor.shape != CursorShape::Hidden
-        && (0..v.lines as i32).contains(&cursor_row);
+    let show_cursor = v.cursor_on && cursor.shape != CursorShape::Hidden && v.shows(cursor_row);
     let block_cursor = show_cursor && v.focused && cursor.shape == CursorShape::Block;
 
     // Búsqueda: coincidencias en amarillo suave; la actual, en amarillo.
@@ -1008,7 +1275,7 @@ pub fn draw_terminal<T: EventListener>(
     let mut run: Option<(i32, f32, f32, Rgb)> = None;
     let flush = |p: &mut Painter, run: &mut Option<(i32, f32, f32, Rgb)>| {
         if let Some((row, x0, x1, c)) = run.take() {
-            p.rect(x0, v.y + row as f32 * chh, x1 - x0, chh, c, 1.0);
+            p.rect(x0, v.row_y(row, chh), x1 - x0, chh, c, 1.0);
         }
     };
 
@@ -1025,7 +1292,7 @@ pub fn draw_terminal<T: EventListener>(
     for indexed in content.display_iter {
         let point = indexed.point;
         let row = point.line.0 + offset;
-        if row < 0 || row >= v.lines as i32 {
+        if !v.shows(row) {
             continue;
         }
         let cell = indexed.cell;
@@ -1043,7 +1310,7 @@ pub fn draw_terminal<T: EventListener>(
         }
         let wide = flags.contains(Flags::WIDE_CHAR);
         let x = v.x + point.column.0 as f32 * cw;
-        let y = v.y + row as f32 * chh;
+        let y = v.row_y(row, chh);
         let w = if wide { 2.0 * cw } else { cw };
 
         let mut fg = resolve(cell.fg, theme, colors);
@@ -1213,7 +1480,7 @@ pub fn draw_terminal<T: EventListener>(
     // Cursor (los modos no-bloque o sin foco se dibujan encima)
     if show_cursor && !block_cursor {
         let x = v.x + cursor.point.column.0 as f32 * cw;
-        let y = v.y + cursor_row as f32 * chh;
+        let y = v.row_y(cursor_row, chh);
         let wide = term.grid()[cursor.point].flags.contains(Flags::WIDE_CHAR);
         let w = if wide { 2.0 * cw } else { cw };
         let t = (m.stroke * 2.0).max(2.0);
@@ -1286,14 +1553,23 @@ pub fn draw_blocks<T: EventListener>(
             None if Some(a.id) == bs.current => cursor_line,
             None => bottom,
         };
-        let start_row = (a.line.0 + offset).max(0);
+        let first = v.rows.first as i32;
+        let start_row = (a.line.0 + offset).max(first);
         let end_row = (end_line.0 + offset).min(lines - 1);
         if end_row < start_row {
             continue;
         }
-        let y0 = v.y + start_row as f32 * ch;
-        let y1 = v.y + (end_row + 1) as f32 * ch;
-        let starts_here = a.line >= top;
+        let y0 = v.row_y(start_row, ch);
+        let y1 = v.row_y(end_row + 1, ch);
+        let starts_here = a.line.0 + offset >= first;
+        // La línea entre bloques va en medio del hueco sobre la ruta (`Style::block_gap`), no
+        // pegada a la ruta: así el espacio queda a los dos lados.
+        let above = if start_row > first {
+            (y0 - v.row_y(start_row - 1, ch) - ch).max(0.0)
+        } else {
+            0.0
+        };
+        let sep_y = (y0 - above / 2.0).round();
         let info = bs.info(a.id);
         let status = info.map_or(Status::Idle, |i| i.status());
         let is_sel = selected == Some(a.id);
@@ -1325,8 +1601,8 @@ pub fn draw_blocks<T: EventListener>(
         };
         match style.blocks {
             Blocks::Classic => {
-                if starts_here && start_row > 0 {
-                    p.rect(v.x, y0, width - 2.0 * (v.x - span.0), line_w, fg, 0.10);
+                if starts_here && start_row > first {
+                    p.rect(v.x, sep_y, width - 2.0 * (v.x - span.0), line_w, fg, 0.10);
                 }
                 let bar = match status {
                     _ if is_sel => Some((theme.accent, 1.0)),
@@ -1375,15 +1651,15 @@ pub fn draw_blocks<T: EventListener>(
                 let (c, a) = if failed { (err, 0.13) } else { (fg, 0.06) };
                 p.rect(span.0, y0, width, ch, c, a);
             }
-            Blocks::Separator if starts_here && start_row > 0 => {
-                p.rect(span.0, y0, width, line_w, fg, 0.12);
+            Blocks::Separator if starts_here && start_row > first => {
+                p.rect(span.0, sep_y, width, line_w, fg, 0.12);
             }
-            Blocks::Dashed if starts_here && start_row > 0 => {
+            Blocks::Dashed if starts_here && start_row > first => {
                 let (dash, step) = ((6.0 * s).round(), (11.0 * s).round());
                 let x_end = v.x + cols as f32 * m.width;
                 let mut x = v.x;
                 while x < x_end {
-                    p.rect(x, y0, dash.min(x_end - x), line_w, fg, 0.26);
+                    p.rect(x, sep_y, dash.min(x_end - x), line_w, fg, 0.26);
                     x += step;
                 }
             }
@@ -1695,6 +1971,67 @@ fn draw_special(p: &mut Painter, c: char, x: f32, y: f32, w: f32, h: f32, fg: Rg
 mod tests {
     use super::*;
 
+    /// El hueco bajo la ruta baja lo de debajo; si no cabe, se ocultan filas enteras por arriba y
+    /// el cursor sigue a la vista. El ratón cae en la fila que se ve.
+    #[test]
+    fn hueco_entre_la_ruta_y_el_comando() {
+        let cfg = crate::config::Config::default();
+        let s = crate::look::Sample::new(&cfg, 80);
+        let (ch, lines) = (20.0, s.lines);
+        let cur = s.term.grid().cursor.point.line.0;
+        use crate::style::Gaps;
+        let path = |g: f32| Gaps {
+            path: g,
+            ..Gaps::default()
+        };
+        let none = Rows::layout(&s.term, &s.blocks, lines, ch, path(0.0), f32::INFINITY);
+        assert_eq!(none, Rows::default());
+        assert_eq!(none.y(3, ch), 60.0);
+        assert_eq!(none.row_at(61.0, ch, lines), 3);
+
+        let r = Rows::layout(&s.term, &s.blocks, lines, ch, path(8.0), f32::INFINITY);
+        assert_eq!(r.first, 0);
+        // La muestra empieza con la ruta del primer prompt: el comando, 8 px más abajo.
+        assert_eq!((r.y(0, ch), r.y(1, ch)), (0.0, 28.0));
+        assert_eq!(r.row_at(24.0, ch, lines), 0, "el hueco es de la ruta");
+        assert_eq!(r.row_at(28.0, ch, lines), 1);
+        // Tres comandos y el prompt actual: cuatro huecos por encima de lo que se escribe.
+        assert_eq!(r.y(cur, ch), cur as f32 * ch + 4.0 * 8.0);
+        assert_eq!(r.row_at(r.y(cur, ch) + 1.0, ch, lines), cur as usize);
+
+        // Justo el alto que hacía falta sin hueco: no cabe y se ocultan las dos primeras filas.
+        let room = (cur + 1) as f32 * ch;
+        let tight = Rows::layout(&s.term, &s.blocks, lines, ch, path(8.0), room);
+        assert_eq!(tight.first, 2);
+        assert_eq!(tight.y(2, ch), 0.0);
+        assert!(tight.y(cur + 1, ch) <= room);
+        assert_eq!(
+            tight.row_at(-5.0, ch, lines),
+            2,
+            "lo oculto no se puede señalar"
+        );
+        // Sobre la ruta y antes de la salida. La muestra: ruta (0), "git status" (1) y su salida
+        // desde la fila 2; el segundo bloque empieza en `b`.
+        let g = Gaps {
+            above: 4.0,
+            path: 0.0,
+            output: 6.0,
+        };
+        let r = Rows::layout(&s.term, &s.blocks, lines, ch, g, f32::INFINITY);
+        assert_eq!(r.y(1, ch), ch, "nada sobre la primera ruta ni bajo ella");
+        assert_eq!(r.y(2, ch) - r.y(1, ch), ch + 6.0, "antes de la salida");
+        let all = crate::blocks::anchors(&s.term, Line(0), Line(lines as i32 - 1));
+        let b = all[1].line.0;
+        assert_eq!(
+            r.y(b, ch) - r.y(b - 1, ch),
+            ch + 4.0,
+            "sobre la ruta del segundo"
+        );
+        // El prompt actual (sin ejecutar) no lleva hueco antes de la salida.
+        let cur = all.last().unwrap().line.0;
+        assert_eq!(r.y(cur + 2, ch) - r.y(cur + 1, ch), ch);
+    }
+
     /// Banco de medida del coste de construir un fotograma: prompts, rejilla y bloques (CPU, sin
     /// ventana).
     /// `cargo test --release bench_ -- --ignored --nocapture --test-threads=1`
@@ -1774,6 +2111,7 @@ mod tests {
                 lines,
                 focused: true,
                 cursor_on: true,
+                rows: Rows::default(),
             };
             let (mut out, mut fg) = (Vec::new(), Vec::new());
             let mut times = Vec::new();

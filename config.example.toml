@@ -49,6 +49,12 @@ min_work_secs = 5        # solo si trabajó al menos estos segundos
 sound = true
 blocked = true           # avisar también cuando un agente espera tu permiso o tu respuesta
 
+# Pestañas (solo en Linux de momento). También en Ajustes → Pestañas.
+[tabs]
+# position = "top"       # top | bottom | left | right: borde de la ventana en el que van
+# width    = "normal"    # narrow | normal | wide | max: lo más que mide cada pestaña (o la columna, a un lado)
+# align    = "left"      # left | center: dónde va el nombre dentro de la pestaña
+
 # Forma de la interfaz (solo en Linux de momento). Cada tema trae la suya; aquí se cambia opción a
 # opción. Lo más cómodo es el editor de aspecto: Ajustes → Tema → Aspecto, o "Editar el aspecto"
 # en la paleta de comandos (Ctrl+Shift+P).
@@ -60,6 +66,9 @@ blocked = true           # avisar también cuando un agente espera tu permiso o 
 # bar        = "normal"    # compact | normal | tall
 # background = "solid"     # solid | gradient
 # radius     = 6           # radio de las esquinas en píxeles
+# block_gap  = 0           # hueco sobre la ruta (entre un bloque y el anterior), en píxeles (0-32)
+# prompt_gap = 0           # hueco entre la ruta y el comando (prompt de Garbo), en píxeles (0-32)
+# output_gap = 0           # hueco entre el comando y su salida, en píxeles (0-32)
 
 # Sobrescribe colores del tema elegido
 [colors]

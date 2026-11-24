@@ -176,6 +176,32 @@ fn codex_open_rollouts(root: &Path, pid: i32) -> Vec<PathBuf> {
     paths
 }
 
+/// Conversación principal de Codex (`rollout-…-<sesión>.jsonl`) que tiene abierta el proceso.
+pub(super) fn codex_rollout(root: &Path, pid: i32, session: &str) -> Option<PathBuf> {
+    codex_open_rollouts(root, pid).into_iter().find(|path| {
+        path.file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| n.contains(session))
+    })
+}
+
+/// Texto de un mensaje del usuario en una línea de Codex (sin los bloques que añade el propio
+/// Codex, como `<environment_context>`).
+pub(super) fn codex_user_text(line: &str) -> Option<String> {
+    if !line.contains("\"role\":\"user\"") {
+        return None;
+    }
+    let v: Value = serde_json::from_str(line).ok()?;
+    let p = v.get("payload")?;
+    if v["type"] != "response_item" || p["type"] != "message" || p["role"] != "user" {
+        return None;
+    }
+    p["content"].as_array()?.iter().find_map(|c| {
+        let t = c["text"].as_str()?;
+        (c["type"] == "input_text" && !t.trim_start().starts_with('<')).then(|| t.to_string())
+    })
+}
+
 fn codex_session(root: &Path, pid: i32) -> Option<String> {
     let mut roots = codex_open_rollouts(root, pid)
         .into_iter()

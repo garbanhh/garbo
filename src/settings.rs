@@ -13,6 +13,11 @@ pub enum Field {
     /// Abre el editor de aspecto (solo donde `style::ENABLED`).
     Appearance,
     Theme,
+    /// Pestañas (solo donde `tabs::ENABLED`): borde, ancho, nombre y cambiar el nombre.
+    TabsPosition,
+    TabsWidth,
+    TabsAlign,
+    RenameTab,
     FontFamily,
     FontSize,
     LineHeight,
@@ -62,6 +67,8 @@ pub enum Change {
     Style,
     /// Abrir el editor de aspecto.
     OpenLook,
+    /// Cambiar el nombre de la pestaña actual (cierra Ajustes).
+    RenameTab,
 }
 
 /// Categorías (columna izquierda) y sus opciones (derecha).
@@ -69,6 +76,15 @@ const CATEGORIES: &[(&str, &[(Field, &str)])] = &[
     (
         "Tema",
         &[(Field::Appearance, "Aspecto"), (Field::Theme, "Tema")],
+    ),
+    (
+        "Pestañas",
+        &[
+            (Field::TabsPosition, "Posición"),
+            (Field::TabsWidth, "Ancho"),
+            (Field::TabsAlign, "Nombre"),
+            (Field::RenameTab, "Cambiar el nombre"),
+        ],
     ),
     (
         "Texto",
@@ -134,7 +150,13 @@ const CATEGORIES: &[(&str, &[(Field, &str)])] = &[
 
 /// ¿Se ofrece la opción en este sistema?
 fn visible(f: Field) -> bool {
-    f != Field::Appearance || crate::style::ENABLED
+    match f {
+        Field::Appearance => crate::style::ENABLED,
+        Field::TabsPosition | Field::TabsWidth | Field::TabsAlign | Field::RenameTab => {
+            crate::tabs::ENABLED
+        }
+        _ => true,
+    }
 }
 
 fn fields() -> Vec<Field> {
@@ -143,6 +165,17 @@ fn fields() -> Vec<Field> {
         .flat_map(|(_, rows)| rows.iter().map(|r| r.0))
         .filter(|f| visible(*f))
         .collect()
+}
+
+/// La opción siguiente (o anterior) de una lista, dando la vuelta.
+fn cycle_opt<T: Copy + PartialEq>(all: &[T], cur: T, d: i32) -> T {
+    let pos = all.iter().position(|x| *x == cur).unwrap_or(0) as i32;
+    all[(pos + d).rem_euclid(all.len() as i32) as usize]
+}
+
+/// Categoría con alguna opción en este sistema (en Windows, Pestañas no tiene ninguna).
+fn cat_visible(cat: usize) -> bool {
+    cat_len(cat) > 0
 }
 
 fn cat_len(cat: usize) -> usize {
@@ -311,9 +344,20 @@ impl Settings {
     pub fn nav(&mut self, n: Nav, cfg: &mut Config) -> Change {
         let n_cats = CATEGORIES.len();
         let on_theme = self.field(self.selected) == Field::Theme;
+        // La siguiente (o anterior) con opciones, dando la vuelta.
+        let step = |from: usize, d: usize| {
+            let mut c = from;
+            for _ in 0..n_cats {
+                c = (c + d) % n_cats;
+                if cat_visible(c) {
+                    break;
+                }
+            }
+            c
+        };
         match n {
-            Nav::NextCategory => self.set_cat((self.cat + 1) % n_cats),
-            Nav::PrevCategory => self.set_cat((self.cat + n_cats - 1) % n_cats),
+            Nav::NextCategory => self.set_cat(step(self.cat, 1)),
+            Nav::PrevCategory => self.set_cat(step(self.cat, n_cats - 1)),
             // En la cuadrícula de temas, ↑ ↓ cambian de fila de tarjetas.
             Nav::Up | Nav::Down if on_theme => {
                 let cur = Theme::names()
@@ -376,6 +420,10 @@ impl Settings {
             },
             Field::EditFile => "Abrir".into(),
             Field::Appearance => "Editar".into(),
+            Field::TabsPosition => cfg.tabs.position.label().into(),
+            Field::TabsWidth => cfg.tabs.width.label().into(),
+            Field::TabsAlign => cfg.tabs.align.label().into(),
+            Field::RenameTab => "Esta pestaña".into(),
             Field::NotifyTest => "Enviar".into(),
             Field::NotifyAgents => match cfg.notifications.agents {
                 NotifyWhen::Unfocused => "Si no lo veo".into(),
@@ -511,6 +559,23 @@ impl Settings {
                 Change::Restart
             }
             Field::EditFile => Change::OpenFile,
+            Field::TabsPosition => {
+                use crate::tabs::Position;
+                cfg.tabs.position = cycle_opt(Position::ALL, cfg.tabs.position, d);
+                Change::Layout
+            }
+            Field::TabsWidth => {
+                use crate::tabs::Width;
+                cfg.tabs.width = cycle_opt(Width::ALL, cfg.tabs.width, d);
+                Change::Layout
+            }
+            Field::TabsAlign => {
+                use crate::tabs::Align;
+                cfg.tabs.align = cycle_opt(Align::ALL, cfg.tabs.align, d);
+                Change::Redraw
+            }
+            Field::RenameTab if dir == 0 => Change::RenameTab,
+            Field::RenameTab => Change::None,
             Field::Appearance if dir == 0 => Change::OpenLook,
             Field::Appearance => Change::None,
             Field::NotifyAgents => {
@@ -574,7 +639,9 @@ impl Settings {
 
         let cat_h = (36.0 * s).round();
         let cats = (0..CATEGORIES.len())
-            .map(|c| (c, y + (64.0 * s).round() + c as f32 * cat_h, cat_h))
+            .filter(|&c| cat_visible(c))
+            .enumerate()
+            .map(|(k, c)| (c, y + (64.0 * s).round() + k as f32 * cat_h, cat_h))
             .collect();
 
         // Elementos de la categoría visible.
@@ -908,6 +975,12 @@ impl Settings {
                 Field::Decorations if self.restart_note => "Se aplica al reiniciar".into(),
                 Field::GarboPrompt if self.tabs_note => "Se aplica a las pestañas nuevas".into(),
                 Field::Appearance => "Pestañas, prompt, bloques, botones…".into(),
+                Field::TabsPosition => "Arriba, abajo o a un lado".into(),
+                Field::TabsWidth if cfg.tabs.position.vertical() => {
+                    "Ancho de la columna de pestañas".into()
+                }
+                Field::TabsWidth => "Lo más que mide cada pestaña".into(),
+                Field::RenameTab => "O doble clic en la pestaña".into(),
                 _ => String::new(),
             };
             if note.is_empty() {
@@ -939,7 +1012,10 @@ impl Settings {
                 let t = self.value_text(f, cfg);
                 let tw = p.ui_measure(&t);
                 p.ui_text_in(right - tw, ry, rh, &t, dimc, tw + 2.0);
-            } else if matches!(f, Field::EditFile | Field::NotifyTest | Field::Appearance) {
+            } else if matches!(
+                f,
+                Field::EditFile | Field::NotifyTest | Field::Appearance | Field::RenameTab
+            ) {
                 let t = &self.value_text(f, cfg);
                 let tw = p.ui_measure(t);
                 p.ui_text_in(right - tw - 12.0 * s, ry, rh, t, theme.accent, tw + 2.0);
@@ -1274,13 +1350,53 @@ mod tests {
     }
 
     #[test]
+    fn opciones_de_las_pestanas() {
+        if !crate::tabs::ENABLED {
+            return;
+        }
+        use crate::tabs::{Align, Position, Width};
+        let mut cfg = Config::default();
+        let mut set = Settings::with_fonts(vec![]);
+        assert_eq!(
+            set.adjust(idx(Field::TabsPosition), 1, &mut cfg),
+            Change::Layout
+        );
+        assert_eq!(cfg.tabs.position, Position::Bottom);
+        set.adjust(idx(Field::TabsPosition), -1, &mut cfg);
+        set.adjust(idx(Field::TabsPosition), -1, &mut cfg);
+        assert_eq!(cfg.tabs.position, Position::Right, "da la vuelta");
+        assert_eq!(set.value_text(Field::TabsPosition, &cfg), "Derecha");
+        assert_eq!(
+            set.adjust(idx(Field::TabsWidth), 1, &mut cfg),
+            Change::Layout
+        );
+        assert_eq!(cfg.tabs.width, Width::Wide);
+        assert_eq!(
+            set.adjust(idx(Field::TabsAlign), 1, &mut cfg),
+            Change::Redraw
+        );
+        assert_eq!(cfg.tabs.align, Align::Center);
+        // "Cambiar el nombre" es un botón: solo con Intro o clic.
+        assert_eq!(set.adjust(idx(Field::RenameTab), 1, &mut cfg), Change::None);
+        assert_eq!(
+            set.adjust(idx(Field::RenameTab), 0, &mut cfg),
+            Change::RenameTab
+        );
+    }
+
+    #[test]
     fn categorias_y_teclado() {
         let mut cfg = Config::default();
         let mut set = Settings::with_fonts(vec![]);
         assert_eq!(CATEGORIES[set.cat].0, "Tema");
         // Tab recorre las categorías y elige su primera opción.
         set.nav(Nav::NextCategory, &mut cfg);
-        assert_eq!(set.field(set.selected), Field::FontFamily);
+        let next = if crate::tabs::ENABLED {
+            Field::TabsPosition
+        } else {
+            Field::FontFamily
+        };
+        assert_eq!(set.field(set.selected), next);
         set.nav(Nav::PrevCategory, &mut cfg);
         set.nav(Nav::PrevCategory, &mut cfg);
         assert_eq!(CATEGORIES[set.cat].0, "Actualizaciones");
@@ -1308,7 +1424,8 @@ mod tests {
     #[test]
     fn rueda_desplaza_sin_cambiar_la_seleccion() {
         let mut set = Settings::with_fonts(vec![]);
-        set.set_cat(2); // Terminal: 4 filas
+        let terminal = CATEGORIES.iter().position(|c| c.0 == "Terminal").unwrap();
+        set.set_cat(terminal); // 4 filas
         let (w, h, top, s) = (900.0, 330.0, 40.0, 1.0);
         set.layout(w, h, top, s);
         assert_eq!(set.first, 0);

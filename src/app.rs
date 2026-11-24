@@ -9,7 +9,7 @@ use crate::palette::{Item, Palette};
 use crate::renderer::{Instance, Renderer};
 use crate::terminal::{term_config, Tab, UserEvent};
 use crate::ui::{self, TabBar, TabHit};
-use crate::view::{self, Painter, TermView};
+use crate::view::{self, Painter, Rows, TermView};
 use alacritty_terminal::event::WindowSize;
 use alacritty_terminal::grid::{Dimensions, Scroll};
 use alacritty_terminal::term::TermMode;
@@ -89,6 +89,12 @@ pub struct State {
     pub mouse_buttons: u8,
     pub last_click: (Instant, u8),
     pub hover: Option<TabHit>,
+    /// Nombre de la pestaña bajo el ratón, que se desplaza si no cabe.
+    pub marquee: crate::tabs::Marquee,
+    /// Pestaña a la que se le está cambiando el nombre.
+    pub rename: Option<crate::tabs::Rename>,
+    /// Último clic en una pestaña (para el doble clic que le cambia el nombre).
+    pub tab_click: Option<(usize, Instant)>,
     pub cursor_icon: winit::window::CursorIcon,
     pub palette: Option<Palette>,
     /// Búsqueda en el historial (Ctrl+Shift+F), de la pestaña `Search::tab`.
@@ -158,6 +164,22 @@ pub struct PaneGeo {
     pub ws: WindowSize,
 }
 
+impl PaneGeo {
+    /// Dónde va cada fila del terminal del panel (ver `view::Rows`). `gaps`: huecos de los
+    /// bloques, en píxeles físicos.
+    pub fn rows<T>(
+        &self,
+        term: &alacritty_terminal::Term<T>,
+        bs: &blocks::BlockState,
+        ch: f32,
+        gaps: crate::style::Gaps,
+    ) -> Rows {
+        let pad = self.y - self.rect[1];
+        let lines = self.ws.num_lines as usize;
+        Rows::layout(term, bs, lines, ch, gaps, self.rect[3] - 2.0 * pad)
+    }
+}
+
 impl App {
     pub fn new(cfg: Config, proxy: EventLoopProxy<UserEvent>) -> Self {
         let theme = cfg.theme();
@@ -197,6 +219,9 @@ impl App {
             mouse_buttons: 0,
             last_click: (now, 0),
             hover: None,
+            marquee: crate::tabs::Marquee::default(),
+            rename: None,
+            tab_click: None,
             cursor_icon: winit::window::CursorIcon::Default,
             palette: None,
             search: None,
@@ -204,7 +229,7 @@ impl App {
             menu_auto: None,
             settings: None,
             look: None,
-            look_ratio: 0.55,
+            look_ratio: 0.36,
             sample: None,
             stats: None,
             update: None,
@@ -234,17 +259,25 @@ impl App {
         if std::env::var_os("GARBO_OPEN_STATS").is_some() {
             self.toggle_stats();
         }
-        // Igual con el editor de aspecto: "sample" = con la sesión de muestra; ",N" = foco en la
-        // fila N de opciones.
+        // Igual con el editor de aspecto: "sample" = con la sesión de muestra; ",N" = la sección N
+        // del panel.
         if let Ok(v) = std::env::var("GARBO_OPEN_LOOK") {
             self.open_look();
             if let Some(look) = self.st().look.as_mut() {
                 let mut parts = v.split(',');
                 look.sample = parts.next() == Some("sample");
                 if let Some(n) = parts.next().and_then(|n| n.parse::<usize>().ok()) {
-                    look.focus = n.min(crate::look::GROUPS.len() - 1);
+                    look.set_section(n);
                 }
             }
+        }
+        // Herramienta de desarrollo: varias pestañas al arrancar (capturas de la barra).
+        let extra_tabs = std::env::var("GARBO_OPEN_TABS")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .unwrap_or(1);
+        for _ in 1..extra_tabs.min(12) {
+            self.new_tab();
         }
         crate::update::ENABLED.store(self.cfg.check_updates, std::sync::atomic::Ordering::Relaxed);
         if self.cfg.check_updates {
@@ -303,20 +336,39 @@ impl App {
             TabBar::layout(
                 n_tabs,
                 w,
+                h,
                 st.scale,
                 integrated,
                 st.update.is_some(),
                 &self.theme.style,
+                self.cfg.tabs.effective(),
+                st.stats.is_some(),
             )
         });
         let top = tab_bar.as_ref().map_or(0.0, |t| t.height);
+        // Las pestañas fuera de la barra de arriba se quedan con su franja o su columna (también
+        // con las estadísticas abiertas: así los terminales no cambian de tamaño).
+        let (left, right, bottom) = match tab_bar.as_ref() {
+            Some(tb) => {
+                use crate::tabs::Position;
+                let [_, _, zw, zh] = tb.zone;
+                match tb.at {
+                    Position::Top => (0.0, 0.0, 0.0),
+                    Position::Bottom => (0.0, 0.0, zh),
+                    Position::Left => (zw, 0.0, 0.0),
+                    Position::Right => (0.0, zw, 0.0),
+                }
+            }
+            None => (0.0, 0.0, 0.0),
+        };
         let panel_w = if st.panel.visible() {
             crate::panel::PanelState::width(st.scale, w)
         } else {
             0.0
         };
-        let panel = (panel_w > 0.0).then_some((w - panel_w, top, panel_w, h - top));
-        let area = [0.0, top, w - panel_w, h - top];
+        let inner_h = (h - top - bottom).max(1.0);
+        let panel = (panel_w > 0.0).then_some((w - right - panel_w, top, panel_w, inner_h));
+        let area = [left, top, (w - left - right - panel_w).max(1.0), inner_h];
         let gap = crate::panes::gap(st.scale);
         let (panes, dividers) = match st.groups.get(st.group) {
             Some(g) => (
@@ -539,6 +591,10 @@ impl App {
                 }
                 None => {
                     st.groups.remove(g);
+                    // El campo del nombre apuntaba a esta pestaña o a una que se ha movido.
+                    if st.rename.as_ref().is_some_and(|r| r.group >= g) {
+                        st.rename = None;
+                    }
                     if g < st.group || st.group >= st.groups.len() {
                         st.group = st.group.saturating_sub(1);
                     }
@@ -612,9 +668,53 @@ impl App {
 
     pub fn update_title(&mut self) {
         let st = self.st();
+        let named = st.groups.get(st.group).and_then(|g| g.name.clone());
         if let Some(tab) = st.tabs.get(st.active) {
-            st.window.set_title(&format!("{} — Garbo", tab.label()));
+            let label = named.as_deref().unwrap_or(tab.label());
+            st.window.set_title(&format!("{label} — Garbo"));
         }
+    }
+
+    /// Nombre que se ve en la pestaña `g` de la barra: el puesto a mano o el automático.
+    pub fn group_label(&self, g: usize) -> Option<String> {
+        let st = self.st.as_ref()?;
+        let group = st.groups.get(g)?;
+        if let Some(name) = &group.name {
+            return Some(name.clone());
+        }
+        st.tabs
+            .iter()
+            .find(|t| t.id == group.focus)
+            .map(|t| t.label().to_string())
+    }
+
+    /// Empieza a cambiar el nombre de la pestaña `g` de la barra (campo de texto sobre ella).
+    pub fn start_rename(&mut self, g: usize) {
+        if !crate::tabs::ENABLED {
+            return;
+        }
+        let Some(current) = self.group_label(g) else {
+            return;
+        };
+        let st = self.st();
+        st.palette = None;
+        st.menu = None;
+        st.settings = None;
+        st.rename = Some(crate::tabs::Rename::new(g, &current));
+        st.window.request_redraw();
+    }
+
+    /// Termina de cambiar el nombre: lo guarda (`keep`) o lo deja como estaba.
+    pub fn finish_rename(&mut self, keep: bool) {
+        let st = self.st();
+        let Some(rn) = st.rename.take() else { return };
+        if keep {
+            if let Some(g) = st.groups.get_mut(rn.group) {
+                g.name = rn.result();
+            }
+        }
+        st.window.request_redraw();
+        self.update_title();
     }
 
     pub fn set_font_pt(&mut self, pt: f32) {
@@ -933,6 +1033,10 @@ impl App {
                 };
                 st.window.request_redraw();
             }
+            Action::RenameTab => {
+                let g = self.st().group;
+                self.start_rename(g);
+            }
             Action::Appearance => {
                 if self.st().look.is_some() {
                     self.close_look();
@@ -1055,7 +1159,7 @@ impl App {
                 if let Some(agent) = agent.filter(|_| crate::notify::wanted(ncfg, viewing)) {
                     notice = Some(crate::notify::notice_text(
                         agent.name,
-                        tab.label(),
+                        tab.agent_task().unwrap_or(tab.label()),
                         &dir,
                         worked,
                     ));
@@ -1071,7 +1175,7 @@ impl App {
                         agent.name,
                         kind,
                         tab.session.detail.as_deref(),
-                        tab.label(),
+                        tab.agent_task().unwrap_or(tab.label()),
                         &dir,
                     ));
                 }
@@ -1133,6 +1237,14 @@ impl App {
         // Despliegue de una fila del panel: fotogramas solo mientras dura la animación.
         if st.panel.animating(now) {
             push(now + std::time::Duration::from_millis(12));
+        }
+        // Lista del editor de aspecto moviéndose tras la rueda o el teclado.
+        if st.look.as_ref().is_some_and(|l| l.animating()) {
+            push(now + std::time::Duration::from_millis(16));
+        }
+        // Nombre de pestaña que se desplaza: solo con el ratón encima y si no cabe.
+        if let Some(t) = st.marquee.next_frame(now) {
+            push(t);
         }
         next
     }
@@ -1270,6 +1382,11 @@ impl App {
             }
             Change::OpenLook => {
                 self.open_look();
+                return false;
+            }
+            Change::RenameTab => {
+                let g = self.st().group;
+                self.start_rename(g);
                 return false;
             }
             Change::Fonts => {
@@ -1480,10 +1597,10 @@ impl App {
                 let lead = panes.iter().max_by_key(rank).unwrap_or(focus);
                 let n = panes.len();
                 Some(ui::TabView {
-                    label: if n > 1 {
-                        format!("{} (+{})", focus.label(), n - 1)
-                    } else {
-                        focus.label().to_string()
+                    label: match &g.name {
+                        Some(name) => name.clone(),
+                        None if n > 1 => format!("{} (+{})", focus.label(), n - 1),
+                        None => focus.label().to_string(),
                     },
                     exited: focus.exited,
                     agent: lead.session.agent,
@@ -1504,42 +1621,23 @@ impl App {
         let top = geo.tab_bar.as_ref().map_or(0.0, |t| t.height);
         let m = st.glyphs.fonts.metrics;
         let pad = (cfg.window.padding * st.scale).round();
-        // Editor de aspecto: el terminal arriba (o la muestra) y el panel debajo.
+        // Editor de aspecto: el panel a la derecha y, a la izquierda, el terminal (o la muestra,
+        // del ancho que queda a la vista).
         let look = st
             .look
             .as_ref()
             .filter(|_| !stats_open)
-            .map(|l| (l.regions(h, top, st.scale), l.sample));
+            .map(|l| (l.regions(w, st.scale), l.sample));
         let showing_sample = look.is_some_and(|(_, sample)| sample);
-        if showing_sample {
-            let cols = (((geo.area[2] - 2.0 * pad) / m.width).floor().max(20.0)) as usize;
+        if let Some((rg, true)) = look {
+            let cols = (((rg.x - geo.area[0] - 2.0 * pad) / m.width)
+                .floor()
+                .max(20.0)) as usize;
             if st.sample.as_ref().is_none_or(|s| s.cols != cols) {
                 st.sample = Some(crate::look::Sample::new(cfg, cols));
             }
         }
-        // Lo que se sube el terminal para que la zona del cursor quede a la vista sobre el panel:
-        // filas enteras, para que la primera visible empiece justo bajo la barra.
-        let lift = |y0: f32, cursor_row: i32| -> f32 {
-            look.map_or(0.0, |(rg, _)| {
-                let want = y0 + (cursor_row as f32 + 2.5) * m.height;
-                let over = (want - (rg.term_y + rg.term_h)).max(0.0);
-                (over / m.height).ceil() * m.height
-            })
-        };
-        let shift = if look.is_none() || showing_sample {
-            0.0
-        } else {
-            geo.panes
-                .iter()
-                .find(|p| p.idx == st.active)
-                .and_then(|pane| {
-                    let tab = st.tabs.get(pane.idx)?;
-                    let term = tab.term.lock();
-                    let row = term.grid().cursor.point.line.0 + term.grid().display_offset() as i32;
-                    Some(lift(pane.y, row))
-                })
-                .unwrap_or(0.0)
-        };
+        let gaps = theme.style.gaps(st.scale);
 
         for _attempt in 0..2 {
             st.out.clear();
@@ -1578,18 +1676,31 @@ impl App {
                     st.update.as_ref(),
                     toggles,
                     phase,
+                    &mut ui::TabsExtra {
+                        marquee: &mut st.marquee,
+                        rename: st.rename.as_ref(),
+                        now,
+                    },
                 );
             }
             let multi = geo.panes.len() > 1 && !stats_open && !showing_sample;
             if let (true, Some(sample)) = (showing_sample, st.sample.as_ref()) {
-                let row = sample.term.grid().cursor.point.line.0;
                 let y0 = top + pad;
+                let rows = Rows::layout(
+                    &sample.term,
+                    &sample.blocks,
+                    sample.lines,
+                    m.height,
+                    gaps,
+                    f32::INFINITY,
+                );
                 let v = TermView {
                     x: geo.area[0] + pad,
-                    y: y0 - lift(y0, row),
+                    y: y0,
                     lines: sample.lines,
                     focused: st.focused,
                     cursor_on: st.cursor_on || !st.focused,
+                    rows,
                 };
                 let (term, bs) = (&sample.term, &sample.blocks);
                 view::draw_prompts(
@@ -1616,17 +1727,18 @@ impl App {
                 };
                 let is_focus = pane.idx == st.active;
                 let term = tab.term.lock();
+                let bs = tab.blocks.lock().unwrap();
                 let v = TermView {
                     x: pane.x,
-                    y: pane.y - shift,
+                    y: pane.y,
                     lines: pane.ws.num_lines as usize,
                     focused: is_focus
                         && st.focused
                         && st.palette.is_none()
                         && st.settings.is_none(),
                     cursor_on: st.cursor_on || !st.focused,
+                    rows: pane.rows(&term, &bs, m.height, gaps),
                 };
-                let bs = tab.blocks.lock().unwrap();
                 // Rama de git para la etiqueta del prompt de Garbo (solo mientras se escribe).
                 let branch = bs
                     .idle_current()
@@ -1708,7 +1820,7 @@ impl App {
                 if let Some(search) = st.search.as_mut().filter(|s| s.tab == tab.id) {
                     p.out.append(p.fg);
                     let area_w = pane.ws.num_cols as f32 * p.metrics().width;
-                    search.draw(&mut p, theme, pane.x, pane.y - shift, area_w, st.scale);
+                    search.draw(&mut p, theme, pane.x, pane.y, area_w, st.scale);
                 }
             }
             // Con varios paneles: líneas divisorias y los que no tienen el foco, algo atenuados.
@@ -1716,12 +1828,11 @@ impl App {
                 p.out.append(p.fg);
                 for pane in geo.panes.iter().filter(|p| p.idx != st.active) {
                     let [x, y, w, h] = pane.rect;
-                    p.rect(x, y - shift, w, h, theme.background, 0.35);
+                    p.rect(x, y, w, h, theme.background, 0.35);
                 }
                 let line = st.scale.round().max(1.0);
                 for d in &geo.dividers {
                     let [x, y, w, h] = d.rect;
-                    let y = y - shift;
                     let dragging = st.drag.as_ref().is_some_and(|g| g.0 == d.path);
                     let (c, a) = if dragging {
                         (theme.accent, 1.0)
@@ -1783,6 +1894,11 @@ impl App {
                         st.update.as_ref(),
                         toggles,
                         phase,
+                        &mut ui::TabsExtra {
+                            marquee: &mut st.marquee,
+                            rename: st.rename.as_ref(),
+                            now,
+                        },
                     );
                 }
             }
@@ -1793,27 +1909,8 @@ impl App {
                 ui::draw_palette(&mut p, theme, pal, w, h, top, st.scale);
             }
             if let Some(editor) = st.look.as_mut().filter(|_| !stats_open) {
-                // La barra de pestañas encima de lo que se subió; debajo, el panel de opciones.
+                // Encima del texto del terminal.
                 p.out.append(p.fg);
-                if shift > 0.0 || showing_sample {
-                    // El margen bajo la barra, limpio: sin medias líneas de lo que se subió.
-                    let c = ui::terminal_top(theme);
-                    p.rect(geo.area[0], top, geo.area[2], pad, c, opacity);
-                }
-                if let Some(tb) = &geo.tab_bar {
-                    tb.draw(
-                        &mut p,
-                        theme,
-                        w,
-                        &views,
-                        st.group,
-                        st.hover,
-                        st.scale,
-                        st.update.as_ref(),
-                        toggles,
-                        phase,
-                    );
-                }
                 editor.draw(&mut p, theme, cfg, w, h, top, st.scale);
             }
             if let Some(set) = st.settings.as_mut() {

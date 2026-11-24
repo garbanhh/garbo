@@ -50,10 +50,12 @@
   equipo a partir de sus sesiones.
 - **Pestañas y paneles divididos.** Las pestañas van en la barra de título y se titulan solas con
   lo que se está haciendo; cada una se puede dividir en paneles (un agente a la izquierda y las
-  pruebas a la derecha, sin tmux).
+  pruebas a la derecha, sin tmux). En Linux, además, se les cambia el nombre con doble clic, se
+  pueden poner abajo o a un lado y, con un agente, muestran lo que le pediste
+  ("Claude · Arregla el menú").
 - **A tu gusto.** Temas, fuentes, atajos y un panel de ajustes que aplica cada cambio al momento y
   lo guarda en `config.toml`. En Linux, 19 temas con forma propia y un editor de aspecto con la
-  terminal en vivo arriba y las opciones debajo.
+  terminal en vivo al lado y un dibujo de cómo queda cada opción.
 - **Enlaces y rutas con Ctrl+clic.** Abre URL y lleva los errores de compilación
   (`src/main.rs:42:5`) a tu editor, en esa línea.
 - **Búsqueda en el historial.** `Ctrl+Shift+F` resalta todas las coincidencias y, con un bloque
@@ -159,6 +161,8 @@ Todos los atajos de Garbo se cambian en la sección `[keybindings]` de la config
   Windows también entiende `src\main.rs:42:5`, `C:\…` y `Programa.cs(12,5)`; sin `$EDITOR`, abre
   los archivos en VS Code o en el Bloc de notas, y nunca ejecuta programas ni scripts.
 - El clic central pega la selección primaria; sobre una pestaña, la cierra.
+- En Linux, doble clic en una pestaña le cambia el nombre; con el ratón encima de un nombre que no
+  cabe, se desplaza solo, y más deprisa con la rueda.
 - `Shift` fuerza la selección local en programas que capturan el ratón.
 - Arrastrar un archivo a la ventana escribe su ruta.
 - La barra de pestañas mueve la ventana y con doble clic la maximiza; los bordes la redimensionan.
@@ -305,29 +309,51 @@ en el Explorador se pegan como rutas.
 
 ### Ajustes
 
-`Ctrl+,` o el botón de menú abren los ajustes, por categorías: Tema, Texto, Terminal, Completado,
-Bloques, Avisos, Ventana y Actualizaciones. Los cambios se aplican al momento y se guardan en
+`Ctrl+,` o el botón de menú abren los ajustes, por categorías: Tema, Pestañas (en Linux), Texto,
+Terminal, Completado, Bloques, Avisos, Ventana y Actualizaciones. Los cambios se aplican al momento y se guardan en
 `~/.config/garbo/config.toml` (en Windows, `%APPDATA%\garbo\config.toml`), respetando el resto del
 archivo y sus comentarios; solo se escriben los valores distintos de los de por defecto. Se manejan con el
 ratón o con el teclado (`Tab` cambia de categoría, `↑` `↓` eligen, `←` `→` cambian el valor, `Esc`
 cierra). Si el archivo tiene errores, Ajustes muestra un aviso y conserva el archivo para que
 puedas corregirlo.
 
+### Pestañas (Linux)
+
+En *Ajustes → Pestañas* (o en el editor de aspecto) se elige:
+- **Posición**: arriba (como siempre), abajo o a un lado, en una columna con el nombre entero.
+  Fuera de arriba, la barra de título se queda con los botones y el nombre de la pestaña activa.
+- **Ancho**: estrecho, normal, ancho o máximo (en una columna, su ancho).
+- **Nombre**: a la izquierda o centrado.
+- **Cambiar el nombre**: también con doble clic en la pestaña o con "Cambiar el nombre de la
+  pestaña" en la paleta. `Intro` lo guarda, `Esc` lo deja como estaba y un nombre vacío vuelve
+  al automático.
+
+Las pestañas con un agente se titulan con su nombre y lo último que le pediste, resumido
+("Claude · Quiero que se le pueda cambiar el nombre a las pestañas"). Lo leen de la conversación
+que el propio agente guarda (Claude Code y Codex): las respuestas como "sí" o "continúa" no lo
+cambian. Un nombre que no cabe se desplaza con el ratón encima, y más deprisa con la rueda.
+
 ### Aspecto (Linux)
 
-*Ajustes → Tema → Aspecto*, o "Editar el aspecto" en la paleta de comandos, parte la ventana en
-dos: arriba la terminal en vivo y debajo las opciones, con una barra divisoria que se arrastra para
-repartir el alto. Cada tema trae su propia forma y se puede cambiar opción a opción: estilo de las
-pestañas, etiqueta de la carpeta del prompt, marcas de los bloques, cursor, botones de ventana,
-alto de la barra, fondo liso o con degradado, radio de las esquinas y opacidad. Un punto señala lo
-que trae el tema. *Ver con un ejemplo* muestra una sesión de muestra (con un comando que falla) en
-lugar de la terminal; *Mantener mi forma* conserva la forma al probar los colores de otro tema, y
-*Forma del tema* deshace los cambios. Con el teclado, `↑` `↓` cambian de fila, `←` `→` de opción y
-`Esc` cierra. La terminal no cambia de tamaño mientras se edita: los programas abiertos no se
-enteran.
+*Ajustes → Tema → Aspecto*, o "Editar el aspecto" en la paleta de comandos, abre un panel a la
+derecha con la terminal en vivo al lado. El panel tiene cuatro secciones:
+- **Temas**: los 19 temas, con la opción de conservar tus cambios al cambiar de tema.
+- **Pestañas**: forma, posición, ancho y nombre.
+- **Terminal**: etiqueta de la carpeta del prompt, espacio sobre la ruta, bajo ella y antes de la
+  salida de cada comando, marcas de los bloques y cursor.
+- **Ventana**: altura de la barra, botones de ventana, fondo liso o con degradado, esquinas y
+  opacidad.
 
-Solo se guarda en la sección `[style]` de `config.toml` lo que difiere del tema elegido. En Windows
-llegará en una versión posterior; de momento allí se mantiene el aspecto de siempre.
+Cada opción se ve con un dibujo de cómo queda y los números van con un deslizador. Cada cambio se
+aplica al momento. *Deshacer* devuelve una opción a la que trae el tema, *Restablecer* las devuelve
+todas y *Ejemplo* muestra una sesión de muestra (con un comando que falla) en lugar de tu
+terminal. Con el teclado, `Tab` cambia de sección, `↑` `↓` de opción, `←` `→` cambian su valor y
+`Esc` cierra. El borde del panel se arrastra para hacerlo más ancho. La terminal no cambia de tamaño
+mientras se edita: los programas abiertos no se enteran.
+
+Solo se guarda en la sección `[style]` de `config.toml` lo que difiere del tema elegido (y en
+`[tabs]`, la posición, el ancho y el nombre de las pestañas). En Windows llegará en una versión
+posterior; de momento allí se mantiene el aspecto de siempre.
 
 ## Configuración
 

@@ -33,6 +33,8 @@ pub enum Action {
     Settings,
     /// Editor de aspecto (solo donde `style::ENABLED`).
     Appearance,
+    /// Cambiar el nombre de la pestaña (solo donde `tabs::ENABLED`).
+    RenameTab,
     ToggleAgents,
     TogglePorts,
     AgentStats,
@@ -172,6 +174,12 @@ impl Action {
             (CopyBlock, "copy_block", "Copiar bloque entero", ""),
             (Settings, "settings", "Ajustes", "ctrl+comma"),
             (Appearance, "appearance", "Editar el aspecto", ""),
+            (
+                RenameTab,
+                "rename_tab",
+                "Cambiar el nombre de la pestaña",
+                "",
+            ),
             (
                 ToggleAgents,
                 "toggle_agents",
