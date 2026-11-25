@@ -61,7 +61,8 @@
   ("Claude · Arregla el menú").
 - **A tu gusto.** Temas, fuentes, atajos y un panel de ajustes que aplica cada cambio al momento y
   lo guarda en `config.toml`. 19 temas con forma propia y un editor de aspecto con la terminal en
-  vivo al lado y un dibujo de cómo queda cada opción.
+  vivo al lado y un dibujo de cómo queda cada opción. En Linux, la interfaz *Flotante*: el
+  terminal y los paneles como tarjetas que flotan sobre el fondo de la ventana.
 - **Enlaces y rutas con Ctrl+clic.** Abre URL y lleva los errores de compilación
   (`src/main.rs:42:5`) a tu editor, en esa línea.
 - **Búsqueda en el historial.** `Ctrl+Shift+F` resalta todas las coincidencias y, con un bloque
@@ -148,16 +149,17 @@ de las versiones nuevas y abre su página para descargarlas.
 | Atajo | Acción |
 |---|---|
 | `Ctrl+Shift+F` | Buscar en el historial (con un bloque seleccionado, solo en él) |
-| `Ctrl+Shift+C` / `Ctrl+Shift+V` | Copiar / pegar (también imágenes). En Windows, además, `Ctrl+C` con texto seleccionado, `Ctrl+V` y el clic derecho (copia lo seleccionado o pega) |
+| `Ctrl+Shift+C` / `Ctrl+Shift+V` o `Shift+Insert` | Copiar / pegar (también imágenes). En Windows, además, `Ctrl+C` con texto seleccionado, `Ctrl+V` y el clic derecho (copia lo seleccionado o pega) |
 | `Ctrl+Shift+↑` / `Ctrl+Shift+↓` | Bloque de comandos anterior / siguiente |
 | `Ctrl+Shift+O` | Copiar la salida del bloque seleccionado o del último comando |
 | `Shift+RePág` / `Shift+AvPág` / `Shift+Inicio` / `Shift+Fin` | Recorrer el historial |
 | `Ctrl+Shift+K` | Limpiar el historial |
-| `Ctrl++` / `Ctrl+-` / `Ctrl+0` | Aumentar / reducir / restablecer la fuente |
+| `Ctrl++` o `Ctrl+=` / `Ctrl+-` / `Ctrl+0` | Aumentar / reducir / restablecer la fuente |
 | `Ctrl+Shift+Y` | Siguiente tema |
 | `Ctrl+Shift+R` | Recargar la configuración |
 
-Todos los atajos de Garbo se cambian en la sección `[keybindings]` de la configuración.
+Todos los atajos de Garbo se cambian en la sección `[keybindings]` de la configuración. Ajustes →
+Atajos los enseña todos, con los que tengas configurados y los de tu sistema.
 
 ### Ratón
 
@@ -355,7 +357,7 @@ como los de git-lfs, sí se usan. En Windows hace falta Git para Windows en el `
 ### Ajustes
 
 `Ctrl+,` o el botón de menú abren los ajustes, por categorías: Tema, Pestañas, Texto,
-Terminal, Completado, Bloques, Avisos, Ventana y Actualizaciones. Los cambios se aplican al momento y se guardan en
+Terminal, Completado, Bloques, Avisos, Ventana, Atajos y Actualizaciones. Los cambios se aplican al momento y se guardan en
 `~/.config/garbo/config.toml` (en Windows, `%APPDATA%\garbo\config.toml`), respetando el resto del
 archivo y sus comentarios; solo se escriben los valores distintos de los de por defecto. Se manejan con el
 ratón o con el teclado (`Tab` cambia de categoría, `↑` `↓` eligen, `←` `→` cambian el valor, `Esc`
@@ -385,14 +387,24 @@ que el propio agente guarda (Claude Code y, en Linux, Codex): las respuestas com
 
 ### Aspecto
 
+**Interfaz.** En Linux, Garbo usa de serie la interfaz *Flotante*: el terminal, los paneles
+(agentes, puertos, cambios de git, editor de aspecto) y las estadísticas son tarjetas con margen y
+esquinas redondeadas sobre el fondo de la ventana; los iconos de la barra van juntos en una
+cápsula; la paleta y los ajustes son hojas sobre el fondo oscurecido; y el texto de la interfaz usa
+la letra del sistema (Adwaita Sans en GNOME). Con los temas que no traen forma propia, las
+pestañas son píldoras y cada bloque de comandos una tarjeta con la carpeta en una etiqueta y el
+resultado en una píldora (*Etiquetas*). La de siempre sigue disponible como *Clásica*, en
+*Ajustes → Tema → Interfaz* o en el editor de aspecto (sección *Ventana*). En Windows, de
+momento, solo la Clásica.
+
 *Ajustes → Tema → Aspecto*, o "Editar el aspecto" en la paleta de comandos, abre un panel a la
 derecha con la terminal en vivo al lado. El panel tiene cuatro secciones:
 - **Temas**: los 19 temas, con la opción de conservar tus cambios al cambiar de tema.
 - **Pestañas**: forma, posición, ancho, nombre y la animación mientras trabaja un agente.
 - **Terminal**: etiqueta de la carpeta del prompt; espacio a cada lado de la línea que separa los
   bloques, bajo la ruta y antes de la salida de cada comando; marcas de los bloques y cursor.
-- **Ventana**: altura de la barra, botones de ventana, fondo liso o con degradado, esquinas y
-  opacidad.
+- **Ventana**: interfaz (Flotante o Clásica), altura de la barra, botones de ventana, fondo liso o
+  con degradado, esquinas y opacidad.
 
 Cada opción se ve con un dibujo de cómo queda y los números van con un deslizador. Cada cambio se
 aplica al momento. *Deshacer* devuelve una opción a la que trae el tema, *Restablecer* las devuelve
@@ -544,8 +556,10 @@ src/
   input.rs        traducción de teclado y ratón a secuencias xterm
   edit.rs         edición de la línea al estilo Warp (Shift+Intro, clic, palabras)
   keybindings.rs  atajos de teclado configurables
+  shortcuts.rs    lista de todos los atajos para Ajustes → Atajos
   config.rs       configuración y temas
-  style.rs        forma de la interfaz (pestañas, prompt, bloques, botones, barra, fondo)
+  style.rs        forma de la interfaz (pestañas, prompt, bloques, botones, barra, fondo, interfaz)
+  chrome.rs       medidas de la interfaz Flotante y reparto de la ventana en tarjetas
   look.rs         editor de aspecto (panel lateral con la terminal en vivo al lado)
   tabs.rs         pestañas: posición, ancho, cambiar el nombre y nombre que se desplaza
   git.rs          cambios de git sin confirmar: lectura en segundo plano con la orden git

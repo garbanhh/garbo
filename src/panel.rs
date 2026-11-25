@@ -311,6 +311,7 @@ impl PanelState {
         s: f32,
         now: Instant,
         anim: Anim,
+        chrome: &crate::chrome::Chrome,
     ) {
         let m = Metrics::from_ui(p.ui_metrics().height);
         let lh = m.lh;
@@ -319,8 +320,21 @@ impl PanelState {
         let hair = s.round().max(1.0);
         let dimc = dim(theme);
         let pad = (16.0 * s).round();
-        p.rect(x, y, w, h, theme.tab_bar, 1.0);
-        p.rect(x, y, hair, h, theme.foreground, 0.10);
+        if chrome.floating {
+            p.card(
+                x,
+                y,
+                w,
+                h,
+                theme.background,
+                theme.foreground,
+                chrome.radius,
+                s,
+            );
+        } else {
+            p.rect(x, y, w, h, theme.tab_bar, 1.0);
+            p.rect(x, y, hair, h, theme.foreground, 0.10);
+        }
 
         let header = |p: &mut Painter,
                       sec: &Section,
@@ -329,9 +343,48 @@ impl PanelState {
                       robot: bool,
                       hovered: bool| {
             let cy = sec.y + l.header_h / 2.0;
+            // Flotante: el título y, a la derecha, el resumen y un botón redondo de cerrar.
+            if chrome.floating {
+                let th = p.ui_line_h(UiVariant::Title);
+                let ty = (cy - th / 2.0).round();
+                p.ui_text_v(
+                    x + pad,
+                    ty,
+                    title,
+                    theme.foreground,
+                    w * 0.5,
+                    UiVariant::Title,
+                );
+                let (cx, ccy, r) = sec.close;
+                let ew = p.ui_measure_v(extra, UiVariant::Small);
+                let sh = p.ui_line_h(UiVariant::Small);
+                let ex = cx - r - 10.0 * s - ew;
+                p.ui_text_v(
+                    ex,
+                    (cy - sh / 2.0).round(),
+                    extra,
+                    dimc,
+                    ew + 2.0,
+                    UiVariant::Small,
+                );
+                p.circle(
+                    cx,
+                    ccy,
+                    r,
+                    theme.foreground,
+                    if hovered { 0.12 } else { 0.05 },
+                );
+                cross(p, cx, ccy, 3.5 * s, 1.4 * s, dimc);
+                return;
+            }
             let ix = x + pad + 7.0 * s;
             if robot {
-                robot_icon(p, ix, cy, s, theme.foreground, theme.tab_bar);
+                let under = if chrome.floating {
+                    theme.background
+                } else {
+                    theme.tab_bar
+                };
+                robot_icon(p, ix, cy, s, theme.foreground, under);
             } else {
                 globe_icon(p, ix, cy, s, theme.foreground);
             }
@@ -359,10 +412,13 @@ impl PanelState {
                 .iter()
                 .filter(|a| a.status == Status::Working)
                 .count();
-            let extra = if working > 0 {
-                format!("{working} trabajando")
-            } else {
-                String::new()
+            let extra = match (chrome.floating, working) {
+                (true, _) if !agents.is_empty() => match agents.len() {
+                    1 => "1 activo".to_string(),
+                    n => format!("{n} activos"),
+                },
+                (false, w) if w > 0 => format!("{w} trabajando"),
+                _ => String::new(),
             };
             header(
                 p,
@@ -386,7 +442,20 @@ impl PanelState {
                 let Hit::Agent(i) = hit else { continue };
                 let hovered = self.hover == Some(hit);
                 self.draw_agent(
-                    p, theme, &agents[i], i, x, ry, w, rh, s, m, now, anim, hovered,
+                    p,
+                    theme,
+                    &agents[i],
+                    i,
+                    x,
+                    ry,
+                    w,
+                    rh,
+                    s,
+                    m,
+                    now,
+                    anim,
+                    hovered,
+                    chrome.floating,
                 );
             }
         }
@@ -397,9 +466,10 @@ impl PanelState {
                 p.rect(x, sec.y, w, hair, theme.foreground, 0.10);
             }
             let (web, other) = self.split();
-            let extra = match web.len() {
-                1 => "1 servidor web".to_string(),
-                n => format!("{n} servidores web"),
+            let extra = match (chrome.floating, web.len()) {
+                (true, _) => format!("{} en escucha", self.ports_data.len()),
+                (false, 1) => "1 servidor web".to_string(),
+                (false, n) => format!("{n} servidores web"),
             };
             header(
                 p,
@@ -431,7 +501,21 @@ impl PanelState {
                         let Some(info) = self.ports_data.iter().find(|p| p.port == port) else {
                             continue;
                         };
-                        if self.hover == Some(hit) {
+                        let over = self.hover == Some(hit);
+                        if chrome.floating && info.web {
+                            // Flotante: cada servidor en su tarjeta (puerto, programa y dirección).
+                            let a = if over { 0.07 } else { 0.04 };
+                            let (cx0, cw) = (x + 8.0 * s, w - 16.0 * s);
+                            p.rounded(
+                                cx0,
+                                ry + 3.0 * s,
+                                cw,
+                                rh - 6.0 * s,
+                                theme.foreground,
+                                a,
+                                (10.0 * s).round(),
+                            );
+                        } else if over {
                             p.rounded(
                                 x + 6.0 * s,
                                 ry + 2.0 * s,
@@ -443,7 +527,23 @@ impl PanelState {
                             );
                         }
                         let proc_name = info.process.clone().unwrap_or_else(|| "sistema".into());
-                        if info.web {
+                        if chrome.floating && info.web {
+                            let tx = x + pad + 2.0 * s;
+                            let t = port.to_string();
+                            p.ui_text_in(tx, ry, rh, &t, theme.foreground, w * 0.3);
+                            let nx = tx + (64.0 * s).round();
+                            let sh = p.ui_line_h(UiVariant::Small);
+                            let ny = (ry + (rh - lh - sh) / 2.0).round();
+                            p.ui_text(
+                                nx,
+                                ny,
+                                &proc_name,
+                                theme.foreground,
+                                x + w - pad - 24.0 * s - nx,
+                            );
+                            p.ui_text_v(nx, ny + lh, "localhost", dimc, w * 0.4, UiVariant::Small);
+                        }
+                        if info.web && !chrome.floating {
                             p.circle(
                                 x + pad + 4.0 * s,
                                 ry + 8.0 * s + lh / 2.0,
@@ -495,7 +595,7 @@ impl PanelState {
                                 c,
                                 1.0,
                             );
-                        } else {
+                        } else if !info.web {
                             let tx = x + pad + 16.0 * s;
                             let t = format!(":{port}");
                             let tw = p.ui_text_in(tx, ry, rh, &t, dimc, w * 0.3);
@@ -586,12 +686,30 @@ impl PanelState {
         now: Instant,
         anim: Anim,
         hovered: bool,
+        floating: bool,
     ) {
         let dimc = dim(theme);
         let pad = (16.0 * s).round();
         let lh = m.lh;
         let open = self.openness(i, now);
-        if hovered || open > 0.0 {
+        // Interfaz Flotante: cada agente en su tarjeta; el de la pestaña activa, con un tinte del
+        // color de acento (sin la barrita lateral).
+        if floating {
+            let (c, a) = match (a.active, hovered || open > 0.0) {
+                (true, over) => (theme.accent, if over { 0.13 } else { 0.09 }),
+                (false, true) => (theme.foreground, 0.07),
+                (false, false) => (theme.foreground, 0.035),
+            };
+            p.rounded(
+                x + 8.0 * s,
+                ry + 3.0 * s,
+                w - 16.0 * s,
+                rh - 6.0 * s,
+                c,
+                a,
+                (10.0 * s).round(),
+            );
+        } else if hovered || open > 0.0 {
             p.rounded(
                 x + 6.0 * s,
                 ry + 3.0 * s,
@@ -602,7 +720,7 @@ impl PanelState {
                 (8.0 * s).round(),
             );
         }
-        if a.active {
+        if a.active && !floating {
             p.rounded(
                 x + 6.0 * s,
                 ry + 10.0 * s,
@@ -627,29 +745,64 @@ impl PanelState {
             dimc,
             tw + 2.0,
         );
-        let logo = (m.th * 0.85).round();
-        p.agent_logo(
-            a.agent.logo,
-            a.agent.name,
-            tx,
-            top + (m.th - logo) / 2.0,
-            logo,
-            theme.foreground,
-            1.0,
-        );
-        let nx = tx + logo + (7.0 * s).round();
-        p.ui_text_v(
-            nx,
-            top,
-            a.agent.name,
-            theme.foreground,
-            right - tw - 12.0 * s - nx,
-            UiVariant::Title,
-        );
-
-        // Directorio y estado
         let l1 = top + m.th + 2.0 * s;
-        p.ui_text(tx, l1, a.label, dimc, right - tx);
+        if floating {
+            // Flotante: el logo en un cuadro y, a su lado, el nombre y la carpeta.
+            let tile = (m.th + lh - 2.0 * s).round();
+            p.rounded(
+                tx,
+                top,
+                tile,
+                tile,
+                theme.foreground,
+                0.06,
+                (9.0 * s).round(),
+            );
+            let logo = (tile * 0.55).round();
+            let (lx, ly) = (
+                tx + ((tile - logo) / 2.0).round(),
+                top + ((tile - logo) / 2.0).round(),
+            );
+            p.agent_logo(
+                a.agent.logo,
+                a.agent.name,
+                lx,
+                ly,
+                logo,
+                theme.foreground,
+                1.0,
+            );
+            let nx = tx + tile + (10.0 * s).round();
+            let room = right - tw - 12.0 * s - nx;
+            p.ui_text(nx, top + 1.0 * s, a.agent.name, theme.foreground, room);
+            let sh = p.ui_line_h(UiVariant::Small);
+            let dy = (top + tile - sh - 1.0 * s).round();
+            p.ui_text_v(nx, dy, a.label, dimc, right - nx, UiVariant::Small);
+        } else {
+            let logo = (m.th * 0.85).round();
+            p.agent_logo(
+                a.agent.logo,
+                a.agent.name,
+                tx,
+                top + (m.th - logo) / 2.0,
+                logo,
+                theme.foreground,
+                1.0,
+            );
+            let nx = tx + logo + (7.0 * s).round();
+            p.ui_text_v(
+                nx,
+                top,
+                a.agent.name,
+                theme.foreground,
+                right - tw - 12.0 * s - nx,
+                UiVariant::Title,
+            );
+            // Directorio
+            p.ui_text(tx, l1, a.label, dimc, right - tx);
+        }
+
+        // Estado
         let l2 = l1 + lh;
         let (color, txt_color) = match a.status {
             Status::Working => (theme.accent, theme.foreground),
@@ -671,6 +824,20 @@ impl PanelState {
             Some(d) => format!("{} · {d}", a.status.label()),
             None => a.status.label().to_string(),
         };
+        if floating {
+            // El estado en una píldora de su color.
+            let tw = p.ui_measure(&label).min(right - sx);
+            let (px0, ph) = (tx - 2.0 * s, lh + 4.0 * s);
+            p.rounded(
+                px0,
+                l2 - 2.0 * s,
+                sx + tw + 8.0 * s - px0,
+                ph,
+                color,
+                0.14,
+                (ph / 2.0).round(),
+            );
+        }
         p.ui_text(sx, l2, &label, txt_color, right - sx);
 
         // Subagentes, colgando del agente.

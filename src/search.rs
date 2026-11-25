@@ -217,6 +217,11 @@ impl Search {
         let h = (p.ui_metrics().height + 16.0 * s).round();
         let bx = (x + area_w - w - 12.0 * s).round();
         let by = (y + 8.0 * s).round();
+        let radius = if theme.style.interface == crate::style::Interface::Floating {
+            (12.0 * s).round()
+        } else {
+            (9.0 * s).round()
+        };
         p.card(
             bx,
             by,
@@ -224,7 +229,7 @@ impl Search {
             h,
             crate::ui::surface(theme, 0.06),
             theme.foreground,
-            (9.0 * s).round(),
+            radius,
             s,
         );
         let dimc = crate::ui::dim(theme);

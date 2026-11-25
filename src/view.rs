@@ -274,6 +274,26 @@ impl Painter<'_> {
         ));
     }
 
+    /// Degradado con las esquinas redondeadas.
+    #[allow(clippy::too_many_arguments)]
+    pub fn gradient_rounded(
+        &mut self,
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        top: Rgb,
+        ta: f32,
+        bottom: Rgb,
+        ba: f32,
+        r: f32,
+    ) {
+        self.out.push(Instance {
+            radius: r,
+            ..Instance::gradient(x, y, w, h, top.to_f32(ta), bottom.to_f32(ba))
+        });
+    }
+
     /// Contorno redondeado de grosor `t` por dentro del rectángulo.
     #[allow(clippy::too_many_arguments)]
     pub fn outline(&mut self, x: f32, y: f32, w: f32, h: f32, c: Rgb, a: f32, r: f32, t: f32) {
@@ -363,7 +383,29 @@ impl Painter<'_> {
         r: f32,
         scale: f32,
     ) {
-        for (i, a) in [(3.0, 0.10), (8.0, 0.08), (16.0, 0.06)] {
+        self.card_alpha(x, y, w, h, (fill, 1.0), border, r, scale);
+    }
+
+    /// Como `card`, con el relleno algo transparente (la opacidad de la ventana). Sin sombra si
+    /// no es opaco: se vería a través.
+    #[allow(clippy::too_many_arguments)]
+    pub fn card_alpha(
+        &mut self,
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        (fill, fill_a): (Rgb, f32),
+        border: Rgb,
+        r: f32,
+        scale: f32,
+    ) {
+        let shadows: &[(f32, f32)] = if fill_a >= 0.99 {
+            &[(3.0, 0.10), (8.0, 0.08), (16.0, 0.06)]
+        } else {
+            &[]
+        };
+        for &(i, a) in shadows {
             let o = i * scale;
             self.rounded(
                 x - o * 0.5,
@@ -375,15 +417,22 @@ impl Painter<'_> {
                 r + o * 0.5,
             );
         }
-        self.rounded(x, y, w, h, border, 0.14, r);
         let b = scale.round().max(1.0);
+        if fill_a < 0.99 {
+            // Transparente: el relleno entero y el borde como contorno (un borde relleno debajo
+            // teñiría toda la tarjeta).
+            self.rounded(x, y, w, h, fill, fill_a, r);
+            self.outline(x, y, w, h, border, 0.14, r, b);
+            return;
+        }
+        self.rounded(x, y, w, h, border, 0.14, r);
         self.rounded(
             x + b,
             y + b,
             w - 2.0 * b,
             h - 2.0 * b,
             fill,
-            1.0,
+            fill_a,
             (r - b).max(0.0),
         );
     }
@@ -625,6 +674,18 @@ pub fn draw_ghost<T: EventListener>(
             );
         }
     }
+    // Con "Etiquetas", a la derecha, cómo aceptarla (si el final de la línea está libre).
+    if theme.style.blocks == Blocks::Chips {
+        let hint = "→ aceptar";
+        let hw = p.ui_measure_v(hint, UiVariant::Small);
+        let free_from = cur.column.0 + text.chars().count() + 4;
+        let x = v.x + cols as f32 * m.width - hw;
+        if v.x + free_from as f32 * m.width < x {
+            let sh = p.ui_line_h(UiVariant::Small);
+            let ty = (y + (m.height - sh) / 2.0).round();
+            p.ui_text_v(x, ty, hint, color, hw + 2.0, UiVariant::Small);
+        }
+    }
 }
 
 /// Prompt de Garbo (la línea de la carpeta, que pone la integración del shell). En el prompt actual
@@ -680,6 +741,30 @@ pub fn draw_prompts<T: EventListener>(
         let y = v.row_y(shown, ch);
         let (iw, ih) = ((cw * 1.05).round(), (ch * 0.40).round());
         let (ix, iy) = ((v.x + 0.5 * cw).round(), (y + (ch - ih) / 2.0).round());
+        if style.blocks == Blocks::Chips && (Some(a.id) != current || style.prompt == Prompt::Plain)
+        {
+            let path: String = (0..=end)
+                .filter(|&c| mine(c))
+                .map(|c| row[Column(c)].c)
+                .collect();
+            let cy = y + ch / 2.0;
+            // Las etiquetas sobresalen de su fila hacia los huecos de encima y de debajo, sin
+            // pisar lo de al lado: con huecos pequeños, del alto de la fila.
+            let above = if shown > v.rows.first as i32 {
+                y - (v.row_y(shown - 1, ch) + ch)
+            } else {
+                8.0 * s
+            };
+            let below = v.row_y(shown + 1, ch) - (y + ch);
+            let h = (22.0 * s).min(ch + 2.0 * below.min(above * 0.5).max(0.0));
+            let right = v.x + cols as f32 * cw;
+            if Some(a.id) == current {
+                chip = chips_current(p, theme, v.x, right, cy, h, path.trim(), branch, changes, s);
+            } else {
+                chips_done(p, theme, v.x, right, cy, h, path.trim(), info, s);
+            }
+            continue;
+        }
         if Some(a.id) == current {
             chip = prompt_label(p, theme, cw, ch, cols, v, y, end, branch, changes, s);
         } else {
@@ -732,6 +817,230 @@ pub fn draw_prompts<T: EventListener>(
         }
     }
     chip
+}
+
+/// Icono de una etiqueta de la interfaz Flotante.
+#[derive(Clone, Copy, PartialEq)]
+enum ChipIcon {
+    None,
+    Folder,
+    Branch,
+    Check,
+    Cross,
+}
+
+/// Etiqueta de la interfaz Flotante con la letra de la interfaz: fondo redondeado de `h` de alto
+/// centrado en `cy`, icono y texto pequeño. Devuelve su ancho.
+#[allow(clippy::too_many_arguments)]
+fn ui_chip(
+    p: &mut Painter,
+    x: f32,
+    cy: f32,
+    h: f32,
+    text: &str,
+    fg: Rgb,
+    bg: (Rgb, f32),
+    radius: f32,
+    icon: ChipIcon,
+    max_w: f32,
+    s: f32,
+) -> f32 {
+    let pad = (8.0 * s).round();
+    let k = (12.0 * s).round();
+    let icon_w = if icon == ChipIcon::None {
+        0.0
+    } else {
+        k + (5.0 * s).round()
+    };
+    let tw = p
+        .ui_measure_v(text, UiVariant::Small)
+        .min((max_w - 2.0 * pad - icon_w).max(0.0));
+    let w = (2.0 * pad + icon_w + tw).round();
+    let y = (cy - h / 2.0).round();
+    p.rounded(x, y, w, h, bg.0, bg.1, radius);
+    let (ix, iy) = (x + pad, (cy - k / 2.0).round());
+    let t = (1.3 * s).max(1.0);
+    match icon {
+        ChipIcon::Folder => {
+            let fh = (k * 0.78).round();
+            crate::ui::folder(p, ix, (cy - fh / 2.0).round(), k, fh, t, fg);
+        }
+        ChipIcon::Branch => crate::ui::branch(p, ix + 1.0 * s, iy, k - 2.0 * s, k, t, fg),
+        ChipIcon::Check => {
+            p.line(ix + 1.5 * s, cy, ix + 4.5 * s, cy + 3.0 * s, t, fg, 1.0);
+            p.line(
+                ix + 4.5 * s,
+                cy + 3.0 * s,
+                ix + 10.5 * s,
+                cy - 3.5 * s,
+                t,
+                fg,
+                1.0,
+            );
+        }
+        ChipIcon::Cross => {
+            let (a, b) = (ix + 2.5 * s, ix + 9.5 * s);
+            p.line(a, cy - 3.5 * s, b, cy + 3.5 * s, t, fg, 1.0);
+            p.line(b, cy - 3.5 * s, a, cy + 3.5 * s, t, fg, 1.0);
+        }
+        ChipIcon::None => {}
+    }
+    let sh = p.ui_line_h(UiVariant::Small);
+    p.ui_text_v(
+        ix + icon_w,
+        (cy - sh / 2.0).round(),
+        text,
+        fg,
+        tw + 2.0,
+        UiVariant::Small,
+    );
+    w
+}
+
+/// Cabecera de un bloque ya ejecutado con "Etiquetas": la carpeta y la rama en etiquetas y, a la
+/// derecha (`right`), el resultado y la duración en una píldora verde o roja.
+#[allow(clippy::too_many_arguments)]
+fn chips_done(
+    p: &mut Painter,
+    theme: &Theme,
+    x: f32,
+    right: f32,
+    cy: f32,
+    h: f32,
+    path: &str,
+    info: &blocks::BlockInfo,
+    s: f32,
+) {
+    let fg = theme.foreground;
+    let dimc = fg.lerp(theme.background, 0.42);
+    let r = (6.0 * s).round();
+    let gap = (8.0 * s).round();
+    let room = (right - x).max(0.0);
+    let mut cx = x;
+    let folder = ChipIcon::Folder;
+    cx += ui_chip(
+        p,
+        cx,
+        cy,
+        h,
+        path,
+        dimc,
+        (fg, 0.05),
+        r,
+        folder,
+        room * 0.55,
+        s,
+    ) + gap;
+    if let Some(b) = info.branch.as_deref() {
+        let bw = ui_chip(
+            p,
+            cx,
+            cy,
+            h,
+            b,
+            dimc,
+            (fg, 0.05),
+            r,
+            ChipIcon::Branch,
+            room * 0.2,
+            s,
+        );
+        cx += bw + gap;
+    }
+    let dur = info.duration.map(|d| {
+        if d.as_millis() == 0 {
+            "< 1 ms".to_string()
+        } else {
+            blocks::format_duration(d)
+        }
+    });
+    let (text, color, icon) = match (info.status(), dur) {
+        (Status::Ok, Some(d)) => (d, theme.palette[2], ChipIcon::Check),
+        (Status::Failed(code), Some(d)) => {
+            (format!("{code} · {d}"), theme.palette[1], ChipIcon::Cross)
+        }
+        (Status::Failed(code), None) => (code.to_string(), theme.palette[1], ChipIcon::Cross),
+        _ => return,
+    };
+    // Primero se mide (dibujándola fuera) y luego se coloca pegada a la derecha.
+    let pad = (8.0 * s).round();
+    let w = 2.0 * pad
+        + (12.0 * s).round()
+        + (5.0 * s).round()
+        + p.ui_measure_v(&text, UiVariant::Small);
+    let px = (right - w.round()).round();
+    if px > cx {
+        ui_chip(
+            p,
+            px,
+            cy,
+            h,
+            &text,
+            color,
+            (color, 0.13),
+            h / 2.0,
+            icon,
+            w + 1.0,
+            s,
+        );
+    }
+}
+
+/// Cabecera de la orden que se escribe con "Etiquetas": la ruta y la rama en gris y, en una
+/// etiqueta, los cambios sin confirmar (archivos, + y −). Devuelve dónde quedó esa etiqueta (para
+/// el ratón: abre el panel de cambios).
+#[allow(clippy::too_many_arguments)]
+fn chips_current(
+    p: &mut Painter,
+    theme: &Theme,
+    x: f32,
+    right: f32,
+    cy: f32,
+    h: f32,
+    path: &str,
+    branch: Option<&str>,
+    changes: Option<crate::git::Summary>,
+    s: f32,
+) -> Option<[f32; 4]> {
+    let fg = theme.foreground;
+    let dimc = fg.lerp(theme.background, 0.42);
+    let sh = p.ui_line_h(UiVariant::Small);
+    let ty = (cy - sh / 2.0).round();
+    let text = match branch {
+        Some(b) => format!("{path} · {b}"),
+        None => path.to_string(),
+    };
+    // Sitio para la ruta: lo que deja la etiqueta de los cambios (unos 130 px).
+    let reserve = if changes.is_some() { 130.0 * s } else { 0.0 };
+    let tw = p.ui_text_v(
+        x,
+        ty,
+        &text,
+        dimc,
+        (right - x - reserve).max(0.0),
+        UiVariant::Small,
+    );
+    let c = changes?;
+    let parts = [
+        (c.files.to_string(), theme.palette[3]),
+        (format!("+{}", c.added), theme.palette[2]),
+        (format!("−{}", c.removed), theme.palette[1]),
+    ];
+    let pad = (6.0 * s).round();
+    let h = (h - 2.0 * s).round();
+    let x0 = (x + tw + (10.0 * s).round()).round();
+    let w: f32 = parts
+        .iter()
+        .map(|(t, _)| p.ui_measure_v(t, UiVariant::Small))
+        .sum::<f32>()
+        + 2.0 * pad;
+    let y0 = (cy - h / 2.0).round();
+    p.rounded(x0, y0, w.round(), h, fg, 0.06, (5.0 * s).round());
+    let mut tx = x0 + pad;
+    for (t, color) in &parts {
+        tx += p.ui_text_v(tx, ty, t, *color, f32::INFINITY, UiVariant::Small);
+    }
+    Some([x0, y0, w.round(), h])
 }
 
 /// Etiqueta del prompt actual (la carpeta, la rama de git y sus cambios sin confirmar) según
@@ -1089,6 +1398,12 @@ pub fn draw_menu<T: EventListener>(
         .round();
     let y = menu_y(v, row, h, m.height, s);
 
+    // Interfaz Flotante: esquinas algo más redondas, como el resto de lo que flota.
+    let radius = if theme.style.interface == crate::style::Interface::Floating {
+        (12.0 * s).round()
+    } else {
+        (9.0 * s).round()
+    };
     p.card(
         x,
         y,
@@ -1096,7 +1411,7 @@ pub fn draw_menu<T: EventListener>(
         h,
         crate::ui::surface(theme, 0.06),
         theme.foreground,
-        (9.0 * s).round(),
+        radius,
         s,
     );
     let dimc = crate::ui::dim(theme);
@@ -1237,7 +1552,7 @@ impl Rows {
         gaps: crate::style::Gaps,
         room: f32,
     ) -> Self {
-        if !gaps.any() || !bs.active || lines == 0 {
+        if (!gaps.any() && !gaps.pin) || !bs.active || lines == 0 {
             return Self::default();
         }
         let offset = term.grid().display_offset() as i32;
@@ -1293,7 +1608,7 @@ impl Rows {
                 }
             }
         }
-        if !any {
+        if !any && !gaps.pin {
             return Self::default();
         }
         // Tiene que verse hasta el cursor y lo último escrito (los programas de pantalla completa
@@ -1306,6 +1621,30 @@ impl Rows {
         let cursor = grid.cursor.point.line.0 + offset;
         if (0..lines as i32).contains(&cursor) {
             last = last.max(cursor as usize);
+        }
+        // "Etiquetas": bajo la última fila, el margen de su tarjeta (`Gaps::tail`), para que ni
+        // el cursor llegue a su borde ni ella al del terminal.
+        let room = if gaps.pin { room - gaps.tail } else { room };
+        // "Etiquetas": la orden que se escribe va abajo del todo; lo que sobra de pantalla queda
+        // encima de ella.
+        if gaps.pin && room.is_finite() {
+            let current = bs
+                .idle_current()
+                .and_then(|id| anchors.iter().find(|a| a.id == id));
+            if let Some(a) = current {
+                // También el primer prompt (fila 0): se empieza a escribir abajo.
+                let start = (a.line.0 + offset).max(0) as usize;
+                let free = room - ys[last + 1];
+                if start < lines && free >= 1.0 {
+                    any = true;
+                    for y in &mut ys[start..] {
+                        *y += free;
+                    }
+                }
+            }
+        }
+        if !any {
+            return Self::default();
         }
         let mut first = 0;
         let over = ys[last + 1] - room;
@@ -1508,6 +1847,11 @@ pub fn draw_terminal<T: EventListener>(
             bs.and_then(|bs| blocks::cell_link(cell).filter(|(_, id)| bs.styled(*id)))
         {
             match kind {
+                b'p' if theme.style.blocks == Blocks::Chips
+                    && (current_prompt != Some(id) || theme.style.prompt == Prompt::Plain) =>
+                {
+                    continue
+                }
                 b'p' if current_prompt == Some(id) => {
                     bold = true;
                     fg = match theme.style.prompt {
@@ -1781,6 +2125,45 @@ pub fn draw_blocks<T: EventListener>(
                 };
                 p.rounded(cx0, h0, cx1 - cx0, h1 - h0, c, fa, r);
                 p.outline(cx0, h0, cx1 - cx0, h1 - h0, c, la, r, line_w);
+            }
+            // Etiquetas: tarjeta por bloque, algo más holgada que sus filas; la orden que se
+            // escribe o la que está en marcha, en una del color de acento.
+            Blocks::Chips
+                if finished
+                    || status == Status::Running
+                    || (status == Status::Idle && Some(a.id) == bs.current) =>
+            {
+                // Hasta el final de su última fila: `y1` ya incluye el hueco sobre la ruta del
+                // bloque siguiente.
+                let last = v.row_y(end_row, ch) + ch;
+                // Por encima y por debajo de sus filas, sin llegar a la tarjeta de al lado.
+                let top_pad = if start_row > first {
+                    (5.0 * s).min(above * 0.5)
+                } else {
+                    5.0 * s
+                };
+                // Por debajo, sin llegar a la del bloque siguiente. Si no lo hay, las filas de
+                // debajo están vacías (y van pegadas al cursor): el margen entero, que
+                // `Rows::layout` ya deja libre.
+                let below = match anchors.get(i + 1) {
+                    Some(_) if end_row + 1 < lines => v.row_y(end_row + 1, ch) - last,
+                    _ => f32::INFINITY,
+                };
+                let (h0, h1) = (y0 - top_pad, last + gaps.tail.min(below * 0.5));
+                let (x0, x1) = (
+                    (v.x - 9.0 * s).max(span.0),
+                    (v.x + cols as f32 * m.width + 9.0 * s).min(span.1 - 6.0 * s),
+                );
+                let rr = (r + 2.0 * s).round();
+                let (c, fa, la) = if !finished {
+                    (theme.accent, 0.05, 0.35)
+                } else if failed {
+                    (err, 0.06, 0.22)
+                } else {
+                    (fg, 0.025, 0.05)
+                };
+                p.rounded(x0, h0, x1 - x0, h1 - h0, c, fa, rr);
+                p.outline(x0, h0, x1 - x0, h1 - h0, c, la, rr, line_w);
             }
             Blocks::Outline if finished => {
                 let (h0, h1) = (y0 + 2.0 * s, y1 - 2.0 * s);
@@ -2143,6 +2526,8 @@ mod tests {
             line: 0.0,
             path: 16.0,
             output: 16.0,
+            pin: false,
+            tail: 0.0,
         };
         // El panel mide lo que la rejilla sin huecos.
         let room = lines as f32 * ch;
@@ -2170,6 +2555,144 @@ mod tests {
         assert!(y < v.row_y(cur, ch), "va encima del cursor");
         // Si cabe debajo, debajo.
         assert!(menu_y(&v, cur, 0.5 * ch, ch, 1.0) > v.row_y(cur, ch));
+    }
+
+    /// Con "Etiquetas", también el primer prompt (en la fila 0, sin nada encima) y sin ningún hueco
+    /// empieza abajo: no se escribe arriba para bajar después.
+    #[test]
+    fn la_primera_orden_empieza_abajo() {
+        use crate::style::Gaps;
+        use alacritty_terminal::event::VoidListener;
+        use alacritty_terminal::term::test::TermSize;
+        let mut term = Term::new(
+            alacritty_terminal::term::Config::default(),
+            &TermSize::new(40, 10),
+            VoidListener,
+        );
+        let blocks = std::sync::Mutex::new(BlockState::new(0));
+        crate::pty_loop::feed_bytes(
+            &mut term,
+            &blocks,
+            b"\x1b]133;A;garbo\x07~/p\r\n\x1b]133;B\x07ls",
+            &VoidListener,
+        );
+        let bs = blocks.lock().unwrap();
+        let ch = 20.0;
+        let room = 10.0 * ch;
+        let cur = term.grid().cursor.point.line.0;
+        assert_eq!(cur, 1, "la ruta en la fila 0 y lo escrito en la 1");
+        for g in [
+            Gaps::default(),
+            Gaps {
+                path: 6.0,
+                ..Gaps::default()
+            },
+        ] {
+            let r = Rows::layout(&term, &bs, 10, ch, Gaps { pin: true, ..g }, room);
+            let bottom = r.y(cur + 1, ch);
+            assert!(
+                bottom > room - ch && bottom <= room,
+                "{g:?}: acaba en {bottom}"
+            );
+        }
+    }
+
+    /// Con "Etiquetas", bajo la orden que se escribe queda sitio para el margen de su tarjeta
+    /// (`Gaps::tail`): ni en una ventana nueva (la orden fijada abajo) ni con la pantalla llena
+    /// llega el cursor al borde de la tarjeta ni la tarjeta al del terminal.
+    #[test]
+    fn la_tarjeta_de_la_orden_cabe_abajo() {
+        use crate::style::Gaps;
+        use alacritty_terminal::event::VoidListener;
+        use alacritty_terminal::term::test::TermSize;
+        let ch = 20.0;
+        let g = Gaps {
+            above: 16.0,
+            path: 6.0,
+            output: 6.0,
+            pin: true,
+            tail: 7.0,
+            ..Gaps::default()
+        };
+        // Ventana nueva: la ruta en la fila 0 y lo escrito en la 1, el resto vacío.
+        let mut term = Term::new(
+            alacritty_terminal::term::Config::default(),
+            &TermSize::new(40, 10),
+            VoidListener,
+        );
+        let blocks = std::sync::Mutex::new(BlockState::new(0));
+        crate::pty_loop::feed_bytes(
+            &mut term,
+            &blocks,
+            b"\x1b]133;A;garbo\x07~/p\r\n\x1b]133;B\x07",
+            &VoidListener,
+        );
+        let room = 10.0 * ch + 3.0;
+        let cur = term.grid().cursor.point.line.0;
+        let r = Rows::layout(&term, &blocks.lock().unwrap(), 10, ch, g, room);
+        assert_eq!(r.y(cur + 1, ch), room - 7.0, "nueva: fijada justo encima");
+        // Pantalla llena: muchas órdenes y la que se escribe en la última fila.
+        let mut term = Term::new(
+            alacritty_terminal::term::Config::default(),
+            &TermSize::new(40, 10),
+            VoidListener,
+        );
+        let mut state = BlockState::default();
+        state.no_history = true;
+        let blocks = std::sync::Mutex::new(state);
+        let prompt = "\x1b]133;A;garbo\x07~/p\r\n\x1b]133;B\x07";
+        let mut text = String::new();
+        for _ in 0..8 {
+            text += &format!("{prompt}ls\r\n\x1b]133;C\x07a\r\nb\r\n\x1b]133;D;0\x07");
+        }
+        text += prompt;
+        crate::pty_loop::feed_bytes(&mut term, &blocks, text.as_bytes(), &VoidListener);
+        let room = 10.0 * ch;
+        let cur = term.grid().cursor.point.line.0;
+        assert_eq!(cur, 9, "la orden en la última fila");
+        let r = Rows::layout(&term, &blocks.lock().unwrap(), 10, ch, g, room);
+        let bottom = r.y(cur + 1, ch);
+        assert!(bottom <= room - 7.0, "llena: acaba en {bottom}");
+    }
+
+    /// Con "Etiquetas", la orden que se escribe va abajo del todo mientras sobre pantalla; lo de
+    /// encima no se mueve y el ratón sigue cayendo en la fila que se ve.
+    #[test]
+    fn etiquetas_dejan_la_orden_abajo() {
+        use crate::style::Gaps;
+        let cfg = crate::config::Config::default();
+        let s = crate::look::Sample::new(&cfg, 80);
+        let (ch, lines) = (20.0, s.lines);
+        let cur = s.term.grid().cursor.point.line.0;
+        let g = Gaps {
+            above: 10.0,
+            line: 0.0,
+            path: 4.0,
+            output: 4.0,
+            pin: true,
+            tail: 0.0,
+        };
+        let room = 2000.0;
+        let pinned = Rows::layout(&s.term, &s.blocks, lines, ch, g, room);
+        let free = Rows::layout(
+            &s.term,
+            &s.blocks,
+            lines,
+            ch,
+            Gaps { pin: false, ..g },
+            room,
+        );
+        let bottom = pinned.y(cur + 1, ch);
+        assert!(bottom <= room && bottom > room - ch, "acaba en {bottom}");
+        assert!(free.y(cur + 1, ch) < bottom - 10.0 * ch);
+        // Lo de arriba, igual.
+        assert_eq!(pinned.y(1, ch), free.y(1, ch));
+        let r = pinned.row_at(pinned.y(cur, ch) + ch / 2.0, ch, lines);
+        assert_eq!(r, cur as usize);
+        // Sin sitio de sobra (la muestra entera no cabe), nada se mueve.
+        let justo = free.y(cur + 1, ch);
+        let a = Rows::layout(&s.term, &s.blocks, lines, ch, g, justo);
+        assert_eq!(a.y(cur, ch), free.y(cur, ch));
     }
 
     /// El hueco bajo la ruta baja lo de debajo; si no cabe, se ocultan filas enteras por arriba y
@@ -2218,6 +2741,8 @@ mod tests {
             line: 0.0,
             path: 0.0,
             output: 6.0,
+            pin: false,
+            tail: 0.0,
         };
         let r = Rows::layout(&s.term, &s.blocks, lines, ch, g, f32::INFINITY);
         assert_eq!(r.y(1, ch), ch, "nada sobre la primera ruta ni bajo ella");

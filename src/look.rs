@@ -12,7 +12,7 @@ use crate::config::{Config, CursorStyle, Rgb, Theme};
 use crate::font::Style as FontStyle;
 use crate::settings::{theme_card, Change};
 use crate::style::{
-    self, Background, BarSize, Blocks, Buttons, Prompt, Style, StyleOverrides, Tabs,
+    self, Background, BarSize, Blocks, Buttons, Interface, Prompt, Style, StyleOverrides, Tabs,
 };
 use crate::tabs::{Align, Position, Width, Working};
 use crate::ui::{cross, dim, surface};
@@ -68,6 +68,7 @@ impl Section {
                 Control::Cursor,
             ],
             Section::Window => &[
+                Control::Interface,
                 Control::Bar,
                 Control::Buttons,
                 Control::Background,
@@ -107,6 +108,8 @@ pub enum Control {
     Background,
     Radius,
     Opacity,
+    /// Interfaz de toda la ventana: Flotante o Clásica.
+    Interface,
 }
 
 /// Cómo se presenta cada control.
@@ -152,7 +155,8 @@ impl Control {
             | Control::Blocks
             | Control::Cursor
             | Control::Buttons
-            | Control::Background => Kind::Tiles,
+            | Control::Background
+            | Control::Interface => Kind::Tiles,
             Control::Position
             | Control::Width
             | Control::Align
@@ -185,6 +189,7 @@ impl Control {
             Control::Cursor => "Cursor",
             Control::Bar => "Altura de la barra",
             Control::Buttons => "Botones",
+            Control::Interface => "Interfaz",
             Control::Background => "Fondo",
             Control::Radius => "Esquinas",
             Control::Opacity => "Opacidad",
@@ -208,6 +213,7 @@ impl Control {
             Control::Cursor => CursorStyle::ALL.len(),
             Control::Bar => BarSize::ALL.len(),
             Control::Buttons => Buttons::ALL.len(),
+            Control::Interface => Interface::ALL.len(),
             Control::Background => Background::ALL.len(),
             Control::Radius => style::RADII.len(),
             Control::Opacity => OPACITIES.len(),
@@ -231,6 +237,7 @@ impl Control {
             Control::Cursor => CursorStyle::ALL[i].label().into(),
             Control::Bar => BarSize::ALL[i].label().into(),
             Control::Buttons => Buttons::ALL[i].label().into(),
+            Control::Interface => Interface::ALL[i].label().into(),
             Control::Background => Background::ALL[i].label().into(),
             Control::Radius => format!("{} px", style::RADII[i]),
             Control::Opacity => format!("{} %", OPACITIES[i]),
@@ -259,6 +266,7 @@ impl Control {
             Control::Cursor => pos(&CursorStyle::ALL, &cfg.terminal.cursor_style),
             Control::Bar => pos(BarSize::ALL, &style.bar),
             Control::Buttons => pos(Buttons::ALL, &style.buttons),
+            Control::Interface => pos(Interface::ALL, &style.interface),
             Control::Background => pos(Background::ALL, &style.background),
             Control::Radius => nearest(&style::RADII, style.radius as f32),
             Control::Opacity => nearest(&OPACITIES, cfg.window.opacity * 100.0),
@@ -277,6 +285,7 @@ impl Control {
             Control::Blocks => pos(Blocks::ALL, &base.blocks),
             Control::Bar => pos(BarSize::ALL, &base.bar),
             Control::Buttons => pos(Buttons::ALL, &base.buttons),
+            Control::Interface => pos(Interface::ALL, &base.interface),
             Control::Background => pos(Background::ALL, &base.background),
             Control::Radius => style::RADII.iter().position(|r| *r == base.radius)?,
             _ => return None,
@@ -286,9 +295,7 @@ impl Control {
 
 /// Forma que trae el tema elegido, sin los cambios de `[style]`.
 fn base_style(cfg: &Config) -> Style {
-    Theme::builtin(&cfg.theme)
-        .map(|t| t.style)
-        .unwrap_or_default()
+    cfg.base_style()
 }
 
 /// Lo que difiere de la forma del tema (lo igual no se guarda: si el tema cambia, llega solo).
@@ -308,6 +315,7 @@ fn diff(cur: &Style, base: &Style) -> StyleOverrides {
         block_gap: d(cur.block_gap, base.block_gap),
         line_gap: d(cur.line_gap, base.line_gap),
         output_gap: d(cur.output_gap, base.output_gap),
+        interface: d(cur.interface, base.interface),
     }
 }
 
@@ -637,6 +645,7 @@ impl LookEditor {
             Control::Blocks => set(&mut o.blocks, Blocks::ALL[i], base.blocks),
             Control::Bar => set(&mut o.bar, BarSize::ALL[i], base.bar),
             Control::Buttons => set(&mut o.buttons, Buttons::ALL[i], base.buttons),
+            Control::Interface => set(&mut o.interface, Interface::ALL[i], base.interface),
             Control::Background => set(&mut o.background, Background::ALL[i], base.background),
             Control::Radius => set(&mut o.radius, style::RADII[i], base.radius),
             Control::Position => {
@@ -681,6 +690,7 @@ impl LookEditor {
             Control::Blocks => o.blocks = None,
             Control::Bar => o.bar = None,
             Control::Buttons => o.buttons = None,
+            Control::Interface => o.interface = None,
             Control::Background => o.background = None,
             Control::Radius => o.radius = None,
             _ => return Change::None,
@@ -784,16 +794,47 @@ impl LookEditor {
         s: f32,
     ) {
         let rg = self.regions(width, s);
-        let (x0, w) = (rg.x, rg.w);
         let fg = theme.foreground;
         let dimc = dim(theme);
         let hair = s.round().max(1.0);
         let m = p.metrics();
         let panel_bg = surface(theme, 0.035);
+        // Interfaz Flotante: el panel es una tarjeta separada del terminal por un hueco y con
+        // margen a la derecha y abajo. Lo que tapa la lista al desplazarse queda dentro de su
+        // borde y con sus esquinas.
+        let chrome = crate::chrome::Chrome::new(&theme.style, s);
+        let full_h = height;
+        let (x0, w, height) = if chrome.floating {
+            let (g, mg) = (chrome.gap, chrome.margin);
+            (rg.x + g, rg.w - g - mg, height - mg)
+        } else {
+            (rg.x, rg.w, height)
+        };
+        let cover = |p: &mut Painter, y: f32, h: f32| {
+            if chrome.floating {
+                let r = (chrome.radius - hair).max(0.0);
+                p.rounded(
+                    x0 + hair,
+                    y.max(top + hair),
+                    w - 2.0 * hair,
+                    h,
+                    panel_bg,
+                    1.0,
+                    r,
+                );
+            } else {
+                p.rect(x0, y, w, h, panel_bg, 1.0);
+            }
+        };
         let mut sliders = Vec::new();
         let pad = (18.0 * s).round();
         let (ix, iw) = (x0 + pad, (w - 2.0 * pad).max(40.0 * s));
-        p.rect(x0, top, w, height - top, panel_bg, 1.0);
+        if chrome.floating {
+            p.rect(rg.x, top, rg.w, full_h - top, theme.tab_bar, 1.0);
+            p.card(x0, top, w, height - top, panel_bg, fg, chrome.radius, s);
+        } else {
+            p.rect(x0, top, w, height - top, panel_bg, 1.0);
+        }
 
         // Dónde va cada parte: cabecera, secciones, lista y pie.
         let th = p.ui_line_h(UiVariant::Title);
@@ -860,7 +901,10 @@ impl LookEditor {
         let mut body_rects = Vec::new();
         let mut y = body_y - self.scroll.round();
         for it in &items {
-            if y + it.h > body_y && y < body_y + body_h {
+            // Flotante: lo que se saldría por debajo de la tarjeta no se dibuja (asomaba en el
+            // margen, bajo el pie).
+            let fits = !chrome.floating || y + it.h <= height;
+            if y + it.h > body_y && y < body_y + body_h && fits {
                 let ctx = Ctx {
                     theme,
                     cfg,
@@ -874,15 +918,10 @@ impl LookEditor {
         }
         // El texto de la lista, debajo de lo que la tapa.
         p.out.append(p.fg);
-        p.rect(x0, top, w, body_y - top, panel_bg, 1.0);
-        p.rect(
-            x0,
-            body_y + body_h,
-            w,
-            height - body_y - body_h,
-            panel_bg,
-            1.0,
-        );
+        cover(p, top, body_y - top);
+        let inside = if chrome.floating { hair } else { 0.0 };
+        cover(p, body_y + body_h, height - body_y - body_h - inside);
+
         // Solo responde lo que se ve.
         let mut rects: Vec<Rect> = Vec::new();
         for mut r in body_rects {
@@ -897,7 +936,7 @@ impl LookEditor {
         // Borde izquierdo del panel (se arrastra para cambiar el ancho).
         if self.dragging == Some(Drag::Divider) || self.hover == Some(Hit::Divider) {
             p.rect(x0 - hair, top, 2.0 * hair, height - top, theme.accent, 1.0);
-        } else {
+        } else if !chrome.floating {
             p.rect(x0, top, hair, height - top, fg, 0.12);
         }
 
@@ -1046,6 +1085,12 @@ impl LookEditor {
             );
         }
 
+        // Flotante: bajo la tarjeta, el margen con el fondo de la ventana. Al final y por encima
+        // del texto: el de la lista desplazada no asoma por ahí.
+        if chrome.floating {
+            p.out.append(p.fg);
+            p.rect(rg.x, height, rg.w, full_h - height, theme.tab_bar, 1.0);
+        }
         self.drawn = Some(Drawn {
             x: x0,
             grip: (5.0 * s).round(),
@@ -1623,6 +1668,25 @@ fn preview(p: &mut Painter, theme: &Theme, c: Control, i: usize, r: [f32; 4], s:
             crate::ui::tab_sample(p, &t, r, s * 0.7);
         }
         Control::Buttons => crate::ui::buttons_sample(p, theme, Buttons::ALL[i], r, s * 0.8),
+        Control::Interface => {
+            // La barra arriba y el terminal debajo: pegado a los bordes o como tarjeta.
+            let bh = (h * 0.3).round();
+            p.rect(x, y, w, h, theme.tab_bar, 1.0);
+            if Interface::ALL[i] == Interface::Floating {
+                let m = (5.0 * s).round();
+                let side = (w * 0.3).round();
+                let rr = (5.0 * s).round();
+                let (cy, ch) = (y + bh, h - bh - m);
+                p.rounded(x + m, cy, w - 3.0 * m - side, ch, theme.background, 1.0, rr);
+                p.rounded(x + w - m - side, cy, side, ch, theme.background, 1.0, rr);
+            } else {
+                let hair = s.round().max(1.0);
+                p.rect(x, y + bh, w, h - bh, theme.background, 1.0);
+                p.rect(x, y + bh, w, hair, theme.foreground, 0.08);
+                let side = (w * 0.3).round();
+                p.rect(x + w - side, y + bh, side, h - bh, theme.tab_bar, 1.0);
+            }
+        }
         Control::Background => {
             let bh = (h * 0.3).round();
             p.rect(x, y, w, bh, theme.tab_bar, 1.0);
@@ -1733,6 +1797,26 @@ fn blocks_sample(p: &mut Painter, theme: &Theme, b: Blocks, r: [f32; 4], s: f32)
             Blocks::Outline => {
                 let (c, a) = if failed { (err, 0.40) } else { (fg, 0.16) };
                 p.outline(cx0, y0, cw, y1 - y0, c, a, rr, hair);
+            }
+            Blocks::Chips => {
+                let (c, fa, la) = if failed {
+                    (err, 0.06, 0.22)
+                } else {
+                    (fg, 0.03, 0.06)
+                };
+                p.rounded(cx0, y0, cw, y1 - y0, c, fa, rr);
+                p.outline(cx0, y0, cw, y1 - y0, c, la, rr, hair);
+                // La píldora del resultado, arriba a la derecha.
+                let (pw, ph) = ((12.0 * s).round(), (5.0 * s).round());
+                p.rounded(
+                    cx0 + cw - pw - 3.0 * s,
+                    y0 + 3.0 * s,
+                    pw,
+                    ph,
+                    status,
+                    0.5,
+                    ph / 2.0,
+                );
             }
             Blocks::Header => {
                 let (c, a) = if failed { (err, 0.13) } else { (fg, 0.06) };
@@ -1900,14 +1984,37 @@ mod tests {
     }
 
     #[test]
+    fn interfaz_en_el_editor() {
+        let mut cfg = Config::default();
+        let mut ed = LookEditor::new(0.34);
+        let clasica = pos(Interface::ALL, &Interface::Classic);
+        assert_eq!(
+            ed.choose(Control::Interface, clasica, &mut cfg),
+            Change::Style
+        );
+        assert_eq!(cfg.style.interface, Some(Interface::Classic));
+        assert_eq!(cfg.theme().style.interface, Interface::Classic);
+        assert_eq!(
+            ed.reset_control(Control::Interface, &mut cfg),
+            Change::Style
+        );
+        assert!(cfg.style.is_empty());
+    }
+
+    #[test]
     fn elegir_guarda_solo_lo_que_cambia() {
         let mut cfg = Config::default();
         let mut ed = LookEditor::new(0.34);
         let pill = pos(Tabs::ALL, &Tabs::Pill);
-        assert_eq!(ed.choose(Control::TabShape, pill, &mut cfg), Change::Style);
-        assert_eq!(cfg.style.tabs, Some(Tabs::Pill));
+        let del_tema = pos(Tabs::ALL, &cfg.theme().style.tabs);
+        let otra = pos(Tabs::ALL, &Tabs::Underline);
+        assert_eq!(ed.choose(Control::TabShape, otra, &mut cfg), Change::Style);
+        assert_eq!(cfg.style.tabs, Some(Tabs::Underline));
         // Volver a la del tema no deja nada escrito.
-        assert_eq!(ed.choose(Control::TabShape, 0, &mut cfg), Change::Style);
+        assert_eq!(
+            ed.choose(Control::TabShape, del_tema, &mut cfg),
+            Change::Style
+        );
         assert!(cfg.style.is_empty());
         // Otro tema: se lleva su forma, salvo con "conservar mis cambios".
         ed.choose(Control::TabShape, pill, &mut cfg);

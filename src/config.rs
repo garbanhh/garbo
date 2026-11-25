@@ -1,7 +1,7 @@
 //! Configuración de usuario: `~/.config/garbo/config.toml`.
 //! Todo tiene valores por defecto razonables; el archivo es opcional.
 
-use crate::style::{Background, BarSize, Blocks, Buttons, Prompt, Style, Tabs};
+use crate::style::{Background, BarSize, Blocks, Buttons, Interface, Prompt, Style, Tabs};
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::fs;
@@ -638,8 +638,48 @@ impl Config {
                 }
             }
         }
-        t.style = self.style.apply(t.style);
+        t.style = self.style.apply(self.base_style());
+        t.style.interface = self.interface();
         t
+    }
+
+    /// Letra de la interfaz (familia y alternativas) si es proporcional; `None` = la del terminal.
+    /// `[font] ui_family` manda; si está vacía, la interfaz Flotante usa la proporcional del
+    /// sistema (Adwaita Sans, la de GNOME, derivada de Inter) y la Clásica, la del terminal.
+    pub fn ui_font(&self) -> Option<(String, Vec<String>)> {
+        let f = &self.font;
+        if !f.ui_family.trim().is_empty() {
+            return Some((f.ui_family.clone(), f.ui_fallback()));
+        }
+        (self.interface() == Interface::Floating)
+            .then(|| ("Adwaita Sans".to_string(), f.ui_fallback()))
+    }
+
+    /// Interfaz de la ventana: la elegida en `[style]` o la de este sistema. En Windows, de
+    /// momento, siempre la Clásica.
+    pub fn interface(&self) -> Interface {
+        if cfg!(windows) {
+            return Interface::Classic;
+        }
+        self.style.interface.unwrap_or_else(Interface::default_here)
+    }
+
+    /// La forma de la que parte `[style]`: la del tema o, con la interfaz Flotante y un tema sin
+    /// forma propia, la de Flotante. Su interfaz es la de este sistema, así lo que se guarde en
+    /// `[style]` es solo lo que el usuario cambió.
+    pub fn base_style(&self) -> Style {
+        let theme = Theme::builtin(&self.theme)
+            .map(|t| t.style)
+            .unwrap_or_default();
+        let base = if self.interface() == Interface::Floating && theme == Style::default() {
+            Style::floating()
+        } else {
+            theme
+        };
+        Style {
+            interface: Interface::default_here(),
+            ..base
+        }
     }
 }
 
@@ -779,6 +819,65 @@ mod tests {
         };
         assert_eq!(cfg.theme().style.tabs, Tabs::Folder);
         assert_eq!(Theme::names(), ALL_NAMES);
+    }
+
+    #[test]
+    fn interfaz_flotante_por_defecto() {
+        use crate::style::{Buttons, Interface};
+        let cfg = Config::default();
+        let s = cfg.theme().style;
+        if cfg!(windows) {
+            // En Windows, siempre la Clásica, diga lo que diga el archivo.
+            assert_eq!(s.interface, Interface::Classic);
+            let f = Config {
+                style: toml::from_str("interface = \"floating\"").unwrap(),
+                ..Config::default()
+            };
+            assert_eq!(f.theme().style.interface, Interface::Classic);
+        } else {
+            // Los temas de siempre estrenan la forma de Flotante.
+            assert_eq!(s.interface, Interface::Floating);
+            assert_eq!(
+                (s.tabs, s.buttons, s.radius),
+                (Tabs::Pill, Buttons::Round, 10)
+            );
+            // Un tema con forma propia la conserva.
+            let bosque = Config {
+                theme: "bosque".into(),
+                ..Config::default()
+            };
+            let b = bosque.theme().style;
+            assert_eq!((b.tabs, b.interface), (Tabs::Folder, Interface::Floating));
+            // Lo que el usuario fija en [style] manda.
+            let mio = Config {
+                style: toml::from_str("tabs = \"underline\"").unwrap(),
+                ..Config::default()
+            };
+            assert_eq!(mio.theme().style.tabs, Tabs::Underline);
+        }
+        // Clásica: la forma de siempre, tal cual.
+        let clasica = Config {
+            style: toml::from_str("interface = \"classic\"").unwrap(),
+            ..Config::default()
+        };
+        assert_eq!(clasica.theme().style, Style::default());
+    }
+
+    #[test]
+    fn letra_de_la_interfaz() {
+        let mut cfg = Config::default();
+        if !cfg!(windows) {
+            // Flotante: la proporcional del sistema (la de GNOME primero).
+            let (family, fallback) = cfg.ui_font().unwrap();
+            assert_eq!(family, "Adwaita Sans");
+            assert!(fallback.iter().any(|f| f == "Cantarell"));
+        }
+        // Clásica: la del terminal, como siempre.
+        cfg.style = toml::from_str("interface = \"classic\"").unwrap();
+        assert_eq!(cfg.ui_font(), None);
+        // La que elija el usuario, con cualquier interfaz.
+        cfg.font.ui_family = "Inter".into();
+        assert_eq!(cfg.ui_font().map(|f| f.0), Some("Inter".to_string()));
     }
 
     // Los enlaces simbólicos de Windows necesitan permisos especiales.
@@ -1186,6 +1285,7 @@ impl Theme {
             block_gap: 0,
             line_gap: 0,
             output_gap: 0,
+            interface: Interface::Classic,
         };
         use Background::{Gradient, Solid};
         use BarSize::{Compact, Normal, Tall};

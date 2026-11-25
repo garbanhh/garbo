@@ -10,7 +10,8 @@ theme = "garbo-black"
 family = "Adwaita Mono"     # si no existe se usa la monoespaciada del sistema
 size = 11.0                  # puntos (como GNOME Terminal; en Windows, 10)
 line_height = 1.0            # 1.0 = interlineado natural de la fuente
-ui_family = ""               # fuente de la interfaz; vacía = la misma del terminal
+ui_family = ""               # fuente de la interfaz; vacía = Adwaita Sans (o la del sistema) con la interfaz
+                             # Flotante y la del terminal con la Clásica
 ui_size = 10.5               # en Windows, 9.5
 # Se buscan en orden cuando la fuente principal no tiene un carácter.
 # Solo se abren (mmap) cuando realmente hacen falta.
@@ -60,9 +61,11 @@ blocked = true           # avisar también cuando un agente espera tu permiso o 
 # Forma de la interfaz. Cada tema trae la suya; aquí se cambia opción a opción. Lo más cómodo es el editor de aspecto: Ajustes → Tema → Aspecto, o "Editar el aspecto"
 # en la paleta de comandos (Ctrl+Shift+P).
 [style]
+# interface  = "floating"  # floating (Flotante: terminal y paneles como tarjetas) | classic (la de siempre).
+#                           # Con Flotante, los temas sin forma propia usan pill, round, chips y radio 10.
 # tabs       = "flat"      # flat | underline | topline | pill | outline | floating | folder | brackets | segmented | dot
 # prompt     = "border"    # border | soft | solid | tab | underline | brackets | dimmed | plain
-# blocks     = "classic"   # classic | bar | dot | card | outline | header | separator | dashed | status | errors | fade | none
+# blocks     = "classic"   # classic | bar | dot | card | chips | outline | header | separator | dashed | status | errors | fade | none
 # buttons    = "round"     # round | color | flat | icons (en Windows, flat por defecto)
 # bar        = "normal"    # compact | normal | tall
 # background = "solid"     # solid | gradient

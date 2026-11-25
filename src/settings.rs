@@ -10,6 +10,8 @@ use crate::view::Painter;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Field {
+    /// Interfaz de toda la ventana: Flotante o Clásica.
+    Interface,
     /// Abre el editor de aspecto.
     Appearance,
     Theme,
@@ -45,6 +47,8 @@ pub enum Field {
     CheckNow,
     CheckUpdates,
     Version,
+    /// Ajustes → Atajos: la lista entera (solo para consultar).
+    Shortcuts,
 }
 
 /// Qué tiene que hacer la app tras un cambio.
@@ -77,7 +81,11 @@ pub enum Change {
 const CATEGORIES: &[(&str, &[(Field, &str)])] = &[
     (
         "Tema",
-        &[(Field::Appearance, "Aspecto"), (Field::Theme, "Tema")],
+        &[
+            (Field::Interface, "Interfaz"),
+            (Field::Appearance, "Aspecto"),
+            (Field::Theme, "Tema"),
+        ],
     ),
     (
         "Pestañas",
@@ -142,6 +150,7 @@ const CATEGORIES: &[(&str, &[(Field, &str)])] = &[
             (Field::EditFile, "Editar config.toml"),
         ],
     ),
+    ("Atajos", &[(Field::Shortcuts, "Atajos")]),
     (
         "Actualizaciones",
         &[
@@ -189,11 +198,18 @@ fn cat_of(field_idx: usize) -> usize {
         .unwrap_or(0)
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Item {
     /// Fila de ajuste (índice en `fields()`).
     Row(usize),
     /// Una fila de la cuadrícula de temas.
     Themes(usize),
+    /// Atajos: la nota de arriba ("Se cambian en…").
+    Note,
+    /// Atajos: el título de una sección.
+    Heading(usize),
+    /// Atajos: (sección, fila).
+    Key(usize, usize),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -248,6 +264,9 @@ pub struct Settings {
     tabs_note: bool,
     pub save_failed: bool,
     pub hover: Option<Hit>,
+    /// Lista de Ajustes → Atajos y la `[keybindings]` de la que salió.
+    shortcuts: Vec<crate::shortcuts::Section>,
+    shortcuts_src: Option<std::collections::HashMap<String, String>>,
 }
 
 /// Geometría de la ventana (compartida por el dibujo y la detección de clics).
@@ -274,6 +293,8 @@ struct Layout {
     control_w: f32,
     /// (inicio, tamaño) de la barra de scroll relativa al cuerpo, si el contenido no cabe.
     scrollbar: Option<(f32, f32)>,
+    /// (elemento, y, alto) de la lista de atajos visible.
+    keys: Vec<(Item, f32, f32)>,
 }
 
 impl Settings {
@@ -295,6 +316,16 @@ impl Settings {
             tabs_note: false,
             save_failed: false,
             hover: None,
+            shortcuts: Vec::new(),
+            shortcuts_src: None,
+        }
+    }
+
+    /// Rehace la lista de atajos si cambió `[keybindings]` (o la primera vez).
+    pub fn refresh_shortcuts(&mut self, cfg: &Config) {
+        if self.shortcuts_src.as_ref() != Some(&cfg.keybindings) {
+            self.shortcuts = crate::shortcuts::sections(&cfg.keybindings);
+            self.shortcuts_src = Some(cfg.keybindings.clone());
         }
     }
 
@@ -354,6 +385,16 @@ impl Settings {
                 // Pasada la primera o la última fila de tarjetas, a la opción de al lado.
                 self.move_sel(if n == Nav::Up { -1 } else { 1 });
             }
+            // En Atajos (una sola opción, la lista) ↑ ↓ desplazan la lista elemento a elemento.
+            Nav::Up | Nav::Down if self.field(self.selected) == Field::Shortcuts => {
+                self.first = if n == Nav::Up {
+                    self.first.saturating_sub(1)
+                } else {
+                    self.first + 1
+                };
+                self.wheel = 0.0;
+                self.follow = false;
+            }
             Nav::Up => self.move_sel(-1),
             Nav::Down => self.move_sel(1),
             Nav::Left => return self.adjust(self.selected, -1, cfg),
@@ -384,6 +425,7 @@ impl Settings {
     pub fn value_text(&self, f: Field, cfg: &Config) -> String {
         match f {
             Field::Theme => Theme::display_name(&cfg.theme),
+            Field::Interface => cfg.interface().label().into(),
             Field::FontFamily => cfg.font.family.clone(),
             Field::FontSize => format!("{} pt", trim_num(cfg.font.size)),
             Field::LineHeight => trim_num(cfg.font.line_height),
@@ -562,6 +604,14 @@ impl Settings {
             Field::RenameTab => Change::None,
             Field::Appearance if dir == 0 => Change::OpenLook,
             Field::Appearance => Change::None,
+            // En Windows, de momento, siempre la Clásica.
+            Field::Interface if cfg!(windows) => Change::None,
+            Field::Interface => {
+                use crate::style::Interface;
+                let v = cycle_opt(Interface::ALL, cfg.interface(), d);
+                cfg.style.interface = (v != Interface::default_here()).then_some(v);
+                Change::Style
+            }
             Field::NotifyAgents => {
                 let order = [NotifyWhen::Unfocused, NotifyWhen::Always, NotifyWhen::Never];
                 let pos = order
@@ -600,7 +650,7 @@ impl Settings {
                 cfg.check_updates = !cfg.check_updates;
                 Change::Updates
             }
-            Field::Version => Change::None,
+            Field::Version | Field::Shortcuts => Change::None,
         }
     }
 
@@ -636,26 +686,33 @@ impl Settings {
         let card_h = (card_w * 0.52).max(56.0 * s).round();
         let name_h = (26.0 * s).round();
         let card_row_h = card_h + name_h + (8.0 * s).round();
+        // Atajos: filas más bajas que las de los ajustes; los títulos, con aire encima.
+        let key_h = (30.0 * s).round();
+        let heading_h = (38.0 * s).round();
         let (a, b) = cat_range(self.cat);
         let its: Vec<Item> = (a..b)
-            .flat_map(|i| {
-                if self.field(i) == Field::Theme {
-                    (0..Theme::names().len().div_ceil(cols))
-                        .map(Item::Themes)
-                        .collect::<Vec<_>>()
-                } else {
-                    vec![Item::Row(i)]
+            .flat_map(|i| match self.field(i) {
+                Field::Theme => (0..Theme::names().len().div_ceil(cols))
+                    .map(Item::Themes)
+                    .collect::<Vec<_>>(),
+                Field::Shortcuts => {
+                    let mut v = vec![Item::Note];
+                    for (si, sec) in self.shortcuts.iter().enumerate() {
+                        v.push(Item::Heading(si));
+                        v.extend((0..sec.rows.len()).map(|ri| Item::Key(si, ri)));
+                    }
+                    v
                 }
+                _ => vec![Item::Row(i)],
             })
             .collect();
         let heights: Vec<f32> = its
             .iter()
-            .map(|it| {
-                if matches!(it, Item::Themes(_)) {
-                    card_row_h
-                } else {
-                    row_h
-                }
+            .map(|it| match it {
+                Item::Themes(_) => card_row_h,
+                Item::Heading(_) => heading_h,
+                Item::Note | Item::Key(..) => key_h,
+                Item::Row(_) => row_h,
             })
             .collect();
 
@@ -690,6 +747,7 @@ impl Settings {
                 .position(|it| match *it {
                     Item::Themes(r) => on_theme && r == self.theme_row(cols),
                     Item::Row(i) => i == self.selected,
+                    _ => false,
                 })
                 .unwrap_or(0)
                 .min(its.len().saturating_sub(1));
@@ -702,6 +760,7 @@ impl Settings {
 
         let mut rows = Vec::new();
         let mut cards = Vec::new();
+        let mut keys = Vec::new();
         let mut cy = body_y;
         for (k, it) in its.iter().enumerate().skip(first) {
             let ih = heights[k];
@@ -710,6 +769,7 @@ impl Settings {
             }
             match *it {
                 Item::Row(ri) => rows.push((ri, cy, ih)),
+                Item::Note | Item::Heading(_) | Item::Key(..) => keys.push((*it, cy, ih)),
                 Item::Themes(r) => {
                     for c in 0..cols {
                         let ti = r * cols + c;
@@ -754,6 +814,84 @@ impl Settings {
             name_h,
             control_w: (170.0 * s).min(pane_w * 0.45).round(),
             scrollbar,
+            keys,
+        }
+    }
+
+    /// Un elemento de Ajustes → Atajos entre `left` y `right`: la nota, el título de una sección o
+    /// una acción con sus teclas como etiquetas a la derecha.
+    #[allow(clippy::too_many_arguments)]
+    fn draw_shortcut(
+        &self,
+        p: &mut Painter,
+        theme: &Theme,
+        it: Item,
+        left: f32,
+        right: f32,
+        y: f32,
+        h: f32,
+        s: f32,
+    ) {
+        let dimc = dim(theme);
+        let small_h = p.ui_line_h(UiVariant::Small);
+        match it {
+            Item::Note => {
+                let t = "Se cambian en [keybindings] de config.toml";
+                let ty = (y + (h - small_h) / 2.0).round();
+                p.ui_text_v(left, ty, t, dimc, right - left, UiVariant::Small);
+            }
+            Item::Heading(si) => {
+                let Some(sec) = self.shortcuts.get(si) else {
+                    return;
+                };
+                // Pegado a sus filas: el aire queda encima.
+                let ty = (y + h - small_h - 4.0 * s).round();
+                let t = sec.title.to_uppercase();
+                p.ui_text_v(left, ty, &t, dimc, right - left, UiVariant::Small);
+            }
+            Item::Key(si, ri) => {
+                let Some(row) = self.shortcuts.get(si).and_then(|sec| sec.rows.get(ri)) else {
+                    return;
+                };
+                let mid = y + h / 2.0;
+                let ty = (mid - small_h / 2.0).round();
+                // Teclas a la derecha, dejando sitio al nombre; si no caben todas, las primeras.
+                let min_label = (110.0 * s).round();
+                let (pad, gap) = ((7.0 * s).round(), (6.0 * s).round());
+                let chip_h = (small_h + 6.0 * s).round();
+                let mut x = right;
+                if row.keys.is_empty() {
+                    let t = "Sin atajo";
+                    let tw = p.ui_measure_v(t, UiVariant::Small);
+                    x = right - tw;
+                    p.ui_text_v(x, ty, t, dimc, tw + 2.0, UiVariant::Small);
+                }
+                let widths: Vec<f32> = row
+                    .keys
+                    .iter()
+                    .map(|k| (p.ui_measure_v(k, UiVariant::Small) + 2.0 * pad).round())
+                    .collect();
+                let n = keys_that_fit(&widths, right - left - min_label, gap);
+                for (k, cw) in row.keys[..n].iter().zip(&widths).rev() {
+                    x -= cw;
+                    let cy = (mid - chip_h / 2.0).round();
+                    p.rounded(
+                        x,
+                        cy,
+                        *cw,
+                        chip_h,
+                        theme.foreground,
+                        0.08,
+                        (5.0 * s).round(),
+                    );
+                    let tw = cw - 2.0 * pad;
+                    p.ui_text_v(x + pad, ty, k, theme.foreground, tw + 2.0, UiVariant::Small);
+                    x -= gap;
+                }
+                let max_w = (x - 12.0 * s - left).max(0.0);
+                p.ui_text_in(left, y, h, &row.action, theme.foreground, max_w);
+            }
+            Item::Row(_) | Item::Themes(_) => {}
         }
     }
 
@@ -819,9 +957,17 @@ impl Settings {
             .iter()
             .position(|n| n.eq_ignore_ascii_case(&cfg.theme))
             .unwrap_or(0);
+        self.refresh_shortcuts(cfg);
         let l = self.layout(width, height, top, s);
-        p.rect(0.0, 0.0, width, height, Rgb(0, 0, 0), 0.40);
-        let radius = (14.0 * s).round();
+        // Interfaz Flotante: hoja más redondeada, fondo algo más oscuro e icono por categoría.
+        let chrome = crate::chrome::Chrome::new(&theme.style, s);
+        let dim_bg = if chrome.floating { chrome.dim } else { 0.40 };
+        p.rect(0.0, 0.0, width, height, Rgb(0, 0, 0), dim_bg);
+        let radius = if chrome.floating {
+            chrome.sheet
+        } else {
+            (14.0 * s).round()
+        };
         let panel = surface(theme, 0.05);
         p.card(l.x, l.y, l.w, l.h, panel, theme.foreground, radius, s);
         let dimc = dim(theme);
@@ -894,7 +1040,14 @@ impl Settings {
             } else {
                 dimc
             };
-            p.ui_text_in(bx + 12.0 * s, cy, ch, CATEGORIES[c].0, c_txt, bw - 16.0 * s);
+            if chrome.floating {
+                let ic = if selected { theme.accent } else { c_txt };
+                category_icon(p, CATEGORIES[c].0, bx + 20.0 * s, cy + ch / 2.0, s, ic);
+                let tx = bx + 38.0 * s;
+                p.ui_text_in(tx, cy, ch, CATEGORIES[c].0, c_txt, bx + bw - 4.0 * s - tx);
+            } else {
+                p.ui_text_in(bx + 12.0 * s, cy, ch, CATEGORIES[c].0, c_txt, bw - 16.0 * s);
+            }
         }
 
         // --- Cabecera de la derecha
@@ -960,6 +1113,7 @@ impl Settings {
                 }
                 Field::SshIntegration => "Bloques, prompt y agentes en el servidor".into(),
                 Field::Appearance => "Pestañas, prompt, bloques, botones…".into(),
+                Field::Interface => "Paneles, menús y barra".into(),
                 Field::TabsPosition => "Arriba, abajo o a un lado".into(),
                 Field::TabsWidth if cfg.tabs.position.vertical() => {
                     "Ancho de la columna de pestañas".into()
@@ -1053,6 +1207,20 @@ impl Settings {
             }
         }
 
+        // --- Atajos
+        for &(it, ry, rh) in &l.keys {
+            self.draw_shortcut(
+                p,
+                theme,
+                it,
+                l.pane_x + pad,
+                l.pane_x + l.pane_w - pad,
+                ry,
+                rh,
+                s,
+            );
+        }
+
         if let Some((off, size)) = l.scrollbar {
             let bw = (4.0 * s).round();
             p.rounded(
@@ -1127,10 +1295,106 @@ fn update_button(upd: &UpdateView) -> (String, bool, bool, String) {
 }
 
 /// Opciones con selector ‹ valor ›.
+/// Cuántas teclas de una fila de Atajos caben en `avail` px, empezando por la primera (la
+/// principal), con `gap` entre una y otra.
+fn keys_that_fit(widths: &[f32], avail: f32, gap: f32) -> usize {
+    let mut used = 0.0;
+    for (i, w) in widths.iter().enumerate() {
+        used += w + if i > 0 { gap } else { 0.0 };
+        if used > avail {
+            return i;
+        }
+    }
+    widths.len()
+}
+
+/// Icono de una categoría (interfaz Flotante), centrado en (`cx`, `cy`), de unos 13 px lógicos.
+fn category_icon(p: &mut Painter, name: &str, cx: f32, cy: f32, s: f32, c: Rgb) {
+    let t = (1.4 * s).max(1.0);
+    let k = |v: f32| v * s;
+    let line = |p: &mut Painter, a: (f32, f32), b: (f32, f32)| {
+        p.line(
+            cx + k(a.0),
+            cy + k(a.1),
+            cx + k(b.0),
+            cy + k(b.1),
+            t,
+            c,
+            1.0,
+        );
+    };
+    let frame = |p: &mut Painter, w: f32, h: f32, r: f32| {
+        p.outline(
+            cx - k(w / 2.0),
+            cy - k(h / 2.0),
+            k(w),
+            k(h),
+            c,
+            1.0,
+            k(r),
+            t,
+        );
+    };
+    match name {
+        "Tema" => {
+            p.ring(cx, cy, k(5.5), t, c, 1.0);
+            line(p, (0.0, -5.5), (0.0, 5.5));
+        }
+        "Pestañas" => {
+            frame(p, 13.0, 10.0, 2.0);
+            line(p, (-6.5, -1.5), (6.5, -1.5));
+        }
+        "Texto" => {
+            line(p, (-4.5, 5.5), (0.0, -5.5));
+            line(p, (0.0, -5.5), (4.5, 5.5));
+            line(p, (-2.5, 1.5), (2.5, 1.5));
+        }
+        "Terminal" => {
+            frame(p, 13.0, 11.0, 2.0);
+            line(p, (-3.5, -2.0), (-1.0, 0.0));
+            line(p, (-1.0, 0.0), (-3.5, 2.0));
+            line(p, (0.5, 2.5), (3.5, 2.5));
+        }
+        "Completado" => {
+            line(p, (-5.5, -4.0), (5.5, -4.0));
+            line(p, (-5.5, 0.0), (1.0, 0.0));
+            line(p, (-5.5, 4.0), (3.5, 4.0));
+        }
+        "Bloques" => {
+            p.outline(cx - k(6.0), cy - k(5.5), k(12.0), k(4.5), c, 1.0, k(1.5), t);
+            p.outline(cx - k(6.0), cy + k(1.0), k(12.0), k(4.5), c, 1.0, k(1.5), t);
+        }
+        "Avisos" => {
+            p.outline(cx - k(4.0), cy - k(5.5), k(8.0), k(9.0), c, 1.0, k(4.0), t);
+            line(p, (-5.5, 3.5), (5.5, 3.5));
+            line(p, (-1.5, 6.0), (1.5, 6.0));
+        }
+        "Ventana" => {
+            frame(p, 13.0, 11.0, 2.0);
+            line(p, (-6.5, -2.0), (6.5, -2.0));
+        }
+        "Atajos" => {
+            frame(p, 14.0, 9.0, 2.0);
+            for dx in [-3.5, -1.0, 1.5, 4.0] {
+                p.circle(cx + k(dx) - k(0.25), cy - k(1.0), k(0.9), c, 1.0);
+            }
+            line(p, (-3.0, 2.0), (3.0, 2.0));
+        }
+        "Actualizaciones" => {
+            line(p, (0.0, -5.5), (0.0, 2.5));
+            line(p, (-3.5, -1.0), (0.0, 2.5));
+            line(p, (0.0, 2.5), (3.5, -1.0));
+            line(p, (-5.5, 5.5), (5.5, 5.5));
+        }
+        _ => p.circle(cx, cy, k(2.5), c, 1.0),
+    }
+}
+
 fn has_stepper(f: Field) -> bool {
     matches!(
         f,
-        Field::FontFamily
+        Field::Interface
+            | Field::FontFamily
             | Field::FontSize
             | Field::LineHeight
             | Field::CursorStyle
@@ -1385,6 +1649,10 @@ mod tests {
         set.nav(Nav::PrevCategory, &mut cfg);
         assert_eq!(CATEGORIES[set.cat].0, "Actualizaciones");
         assert_eq!(set.field(set.selected), Field::CheckNow);
+        set.nav(Nav::PrevCategory, &mut cfg);
+        assert_eq!(CATEGORIES[set.cat].0, "Atajos");
+        assert_eq!(set.field(set.selected), Field::Shortcuts);
+        set.nav(Nav::NextCategory, &mut cfg);
         // ↑ ↓ no salen de la categoría.
         for _ in 0..10 {
             set.nav(Nav::Down, &mut cfg);
@@ -1403,6 +1671,77 @@ mod tests {
         assert_eq!(cfg.theme, Theme::names()[cols]);
         assert_eq!(set.nav(Nav::Right, &mut cfg), Change::Theme);
         assert_eq!(cfg.theme, Theme::names()[cols + 1]);
+    }
+
+    #[test]
+    fn interfaz_en_ajustes() {
+        use crate::style::Interface;
+        let mut cfg = Config::default();
+        let set = &mut Settings::with_fonts(vec![]);
+        // La primera opción de Tema.
+        assert_eq!(set.field(set.selected), Field::Interface);
+        let ch = set.adjust(idx(Field::Interface), 1, &mut cfg);
+        if cfg!(windows) {
+            assert_eq!(ch, Change::None);
+            return;
+        }
+        assert_eq!(ch, Change::Style);
+        assert_eq!(cfg.interface(), Interface::Classic);
+        assert_eq!(cfg.style.interface, Some(Interface::Classic));
+        // Volver a la de serie no deja nada escrito.
+        set.adjust(idx(Field::Interface), 1, &mut cfg);
+        assert_eq!(cfg.style.interface, None);
+        assert_eq!(cfg.interface(), Interface::Floating);
+    }
+
+    #[test]
+    fn caben_las_primeras_teclas() {
+        assert_eq!(keys_that_fit(&[50.0, 60.0], 200.0, 6.0), 2);
+        assert_eq!(keys_that_fit(&[50.0, 60.0], 116.0, 6.0), 2);
+        // Si no caben todas, se quedan las primeras, no las últimas.
+        assert_eq!(keys_that_fit(&[50.0, 60.0], 115.0, 6.0), 1);
+        assert_eq!(keys_that_fit(&[50.0, 60.0], 40.0, 6.0), 0);
+        assert_eq!(keys_that_fit(&[], 40.0, 6.0), 0);
+    }
+
+    #[test]
+    fn atajos_se_desplazan() {
+        let mut cfg = Config::default();
+        let mut set = Settings::with_fonts(vec![]);
+        let atajos = CATEGORIES.iter().position(|c| c.0 == "Atajos").unwrap();
+        set.set_cat(atajos);
+        set.refresh_shortcuts(&cfg);
+        let (sec, row) = (
+            set.shortcuts.len() - 1,
+            set.shortcuts.last().unwrap().rows.len() - 1,
+        );
+        let last = |l: &Layout| {
+            l.keys
+                .iter()
+                .any(|(it, ..)| matches!(*it, Item::Key(s, r) if s == sec && r == row))
+        };
+        // Ventana baja: arriba del todo no se ve la última fila.
+        let l = set.layout(1200.0, 400.0, 40.0, 1.0);
+        assert_eq!(set.first, 0);
+        assert!(matches!(l.keys.first(), Some((Item::Note, ..))));
+        assert!(!last(&l));
+        // ↓ baja hasta que se ve la última, sin pasarse.
+        for _ in 0..200 {
+            set.nav(Nav::Down, &mut cfg);
+            set.layout(1200.0, 400.0, 40.0, 1.0);
+        }
+        let l = set.layout(1200.0, 400.0, 40.0, 1.0);
+        assert!(set.first > 0);
+        assert!(last(&l));
+        // ↑ vuelve arriba. Intro y ← → no hacen nada.
+        for _ in 0..200 {
+            set.nav(Nav::Up, &mut cfg);
+            set.layout(1200.0, 400.0, 40.0, 1.0);
+        }
+        assert_eq!(set.first, 0);
+        assert_eq!(set.nav(Nav::Activate, &mut cfg), Change::None);
+        assert_eq!(set.nav(Nav::Right, &mut cfg), Change::None);
+        assert_eq!(CATEGORIES[set.cat].0, "Atajos");
     }
 
     #[test]

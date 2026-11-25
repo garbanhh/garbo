@@ -301,6 +301,59 @@ fn normalize_name(k: &str) -> String {
     .to_string()
 }
 
+/// Nombre para enseñar de una combinación de la configuración: `ctrl+shift+pageup` →
+/// `Ctrl+Shift+RePág`.
+pub fn key_label(spec: &str) -> String {
+    let Some(c) = parse_combo(spec) else {
+        return spec.trim().to_string();
+    };
+    let mut out = String::new();
+    for (m, name) in [
+        (ModifiersState::CONTROL, "Ctrl"),
+        (ModifiersState::SHIFT, "Shift"),
+        (ModifiersState::ALT, "Alt"),
+        (ModifiersState::SUPER, "Super"),
+    ] {
+        if c.mods.contains(m) {
+            out.push_str(name);
+            out.push('+');
+        }
+    }
+    let key = match c.key.as_str() {
+        "plus" => "+",
+        "minus" => "-",
+        "equal" => "=",
+        "comma" => ",",
+        "period" => ".",
+        "pageup" => "RePág",
+        "pagedown" => "AvPág",
+        "home" => "Inicio",
+        "end" => "Fin",
+        "enter" => "Intro",
+        "backspace" => "Retroceso",
+        "delete" => "Supr",
+        "insert" => "Insert",
+        "escape" => "Esc",
+        "space" => "Espacio",
+        "tab" => "Tab",
+        "left" => "←",
+        "right" => "→",
+        "up" => "↑",
+        "down" => "↓",
+        other => {
+            // Letras y F1…F12 en mayúscula; cualquier otro nombre, con la inicial en mayúscula.
+            let mut chars = other.chars();
+            if let Some(first) = chars.next() {
+                out.extend(first.to_uppercase());
+                out.push_str(chars.as_str());
+            }
+            return out;
+        }
+    };
+    out.push_str(key);
+    out
+}
+
 /// Nombre normalizado de la tecla pulsada (independiente de Shift para letras).
 pub fn key_name(key: &Key) -> Option<String> {
     Some(match key {

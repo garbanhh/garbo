@@ -43,10 +43,9 @@ pub fn build_glyphs(cfg: &Config, font_pt: f32, scale: f32) -> GlyphCache {
         true,
     );
     let ui_px = pt_to_px(f.ui_size, scale);
-    let ui = if f.ui_family.trim().is_empty() {
-        FontSet::from_db(&db, &f.family, &f.fallback, ui_px, 1.0, true)
-    } else {
-        FontSet::from_db(&db, &f.ui_family, &f.ui_fallback(), ui_px, 1.0, false)
+    let ui = match cfg.ui_font() {
+        Some((family, fallback)) => FontSet::from_db(&db, &family, &fallback, ui_px, 1.0, false),
+        None => FontSet::from_db(&db, &f.family, &f.fallback, ui_px, 1.0, true),
     };
     GlyphCache::new(term, ui)
 }
@@ -91,6 +90,9 @@ pub struct State {
     pub hover: Option<TabHit>,
     /// Nombre de la pestaña bajo el ratón, que se desplaza si no cabe.
     pub marquee: crate::tabs::Marquee,
+    /// Ancho de cada pestaña ajustado a su nombre (interfaz Flotante con píldoras), medido al
+    /// empezar cada fotograma: el reparto de la barra (`TabBar::layout`) no puede medir texto.
+    pub tab_fit: Vec<f32>,
     /// Pestaña a la que se le está cambiando el nombre.
     pub rename: Option<crate::tabs::Rename>,
     /// Último clic en una pestaña (para el doble clic que le cambia el nombre).
@@ -160,6 +162,8 @@ pub struct Geometry {
     pub dividers: Vec<crate::panes::Divider>,
     /// Zona de los terminales (sin barra de pestañas ni panel lateral).
     pub area: crate::panes::Rect,
+    /// Medidas de la interfaz (márgenes, radios… de la Flotante; ceros con la Clásica).
+    pub chrome: crate::chrome::Chrome,
 }
 
 /// Un panel: índice de su terminal en `State::tabs`, su rectángulo y dónde empiezan sus celdas.
@@ -232,6 +236,7 @@ impl App {
             last_click: (now, 0),
             hover: None,
             marquee: crate::tabs::Marquee::default(),
+            tab_fit: Vec::new(),
             rename: None,
             tab_click: None,
             cursor_icon: winit::window::CursorIcon::Default,
@@ -301,6 +306,25 @@ impl App {
         // Igual con el panel de agentes.
         if std::env::var_os("GARBO_OPEN_AGENTS").is_some() {
             self.toggle_panel(true);
+        }
+        // Igual con el de puertos.
+        if std::env::var_os("GARBO_OPEN_PORTS").is_some() {
+            self.toggle_panel(false);
+        }
+        // Igual con la paleta de comandos, con lo buscado ya escrito.
+        if let Ok(q) = std::env::var("GARBO_OPEN_PALETTE") {
+            let mut pal = Palette::new(&self.keys);
+            pal.query = q;
+            pal.refilter();
+            self.st().palette = Some(pal);
+        }
+        // Igual con Ajustes: "N" = la categoría N; ",P" = P píxeles más abajo.
+        if let Ok(v) = std::env::var("GARBO_OPEN_SETTINGS") {
+            let mut parts = v.split(',').map(|n| n.trim().parse::<usize>().unwrap_or(0));
+            let mut set = crate::settings::Settings::new();
+            set.set_cat(parts.next().unwrap_or(0));
+            set.wheel(-(parts.next().unwrap_or(0) as f32));
+            self.st().settings = Some(set);
         }
         crate::update::ENABLED.store(self.cfg.check_updates, std::sync::atomic::Ordering::Relaxed);
         if self.cfg.check_updates {
@@ -390,6 +414,11 @@ impl App {
                 self.cfg.tabs,
                 st.stats.is_some(),
                 side,
+                &st.tab_fit,
+                st.tabs
+                    .get(st.active)
+                    .and_then(|t| st.git.summary_for(t.id))
+                    .map(|c| c.files),
             )
         });
         let top = tab_bar.as_ref().map_or(0.0, |t| t.height);
@@ -408,21 +437,23 @@ impl App {
             }
             None => (0.0, 0.0, 0.0),
         };
-        let inner_h = (h - top - bottom).max(1.0);
-        let panel = (panel_w > 0.0).then_some((w - right - panel_w, top, panel_w, inner_h));
+        let chrome = crate::chrome::Chrome::new(&self.theme.style, st.scale);
         let changes_w = changes_w(w - left - right - panel_w);
-        let changes =
-            (changes_w > 0.0).then_some((w - right - panel_w - changes_w, top, changes_w, inner_h));
-        let area = [
-            left,
+        let edges = crate::chrome::Edges {
             top,
-            (w - left - right - panel_w - changes_w).max(1.0),
-            inner_h,
-        ];
-        let gap = crate::panes::gap(st.scale);
+            left,
+            right,
+            bottom,
+        };
+        let crate::chrome::Areas {
+            area,
+            panel,
+            changes,
+        } = crate::chrome::areas(w, h, edges, panel_w, changes_w, &chrome);
+        let gap = chrome.pane_gap(st.scale);
         let (panes, dividers) = match st.groups.get(st.group) {
             Some(g) => (
-                self.pane_geos(&g.layout, area),
+                self.pane_geos(&g.layout, area, gap),
                 g.layout.dividers(area, gap),
             ),
             None => (Vec::new(), Vec::new()),
@@ -445,6 +476,7 @@ impl App {
             panes,
             dividers,
             area,
+            chrome,
         }
     }
 
@@ -453,13 +485,24 @@ impl App {
         let st = self.st.as_ref().unwrap();
         let m = st.glyphs.fonts.metrics;
         let pad = (self.cfg.window.padding * st.scale).round();
-        let cols = ((rect[2] - 2.0 * pad) / m.width).floor().max(2.0);
-        let lines = ((rect[3] - 2.0 * pad) / m.height).floor().max(1.0);
+        // Flotante: algo más de margen dentro de la tarjeta, para que las de los bloques y la de
+        // la orden que se escribe queden separadas de su borde igual por los lados y por abajo.
+        let floating = self.theme.style.interface == crate::style::Interface::Floating;
+        let (px, py) = if floating {
+            (
+                pad + (14.0 * st.scale).round(),
+                pad + (6.0 * st.scale).round(),
+            )
+        } else {
+            (pad, pad)
+        };
+        let cols = ((rect[2] - 2.0 * px) / m.width).floor().max(2.0);
+        let lines = ((rect[3] - 2.0 * py) / m.height).floor().max(1.0);
         PaneGeo {
             idx,
             rect,
-            x: rect[0] + pad,
-            y: rect[1] + pad,
+            x: rect[0] + px,
+            y: rect[1] + py,
             ws: WindowSize {
                 num_lines: lines as u16,
                 num_cols: cols as u16,
@@ -469,10 +512,15 @@ impl App {
         }
     }
 
-    fn pane_geos(&self, layout: &crate::panes::Layout, area: crate::panes::Rect) -> Vec<PaneGeo> {
+    fn pane_geos(
+        &self,
+        layout: &crate::panes::Layout,
+        area: crate::panes::Rect,
+        gap: f32,
+    ) -> Vec<PaneGeo> {
         let st = self.st.as_ref().unwrap();
         layout
-            .rects(area, crate::panes::gap(st.scale))
+            .rects(area, gap)
             .into_iter()
             .filter_map(|(id, r)| {
                 st.tabs
@@ -512,9 +560,10 @@ impl App {
         let area = geo.area;
         let sizes: Vec<(usize, WindowSize)> = {
             let st = self.st.as_ref().unwrap();
+            let gap = geo.chrome.pane_gap(st.scale);
             st.groups
                 .iter()
-                .flat_map(|g| self.pane_geos(&g.layout, area))
+                .flat_map(|g| self.pane_geos(&g.layout, area, gap))
                 .map(|p| (p.idx, p.ws))
                 .collect()
         };
@@ -1603,7 +1652,15 @@ impl App {
                 return false;
             }
             Change::Theme | Change::Style => {
+                let before = self.theme.style.interface;
                 self.theme = self.cfg.theme();
+                // Otra interfaz: otra letra para la interfaz (ver `Config::ui_font`).
+                if self.theme.style.interface != before {
+                    let (cfg, pt) = (self.cfg.clone(), self.st().font_pt);
+                    let st = self.st();
+                    st.glyphs = build_glyphs(&cfg, pt, st.scale);
+                    st.last_ws.num_cols = 0;
+                }
                 // La forma puede cambiar el alto de la barra (y con él, el de los terminales).
                 self.relayout();
             }
@@ -1793,7 +1850,54 @@ impl App {
         }
     }
 
+    /// Interfaz Flotante con píldoras: el ancho de cada pestaña, ajustado a lo que enseña (punto,
+    /// logo del agente, nombre, estado y ×). Se mide aquí porque el reparto no puede medir texto.
+    fn measure_tabs(&mut self) {
+        use crate::sessions::Status;
+        let style = self.theme.style;
+        let st = self.st.as_mut().unwrap();
+        // Con "Ancho: Máximo" se reparten la barra a partes iguales (y "Nombre" se nota).
+        let fit = style.interface == crate::style::Interface::Floating
+            && style.tabs == crate::style::Tabs::Pill
+            && !self.cfg.tabs.position.vertical()
+            && self.cfg.tabs.width != crate::tabs::Width::Max;
+        if !fit {
+            st.tab_fit.clear();
+            return;
+        }
+        let s = st.scale;
+        let close = (32.0 * s).round();
+        let views = tab_views(st);
+        st.tab_fit = views
+            .iter()
+            .map(|v| {
+                let label = if v.exited {
+                    format!("{} (terminado)", v.label)
+                } else {
+                    v.label.clone()
+                };
+                let lw: f32 = label
+                    .chars()
+                    .map(|c| st.glyphs.ui_advance(c, crate::atlas::UiVariant::Normal))
+                    .sum();
+                // Márgenes, punto, nombre y la ×.
+                let mut w = (12.0 + 14.0 + 6.0) * s + lw + close;
+                if v.agent.is_some() {
+                    w += 24.0 * s;
+                    if matches!(
+                        v.status,
+                        Status::Working | Status::Done | Status::Blocked(_)
+                    ) {
+                        w += 24.0 * s;
+                    }
+                }
+                w.ceil()
+            })
+            .collect();
+    }
+
     pub fn draw(&mut self) {
+        self.measure_tabs();
         let geo = self.geometry();
         let opacity = self.cfg.window.opacity.clamp(0.0, 1.0);
         let show_blocks = self.cfg.terminal.blocks;
@@ -1801,46 +1905,18 @@ impl App {
         let cfg = &self.cfg;
         let st = self.st.as_mut().unwrap();
         let (w, h) = st.renderer.size();
-        let views: Vec<ui::TabView> = st
-            .groups
-            .iter()
-            .filter_map(|g| {
-                let panes: Vec<&Tab> = g
-                    .layout
-                    .leaves()
-                    .iter()
-                    .filter_map(|id| st.tabs.iter().find(|t| t.id == *id))
-                    .collect();
-                let focus = panes.iter().find(|t| t.id == g.focus).or(panes.first())?;
-                // El indicador de la pestaña, del panel más urgente: te necesita, trabaja, terminó.
-                use crate::sessions::Status;
-                let rank = |t: &&&Tab| match (t.session.agent, t.session.status) {
-                    (None, _) => 0,
-                    (_, Status::Blocked(_)) => 4,
-                    (_, Status::Working) => 3,
-                    (_, Status::Done) => 2,
-                    _ => 1,
-                };
-                let lead = panes.iter().max_by_key(rank).unwrap_or(focus);
-                let n = panes.len();
-                Some(ui::TabView {
-                    label: match &g.name {
-                        Some(name) => name.clone(),
-                        None if n > 1 => format!("{} (+{})", focus.label(), n - 1),
-                        None => focus.label().to_string(),
-                    },
-                    exited: focus.exited,
-                    agent: lead.session.agent,
-                    status: lead.session.status,
-                })
-            })
-            .collect();
+        let views = tab_views(st);
         let toggles = ui::Toggles {
             stats: st.stats.is_some(),
             changes: st.changes.open,
             agents: st.panel.agents,
             ports: st.panel.ports,
             maximized: cfg!(windows) && st.window.is_maximized(),
+            changes_n: st
+                .tabs
+                .get(st.active)
+                .and_then(|t| st.git.summary_for(t.id))
+                .map(|c| c.files),
         };
         let now = Instant::now();
         let anim = crate::tabs::Anim {
@@ -1852,6 +1928,16 @@ impl App {
         let top = geo.tab_bar.as_ref().map_or(0.0, |t| t.height);
         let m = st.glyphs.fonts.metrics;
         let pad = (cfg.window.padding * st.scale).round();
+        // Con Flotante, el margen interior de las tarjetas del terminal (ver `pane_geo`).
+        let floating = theme.style.interface == crate::style::Interface::Floating;
+        let (pad_x, pad_y) = if floating {
+            (
+                pad + (14.0 * st.scale).round(),
+                pad + (6.0 * st.scale).round(),
+            )
+        } else {
+            (pad, pad)
+        };
         // Editor de aspecto: el panel a la derecha y, a la izquierda, el terminal (o la muestra,
         // del ancho que queda a la vista).
         let look = st
@@ -1861,7 +1947,7 @@ impl App {
             .map(|l| (l.regions(w, st.scale), l.sample));
         let showing_sample = look.is_some_and(|(_, sample)| sample);
         if let Some((rg, true)) = look {
-            let cols = (((rg.x - geo.area[0] - 2.0 * pad) / m.width)
+            let cols = (((rg.x - geo.area[0] - 2.0 * pad_x) / m.width)
                 .floor()
                 .max(20.0)) as usize;
             if st.sample.as_ref().is_none_or(|s| s.cols != cols) {
@@ -1869,6 +1955,12 @@ impl App {
             }
         }
         let gaps = theme.style.gaps(st.scale);
+        let chrome = geo.chrome;
+        // Hasta dónde se ve el terminal: con el editor de aspecto abierto, hasta su panel.
+        // (Solo con Flotante: con la Clásica el editor tapa el terminal como siempre.)
+        let visible_right = look
+            .filter(|_| chrome.floating)
+            .map_or(f32::INFINITY, |(rg, _)| rg.x);
 
         for _attempt in 0..2 {
             st.out.clear();
@@ -1881,10 +1973,35 @@ impl App {
                 queue: &st.renderer.queue,
                 atlas: &st.renderer.atlas,
             };
+            // Interfaz Flotante: cada terminal es una tarjeta sobre el fondo de la ventana.
+            if chrome.floating && !stats_open {
+                let cards: Vec<[f32; 4]> = if showing_sample {
+                    vec![geo.area]
+                } else {
+                    geo.panes.iter().map(|pane| pane.rect).collect()
+                };
+                for [x, y, cw, chh] in cards {
+                    let cw = cw.min(visible_right - x);
+                    if cw <= 0.0 {
+                        continue;
+                    }
+                    // La opacidad de la ventana, también en las tarjetas del terminal.
+                    p.card_alpha(
+                        x,
+                        y,
+                        cw,
+                        chh,
+                        (theme.background, opacity),
+                        theme.foreground,
+                        chrome.radius,
+                        st.scale,
+                    );
+                }
+            }
             // Fondo con degradado: un tinte del acento arriba que se desvanece.
             if theme.style.background == crate::style::Background::Gradient && !stats_open {
                 let [ax, ay, aw, ah] = geo.area;
-                p.gradient(
+                p.gradient_rounded(
                     ax,
                     ay,
                     aw,
@@ -1893,6 +2010,7 @@ impl App {
                     ui::GRADIENT,
                     theme.accent,
                     0.0,
+                    chrome.radius,
                 );
             }
             if let Some(tb) = geo.tab_bar.as_ref().filter(|_| !stats_open) {
@@ -1917,7 +2035,7 @@ impl App {
             let multi = geo.panes.len() > 1 && !stats_open && !showing_sample;
             st.git_chips.clear();
             if let (true, Some(sample)) = (showing_sample, st.sample.as_ref()) {
-                let y0 = top + pad;
+                let y0 = top + pad_y;
                 let rows = Rows::layout(
                     &sample.term,
                     &sample.blocks,
@@ -1927,7 +2045,7 @@ impl App {
                     f32::INFINITY,
                 );
                 let v = TermView {
-                    x: geo.area[0] + pad,
+                    x: geo.area[0] + pad_x,
                     y: y0,
                     lines: sample.lines,
                     focused: st.focused,
@@ -1951,7 +2069,7 @@ impl App {
                     view::draw_ghost(&mut p, term, theme, &v, crate::look::SAMPLE_GHOST);
                 }
                 if show_blocks {
-                    let span = (geo.area[0], geo.area[0] + geo.area[2]);
+                    let span = (geo.area[0], (geo.area[0] + geo.area[2]).min(visible_right));
                     view::draw_blocks(&mut p, term, theme, &v, bs, None, span, st.scale);
                 }
             }
@@ -1961,7 +2079,7 @@ impl App {
                 };
                 let is_focus = pane.idx == st.active;
                 let term = tab.term.lock();
-                let bs = tab.blocks.lock().unwrap();
+                let mut bs = tab.blocks.lock().unwrap();
                 let v = TermView {
                     x: pane.x,
                     y: pane.y,
@@ -1982,6 +2100,11 @@ impl App {
                     .filter(|id| bs.styled(*id) && !tab.session.remote)
                     .and_then(|_| bs.shell_cwd())
                     .and_then(|d| crate::complete::git_branch(&d));
+                // Se apunta en el bloque: la etiqueta de los bloques "Etiquetas" la enseña también
+                // cuando la orden ya terminó.
+                if let Some(id) = bs.idle_current() {
+                    bs.set_branch(id, branch.clone());
+                }
                 let summary = branch.as_ref().and_then(|_| st.git.summary_for(tab.id));
                 let chip = view::draw_prompts(
                     &mut p,
@@ -2065,7 +2188,10 @@ impl App {
                         &v,
                         &bs,
                         tab.selected_block,
-                        (pane.rect[0], pane.rect[0] + pane.rect[2]),
+                        (
+                            pane.rect[0],
+                            (pane.rect[0] + pane.rect[2]).min(visible_right),
+                        ),
                         st.scale,
                     );
                 }
@@ -2085,12 +2211,17 @@ impl App {
                 p.out.append(p.fg);
                 for pane in geo.panes.iter().filter(|p| p.idx != st.active) {
                     let [x, y, w, h] = pane.rect;
-                    p.rect(x, y, w, h, theme.background, 0.35);
+                    p.rounded(x, y, w, h, theme.background, 0.35, chrome.radius);
                 }
                 let line = st.scale.round().max(1.0);
                 for d in &geo.dividers {
                     let [x, y, w, h] = d.rect;
                     let dragging = st.drag.as_ref().is_some_and(|g| g.0 == d.path);
+                    // Con la Flotante, el hueco entre tarjetas ya separa: la línea solo al
+                    // arrastrar.
+                    if chrome.floating && !dragging {
+                        continue;
+                    }
                     let (c, a) = if dragging {
                         (theme.accent, 1.0)
                     } else {
@@ -2111,7 +2242,7 @@ impl App {
                     .and_then(|root| st.git.status(root));
                 let bottom_free = r.1 + r.3 >= h - 0.5;
                 st.changes
-                    .draw(&mut p, theme, status, r, st.scale, bottom_free);
+                    .draw(&mut p, theme, status, r, st.scale, bottom_free, &chrome);
             }
             if let Some((px, py, pw, ph)) = geo.panel.filter(|_| !stats_open) {
                 let previewed: Vec<usize> = st.panel.previewed(now).collect();
@@ -2141,11 +2272,26 @@ impl App {
                         })
                     })
                     .collect();
-                st.panel
-                    .draw(&mut p, theme, &rows, px, py, pw, ph, st.scale, now, anim);
+                st.panel.draw(
+                    &mut p, theme, &rows, px, py, pw, ph, st.scale, now, anim, &chrome,
+                );
             }
             if let Some(stats) = st.stats.as_mut() {
                 let top = geo.tab_bar.as_ref().map_or(0.0, |t| t.height);
+                // Flotante: el apartado va en una tarjeta, como el terminal.
+                if chrome.floating {
+                    let m = chrome.margin;
+                    p.card(
+                        m,
+                        top,
+                        w - 2.0 * m,
+                        h - top - m,
+                        theme.background,
+                        theme.foreground,
+                        chrome.radius,
+                        st.scale,
+                    );
+                }
                 stats.draw(&mut p, theme, w, h, top, st.scale);
                 // La barra de pestañas, encima: tapa lo que se desplazó hacia arriba.
                 p.out.append(p.fg);
@@ -2194,9 +2340,51 @@ impl App {
                 break;
             }
         }
-        st.renderer
-            .render(&st.out, theme.background.to_f32(opacity));
+        // Con la Flotante, el fondo de la ventana es el de la barra y el terminal va en tarjetas.
+        let ground = if chrome.floating {
+            theme.tab_bar
+        } else {
+            theme.background
+        };
+        st.renderer.render(&st.out, ground.to_f32(opacity));
     }
+}
+
+/// Lo que la barra enseña de cada pestaña: nombre, agente y estado (el del panel más urgente).
+fn tab_views(st: &State) -> Vec<ui::TabView> {
+    st.groups
+        .iter()
+        .filter_map(|g| {
+            let panes: Vec<&Tab> = g
+                .layout
+                .leaves()
+                .iter()
+                .filter_map(|id| st.tabs.iter().find(|t| t.id == *id))
+                .collect();
+            let focus = panes.iter().find(|t| t.id == g.focus).or(panes.first())?;
+            // El indicador de la pestaña, del panel más urgente: te necesita, trabaja, terminó.
+            use crate::sessions::Status;
+            let rank = |t: &&&Tab| match (t.session.agent, t.session.status) {
+                (None, _) => 0,
+                (_, Status::Blocked(_)) => 4,
+                (_, Status::Working) => 3,
+                (_, Status::Done) => 2,
+                _ => 1,
+            };
+            let lead = panes.iter().max_by_key(rank).unwrap_or(focus);
+            let n = panes.len();
+            Some(ui::TabView {
+                label: match &g.name {
+                    Some(name) => name.clone(),
+                    None if n > 1 => format!("{} (+{})", focus.label(), n - 1),
+                    None => focus.label().to_string(),
+                },
+                exited: focus.exited,
+                agent: lead.session.agent,
+                status: lead.session.status,
+            })
+        })
+        .collect()
 }
 
 /// Windows: lo pegado en el prompt de PowerShell (ver `input::powershell_paste`).

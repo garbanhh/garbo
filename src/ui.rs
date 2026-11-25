@@ -1,6 +1,7 @@
 //! Interfaz: barra de pestañas (que hace de barra de título) y paleta de comandos.
 //! Todo se mide en píxeles lógicos × escala, así se ve igual de compacto en cualquier pantalla.
 
+use crate::atlas::UiVariant;
 use crate::config::{Rgb, Theme};
 use crate::palette::{Palette, MAX_VISIBLE};
 use crate::style::{Buttons, Style, Tabs};
@@ -285,6 +286,9 @@ pub struct Toggles {
     pub ports: bool,
     /// Solo en Windows: el botón de maximizar pasa a ser el de restaurar.
     pub maximized: bool,
+    /// Archivos con cambios sin confirmar en el repositorio de la pestaña (interfaz Flotante: el
+    /// número va junto al botón de cambios).
+    pub changes_n: Option<usize>,
 }
 
 /// Alto de la barra de pestañas en píxeles lógicos (con la barra "Normal"). En Windows, más baja:
@@ -312,11 +316,15 @@ impl TabBar {
         cfg: TabsConfig,
         hide_tabs: bool,
         side: f32,
+        fit: &[f32],
+        changes_n: Option<usize>,
     ) -> Self {
         let s = scale;
-        let logical_h = BAR_HEIGHT + style.bar_delta();
+        // Interfaz Flotante: barra de 52 px con píldoras de 32 (la de siempre: 40 y 28).
+        let floating = style.interface == crate::style::Interface::Floating;
+        let logical_h = BAR_HEIGHT + style.bar_delta() + if floating { 12.0 } else { 0.0 };
         let height = (logical_h * s).round();
-        let tab_h = ((logical_h - TAB_MARGIN) * s).round();
+        let tab_h = ((logical_h - TAB_MARGIN - if floating { 8.0 } else { 0.0 }) * s).round();
         let tab_y = ((height - tab_h) / 2.0).round();
         let margin = (8.0 * s).round();
         let gap = (4.0 * s).round();
@@ -347,7 +355,12 @@ impl TabBar {
         let settings = (right - btn, btn);
         let ports_btn = (settings.0 - gap - btn, btn);
         let agents_btn = (ports_btn.0 - gap - btn, btn);
-        let changes_btn = (agents_btn.0 - gap - btn, btn);
+        // Flotante: el número de archivos con cambios, junto al icono.
+        let changes_w = match changes_n.filter(|n| floating && *n > 0) {
+            Some(n) => (btn + (n.to_string().len() as f32 * 8.0 + 6.0) * s).round(),
+            None => btn,
+        };
+        let changes_btn = (agents_btn.0 - gap - changes_w, changes_w);
         let stats_btn = (changes_btn.0 - gap - btn, btn);
         let update = has_update.then(|| {
             let w = (200.0 * s).round();
@@ -359,6 +372,27 @@ impl TabBar {
         let max_w = cfg.width.max_tab().map_or(f32::INFINITY, |w| w * s);
         // En una barra (arriba o abajo): de izquierda a derecha, con el + detrás.
         let row = |avail: f32| {
+            // Flotante con píldoras: cada pestaña, del ancho de su nombre (si no caben, todas se
+            // encogen por igual).
+            if fit.len() == n && n > 0 {
+                let total: f32 = fit.iter().sum();
+                let k = if total > avail.max(1.0) {
+                    avail.max(0.0) / total
+                } else {
+                    1.0
+                };
+                let mut x = margin;
+                let tabs: Vec<(f32, f32)> = fit
+                    .iter()
+                    .map(|w| {
+                        let w = (w * k).min(max_w).floor();
+                        let t = (x, w);
+                        x += w;
+                        t
+                    })
+                    .collect();
+                return (tabs, (x + gap, btn));
+            }
             let tab_w = (avail.max(0.0) / n.max(1) as f32).min(max_w).floor();
             let tabs: Vec<(f32, f32)> =
                 (0..n).map(|i| (margin + i as f32 * tab_w, tab_w)).collect();
@@ -771,6 +805,7 @@ impl TabBar {
         let hair = s.round().max(1.0);
         let dimc = dim(theme);
         let pill = surface(theme, 0.08);
+        let floating = st.interface == crate::style::Interface::Floating;
         p.rect(0.0, 0.0, width, self.height, theme.tab_bar, 1.0);
         if self.at != Position::Top {
             // Franja o columna: el mismo fondo que la barra. La barra de arriba lleva su línea y,
@@ -779,7 +814,9 @@ impl TabBar {
                 let [x, y, w, h] = self.zone;
                 p.rect(x, y, w, h, theme.tab_bar, 1.0);
             }
-            p.rect(0.0, self.height - hair, width, hair, theme.foreground, 0.08);
+            if !floating {
+                p.rect(0.0, self.height - hair, width, hair, theme.foreground, 0.08);
+            }
             if let Some(t) = tabs.get(active) {
                 let margin = (12.0 * s).round();
                 let limit = self.update.map_or(self.stats_btn.0, |u| u.0) - margin;
@@ -795,9 +832,38 @@ impl TabBar {
 
         let cy = (self.tab_y + self.tab_h / 2.0).round();
 
-        // Botones conmutables y menú
+        // Interfaz Flotante: los botones van juntos en una cápsula, y el de la vista abierta,
+        // resaltado en gris (no en el color de acento).
+        if floating {
+            let pad = (3.0 * s).round();
+            let (x0, x1) = (
+                self.stats_btn.0 - pad,
+                self.settings.0 + self.settings.1 + pad,
+            );
+            let (y0, h0) = (self.tab_y - s.round(), self.tab_h + 2.0 * s.round());
+            let cr = (r + pad).min(h0 / 2.0);
+            p.rounded(
+                x0,
+                y0,
+                x1 - x0,
+                h0,
+                theme.tab_bar.lerp(theme.foreground, 0.04),
+                1.0,
+                cr,
+            );
+            p.outline(x0, y0, x1 - x0, h0, theme.foreground, 0.06, cr, hair);
+        }
         let button = |p: &mut Painter, rect: (f32, f32), hit: TabHit, on: bool| -> Rgb {
             let over = hover == Some(hit);
+            if floating {
+                if on || over {
+                    let a = if on { 0.11 } else { 0.06 };
+                    let inset = (2.0 * s).round();
+                    let (y, h) = (self.tab_y + inset, self.tab_h - 2.0 * inset);
+                    p.rounded(rect.0, y, rect.1, h, theme.foreground, a, (9.0 * s).round());
+                }
+                return if on || over { theme.foreground } else { dimc };
+            }
             if on {
                 p.rounded(
                     rect.0,
@@ -830,7 +896,17 @@ impl TabBar {
 
         // Cambios de git: una hoja con + y −.
         let c = button(p, self.changes_btn, TabHit::Changes, toggles.changes);
-        let gx = (self.changes_btn.0 + self.changes_btn.1 / 2.0).round();
+        let count = toggles.changes_n.filter(|n| floating && *n > 0);
+        let gx = match count {
+            Some(_) => (self.changes_btn.0 + 15.0 * s).round(),
+            None => (self.changes_btn.0 + self.changes_btn.1 / 2.0).round(),
+        };
+        if let Some(n) = count {
+            let t = n.to_string();
+            let sh = p.ui_line_h(UiVariant::Small);
+            let ty = (cy - sh / 2.0).round();
+            p.ui_text_v(gx + 9.0 * s, ty, &t, c, 40.0 * s, UiVariant::Small);
+        }
         let (iw, ih) = ((12.0 * s).round(), (15.0 * s).round());
         changes_icon(
             p,
@@ -854,10 +930,19 @@ impl TabBar {
             1.0,
             2.5 * s,
         );
-        let bg = if toggles.agents {
-            theme.tab_bar.lerp(theme.accent, 0.2)
-        } else {
-            theme.tab_bar
+        // Los ojos, del color de lo que hay debajo del icono.
+        let bg = match (floating, toggles.agents || hover == Some(TabHit::Agents)) {
+            (true, on) => {
+                let capsule = theme.tab_bar.lerp(theme.foreground, 0.04);
+                if on {
+                    let a = if toggles.agents { 0.11 } else { 0.06 };
+                    capsule.lerp(theme.foreground, a)
+                } else {
+                    capsule
+                }
+            }
+            (false, _) if toggles.agents => theme.tab_bar.lerp(theme.accent, 0.2),
+            (false, _) => theme.tab_bar,
         };
         p.circle(bx - 2.6 * s, cy + 1.5 * s, 1.4 * s, bg, 1.0);
         p.circle(bx + 2.6 * s, cy + 1.5 * s, 1.4 * s, bg, 1.0);
@@ -871,7 +956,24 @@ impl TabBar {
 
         let c = button(p, self.settings, TabHit::Settings, false);
         let mx = (self.settings.0 + self.settings.1 / 2.0).round();
-        for dy in [-4.0, 0.0, 4.0] {
+        if floating {
+            // Flotante: un engranaje (Ajustes).
+            p.ring(mx, cy, 2.6 * s, 1.4 * s, c, 1.0);
+            for k in 0..8 {
+                let a = k as f32 * std::f32::consts::FRAC_PI_4;
+                let (dx, dy) = (a.cos(), a.sin());
+                p.line(
+                    mx + dx * 4.6 * s,
+                    cy + dy * 4.6 * s,
+                    mx + dx * 6.6 * s,
+                    cy + dy * 6.6 * s,
+                    1.5 * s,
+                    c,
+                    1.0,
+                );
+            }
+        }
+        for dy in [-4.0, 0.0, 4.0].into_iter().filter(|_| !floating) {
             p.line(
                 mx - 6.0 * s,
                 cy + dy * s,
@@ -1080,7 +1182,17 @@ impl TabBar {
             if st.tabs == Tabs::Dot {
                 pad += (13.0 * s).round();
             }
-            let show_close = is_active || hovered;
+            let floating_pill =
+                st.interface == crate::style::Interface::Floating && st.tabs == Tabs::Pill;
+            let show_close = is_active || (hovered && !floating_pill);
+            if floating_pill && horizontal {
+                // Un punto del color de acento delante del nombre de la activa.
+                if is_active {
+                    let cy = (ty + th / 2.0).round();
+                    p.circle(start + 15.0 * s, cy, 3.0 * s, theme.accent, 1.0);
+                }
+                pad += (14.0 * s).round();
+            }
             let mut right = if horizontal {
                 end - pad / 2.0
             } else {
@@ -1174,7 +1286,8 @@ impl TabBar {
             }
             self.draw_label(p, i, &label, color, (x0, x1), (ty, th), centered, s, extra);
         }
-        // Línea entre las pestañas y el terminal, salvo junto a la pestaña que se une a él.
+        // Línea entre las pestañas y el terminal, salvo junto a la pestaña que se une a él. Con
+        // la interfaz Flotante no hace falta: el terminal es una tarjeta aparte.
         let [zx, zy, zw, zh] = self.zone;
         let (za, zl) = if horizontal { (zx, zw) } else { (zy, zh) };
         let c = self.thick - hair;
@@ -1183,6 +1296,7 @@ impl TabBar {
             p.rect(x, y, w, h, theme.foreground, 0.08);
         };
         match gap {
+            _ if st.interface == crate::style::Interface::Floating => {}
             Some((a, b)) => {
                 seg(p, za, a - za);
                 seg(p, b, za + zl - b);
@@ -1495,7 +1609,11 @@ pub fn draw_palette(
     scale: f32,
 ) {
     let s = scale;
-    p.rect(0.0, 0.0, width, height, Rgb(0, 0, 0), 0.35);
+    // Interfaz Flotante: una hoja más redondeada, con muestras de los temas y la ayuda abajo.
+    let chrome = crate::chrome::Chrome::new(&theme.style, s);
+    let floating = chrome.floating;
+    let dim_bg = if floating { chrome.dim } else { 0.35 };
+    p.rect(0.0, 0.0, width, height, Rgb(0, 0, 0), dim_bg);
 
     let box_w = (600.0 * s).min(width - 32.0 * s).max(200.0 * s).round();
     let x = ((width - box_w) / 2.0).round();
@@ -1509,18 +1627,27 @@ pub fn draw_palette(
     } else {
         0.0
     };
-    let box_h = input_h + list_h;
+    let foot_h = if floating { (34.0 * s).round() } else { 0.0 };
+    let box_h = input_h + list_h + foot_h;
     let panel = surface(theme, 0.05);
-    p.card(
-        x,
-        y,
-        box_w,
-        box_h,
-        panel,
-        theme.foreground,
-        (12.0 * s).round(),
-        s,
-    );
+    let radius = if floating {
+        chrome.sheet
+    } else {
+        (12.0 * s).round()
+    };
+    p.card(x, y, box_w, box_h, panel, theme.foreground, radius, s);
+    if floating {
+        let fy = y + input_h + list_h;
+        p.rect(x, fy, box_w, s.round().max(1.0), theme.foreground, 0.06);
+        p.ui_text_v(
+            x + 2.0 * pad,
+            (fy + (foot_h - p.ui_line_h(UiVariant::Small)) / 2.0).round(),
+            "↑↓ elegir    Intro ejecutar    Esc cerrar",
+            dim(theme),
+            box_w - 4.0 * pad,
+            UiVariant::Small,
+        );
+    }
 
     // Campo de búsqueda
     let dimc = dim(theme);
@@ -1579,18 +1706,43 @@ pub fn draw_palette(
                 box_w - 2.0 * pad,
                 row_h,
                 theme.accent,
-                0.18,
-                (8.0 * s).round(),
+                if floating { 0.16 } else { 0.18 },
+                if floating {
+                    chrome.small
+                } else {
+                    (8.0 * s).round()
+                },
             );
         }
         let kw = keycaps(p, x + box_w - pad * 2.0, ry, row_h, &e.hint, theme, s);
+        // Flotante: delante de cada tema, una muestra con su fondo y su color de acento.
+        let mut lx = x + pad * 2.0;
+        if let (true, crate::palette::Item::Theme(name)) = (floating, &e.item) {
+            if let Some(t) = Theme::builtin(name) {
+                let k = (row_h - 12.0 * s).round();
+                let (sx, sy) = (lx, (ry + (row_h - k) / 2.0).round());
+                let rr = (5.0 * s).round();
+                p.rounded(sx, sy, k, k, t.background, 1.0, rr);
+                p.rounded(
+                    sx + k * 0.5,
+                    sy + k * 0.5,
+                    k * 0.5,
+                    k * 0.5,
+                    t.accent,
+                    1.0,
+                    rr * 0.6,
+                );
+                p.outline(sx, sy, k, k, theme.foreground, 0.12, rr, s.round().max(1.0));
+                lx += k + pad;
+            }
+        }
         p.ui_text_in(
-            x + pad * 2.0,
+            lx,
             ry,
             row_h,
             &e.label,
             theme.foreground,
-            box_w - pad * 5.0 - kw,
+            x + box_w - pad * 3.0 - kw - lx,
         );
     }
 }

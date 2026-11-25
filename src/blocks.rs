@@ -256,6 +256,9 @@ pub struct BlockInfo {
     pub started: Option<Instant>,
     pub duration: Option<Duration>,
     pub exit: Option<i32>,
+    /// Rama de git de su carpeta, apuntada mientras se escribía (la etiqueta de los bloques
+    /// "Etiquetas" la enseña también cuando la orden ya terminó).
+    pub branch: Option<String>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -374,6 +377,17 @@ impl BlockState {
     }
 
     /// ¿Usa el bloque el prompt de Garbo?
+    /// Apunta la rama de git del bloque `id` (si cambió).
+    pub fn set_branch(&mut self, id: u32, branch: Option<String>) {
+        if let Ok(i) = self.infos.binary_search_by_key(&id, |b| b.id) {
+            if let Some(b) = self.infos.get_mut(i) {
+                if b.branch != branch {
+                    b.branch = branch;
+                }
+            }
+        }
+    }
+
     pub fn styled(&self, id: u32) -> bool {
         self.info(id).is_some_and(|b| b.styled)
     }
@@ -459,6 +473,7 @@ impl BlockState {
                             started: None,
                             duration: None,
                             exit: None,
+                            branch: None,
                         });
                         if self.infos.len() > MAX_BLOCKS {
                             self.infos.pop_front();
@@ -770,6 +785,29 @@ mod tests {
             );
             assert_eq!(scanner.status, [(crate::status::Report::Query, true)]);
         }
+    }
+
+    #[test]
+    fn la_rama_se_queda_en_el_bloque() {
+        use alacritty_terminal::event::VoidListener;
+        use alacritty_terminal::term::test::TermSize;
+
+        let mut term = Term::new(
+            alacritty_terminal::term::Config::default(),
+            &TermSize::new(40, 10),
+            VoidListener,
+        );
+        let blocks = std::sync::Mutex::new(BlockState::new(0));
+        let mut feed =
+            |s: &str| crate::pty_loop::feed_bytes(&mut term, &blocks, s.as_bytes(), &VoidListener);
+        feed("\x1b]133;A;garbo\x07~/p\r\n\x1b]133;B\x07");
+        let id = blocks.lock().unwrap().idle_current().unwrap();
+        // La rama se apunta mientras se escribe y sigue ahí cuando la orden ya terminó.
+        blocks.lock().unwrap().set_branch(id, Some("main".into()));
+        feed("orden\r\n\x1b]133;C\x07hecho\r\n\x1b]133;D;0\x07");
+        let bs = blocks.lock().unwrap();
+        assert_eq!(bs.info(id).and_then(|b| b.branch.as_deref()), Some("main"));
+        assert!(bs.idle_current() != Some(id));
     }
 
     #[test]

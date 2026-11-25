@@ -87,6 +87,9 @@ options! {
         Bar = "bar", "Línea lateral";
         Dot = "dot", "Punto de estado";
         Card = "card", "Tarjeta";
+        /// Tarjeta con la carpeta en una etiqueta y el resultado en una píldora; la orden que se
+        /// escribe, en una tarjeta del color de acento (la de la interfaz Flotante).
+        Chips = "chips", "Etiquetas";
         Outline = "outline", "Contorno";
         Header = "header", "Cabecera";
         Separator = "separator", "Separador";
@@ -131,6 +134,27 @@ options! {
     }
 }
 
+options! {
+    /// Interfaz de toda la ventana ([[0041 Interfaz Flotante]]): terminal y paneles como tarjetas
+    /// que flotan sobre el fondo, o la de siempre. Los temas no la fijan.
+    Interface {
+        Floating = "floating", "Flotante";
+        Classic = "classic", "Clásica";
+    }
+}
+
+impl Interface {
+    /// La de cada sistema si el usuario no elige: Flotante en Linux; en Windows, de momento,
+    /// siempre la Clásica.
+    pub fn default_here() -> Self {
+        if cfg!(windows) {
+            Interface::Classic
+        } else {
+            Interface::Floating
+        }
+    }
+}
+
 /// Radios de esquina que ofrece el editor (píxeles lógicos).
 pub const RADII: [u8; 8] = [0, 2, 4, 6, 8, 10, 12, 16];
 
@@ -159,6 +183,8 @@ pub struct Style {
     pub line_gap: u8,
     /// Hueco entre el comando y su salida, en píxeles lógicos.
     pub output_gap: u8,
+    /// Interfaz de toda la ventana. No es de los temas: la resuelve `Config::theme`.
+    pub interface: Interface,
 }
 
 /// Huecos de los bloques en píxeles físicos (ver `view::Rows`).
@@ -172,6 +198,12 @@ pub struct Gaps {
     pub path: f32,
     /// Entre el comando y su salida.
     pub output: f32,
+    /// La orden que se escribe, abajo del todo mientras la pantalla no esté llena (bloques
+    /// "Etiquetas", como la entrada de la interfaz Flotante).
+    pub pin: bool,
+    /// Margen de la tarjeta de un bloque "Etiquetas" bajo su última fila (0 con otros bloques).
+    /// Con `pin`, la orden que se escribe sube eso para que su tarjeta quepa entera.
+    pub tail: f32,
 }
 
 impl Gaps {
@@ -201,11 +233,29 @@ impl Default for Style {
             block_gap: 0,
             line_gap: 0,
             output_gap: 0,
+            interface: Interface::Classic,
         }
     }
 }
 
 impl Style {
+    /// La forma por defecto con la interfaz Flotante (la de los temas que no traen forma propia):
+    /// pestañas en píldora, botones redondos y esquinas de 10 px.
+    pub fn floating() -> Self {
+        Self {
+            tabs: Tabs::Pill,
+            prompt: Prompt::Plain,
+            buttons: Buttons::Round,
+            blocks: Blocks::Chips,
+            radius: 10,
+            block_gap: 16,
+            prompt_gap: 6,
+            output_gap: 6,
+            interface: Interface::Floating,
+            ..Self::default()
+        }
+    }
+
     /// Radio de esquina en píxeles físicos.
     pub fn r(&self, scale: f32) -> f32 {
         (self.radius as f32 * scale).round()
@@ -224,6 +274,12 @@ impl Style {
             line: px(self.line_gap),
             path: px(self.prompt_gap),
             output: px(self.output_gap),
+            pin: self.blocks == Blocks::Chips,
+            tail: if self.blocks == Blocks::Chips {
+                (4.0 * scale).round()
+            } else {
+                0.0
+            },
         }
     }
 
@@ -253,6 +309,7 @@ pub struct StyleOverrides {
     pub block_gap: Option<u8>,
     pub line_gap: Option<u8>,
     pub output_gap: Option<u8>,
+    pub interface: Option<Interface>,
 }
 
 #[derive(Deserialize, Default)]
@@ -269,6 +326,7 @@ struct RawStyle {
     block_gap: Option<f64>,
     line_gap: Option<f64>,
     output_gap: Option<f64>,
+    interface: Option<String>,
 }
 
 fn lenient<T>(key: &str, v: Option<String>, parse: fn(&str) -> Option<T>) -> Option<T> {
@@ -299,6 +357,7 @@ impl From<RawStyle> for StyleOverrides {
             block_gap: gap(r.block_gap),
             line_gap: gap(r.line_gap),
             output_gap: gap(r.output_gap),
+            interface: lenient("interface", r.interface, Interface::parse),
         }
     }
 }
@@ -318,6 +377,7 @@ impl StyleOverrides {
             block_gap: self.block_gap.unwrap_or(base.block_gap),
             line_gap: self.line_gap.unwrap_or(base.line_gap),
             output_gap: self.output_gap.unwrap_or(base.output_gap),
+            interface: self.interface.unwrap_or(base.interface),
         }
     }
 
@@ -326,7 +386,7 @@ impl StyleOverrides {
     }
 
     /// Las claves y su valor para config.toml (`None` = no escribir y borrar si estaba).
-    pub fn entries(&self) -> [(&'static str, Option<toml_edit::Item>); 11] {
+    pub fn entries(&self) -> [(&'static str, Option<toml_edit::Item>); 12] {
         use toml_edit::value;
         let s = |v: Option<&'static str>| v.map(value);
         [
@@ -341,6 +401,7 @@ impl StyleOverrides {
             ("block_gap", self.block_gap.map(|g| value(g as i64))),
             ("line_gap", self.line_gap.map(|g| value(g as i64))),
             ("output_gap", self.output_gap.map(|g| value(g as i64))),
+            ("interface", s(self.interface.map(Interface::key))),
         ]
     }
 }
@@ -405,5 +466,29 @@ mod tests {
         check(Buttons::ALL, Buttons::key, Buttons::parse);
         check(BarSize::ALL, BarSize::key, BarSize::parse);
         check(Background::ALL, Background::key, Background::parse);
+        check(Interface::ALL, Interface::key, Interface::parse);
+    }
+
+    #[test]
+    fn interfaz_en_style() {
+        let o: StyleOverrides = toml::from_str("interface = \"classic\"").unwrap();
+        assert_eq!(o.interface, Some(Interface::Classic));
+        assert!(o
+            .entries()
+            .iter()
+            .any(|(k, v)| *k == "interface" && v.is_some()));
+        let raro: StyleOverrides = toml::from_str("interface = \"isla\"").unwrap();
+        assert_eq!(raro.interface, None);
+        // La forma de Flotante: la de siempre con píldoras, botones redondos y radio 10.
+        let f = Style::floating();
+        assert_eq!(f.interface, Interface::Floating);
+        assert_eq!(
+            (f.tabs, f.buttons, f.radius),
+            (Tabs::Pill, Buttons::Round, 10)
+        );
+        assert_eq!(f.blocks, Blocks::Chips);
+        // Hueco entre tarjetas: más que lo que cada tarjeta sobresale de sus filas.
+        assert!(f.block_gap >= 12);
+        assert_eq!(Style::default().interface, Interface::Classic);
     }
 }

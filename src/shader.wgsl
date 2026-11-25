@@ -81,7 +81,14 @@ fn fs_main(in: VOut) -> @location(0) vec4<f32> {
     if (in.kind == 5u) {
         let t = clamp((in.local.y + in.half_size.y) / max(2.0 * in.half_size.y, 1.0), 0.0, 1.0);
         let c = mix(in.color, in.params, t);
-        return vec4<f32>(c.rgb * c.a, c.a);
+        var k = 1.0;
+        if (in.radius > 0.0) {
+            // Esquinas redondeadas (el degradado dentro de una tarjeta de la interfaz Flotante).
+            let q = abs(in.local) - in.half_size + vec2<f32>(in.radius);
+            let d = length(max(q, vec2<f32>(0.0))) + min(max(q.x, q.y), 0.0) - in.radius;
+            k = clamp(0.5 - d, 0.0, 1.0);
+        }
+        return vec4<f32>(c.rgb * c.a, c.a) * k;
     }
     if (in.kind == 6u) {
         let q = abs(in.local) - in.half_size + vec2<f32>(in.radius);

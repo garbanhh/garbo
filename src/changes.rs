@@ -258,6 +258,7 @@ impl ChangesPanel {
         rect: (f32, f32, f32, f32),
         s: f32,
         bottom_free: bool,
+        chrome: &crate::chrome::Chrome,
     ) {
         let (x, y, w, h) = rect;
         self.rects.clear();
@@ -274,7 +275,20 @@ impl ChangesPanel {
         let fg = theme.foreground;
         let dimc = dim(theme);
         let (green, red) = (theme.palette[2], theme.palette[1]);
-        p.rect(x, y, w, h, theme.tab_bar, 1.0);
+        if chrome.floating {
+            p.card(
+                x,
+                y,
+                w,
+                h,
+                theme.background,
+                theme.foreground,
+                chrome.radius,
+                s,
+            );
+        } else {
+            p.rect(x, y, w, h, theme.tab_bar, 1.0);
+        }
 
         let body_y = y + header_h + sum_h;
         let body_h = (h - header_h - sum_h).max(0.0);
@@ -344,11 +358,20 @@ impl ChangesPanel {
             let deleted = f.kind == Kind::Deleted;
             if shown(ry, row_h) {
                 let hovered = matches!(self.hover, Some(Hit::File(j) | Hit::Open(j)) if j == i);
-                if hovered {
-                    p.rect(x + hair, ry, w - hair, row_h, fg, 0.05);
-                }
-                if i > 0 {
-                    p.rect(x + hair, ry, w - hair, hair, fg, 0.06);
+                if chrome.floating {
+                    // Flotante: filas redondeadas sin líneas entre ellas; la desplegada, marcada.
+                    if hovered || open {
+                        let a = if hovered { 0.06 } else { 0.04 };
+                        let (fx, fw) = (x + 8.0 * s, w - 16.0 * s);
+                        p.rounded(fx, ry + s, fw, row_h - 2.0 * s, fg, a, (8.0 * s).round());
+                    }
+                } else {
+                    if hovered {
+                        p.rect(x + hair, ry, w - hair, row_h, fg, 0.05);
+                    }
+                    if i > 0 {
+                        p.rect(x + hair, ry, w - hair, hair, fg, 0.06);
+                    }
                 }
                 push(Hit::File(i), [x + hair, ry, w - hair, row_h]);
                 let mid = ry + row_h / 2.0;
@@ -427,15 +450,27 @@ impl ChangesPanel {
             let by = ry + row_h;
             let vis_top = by.max(body_y);
             let vis_end = (by + bh).min(bottom).min(y + h);
+            // Flotante: el diff en un recuadro más oscuro, con margen, bajo el nombre.
+            let (dx0, dx1) = if chrome.floating {
+                (x + (36.0 * s).round(), x + w - (10.0 * s).round())
+            } else {
+                (x + hair, x + w)
+            };
             if vis_end > vis_top {
-                p.rect(
-                    x + hair,
-                    vis_top,
-                    w - hair,
-                    vis_end - vis_top,
-                    theme.background,
-                    1.0,
-                );
+                if chrome.floating {
+                    let (dy0, dy1) = (vis_top + 2.0 * s, vis_end - 2.0 * s);
+                    let rr = (8.0 * s).round();
+                    p.rounded(dx0, dy0, dx1 - dx0, dy1 - dy0, theme.tab_bar, 1.0, rr);
+                } else {
+                    p.rect(
+                        x + hair,
+                        vis_top,
+                        w - hair,
+                        vis_end - vis_top,
+                        theme.background,
+                        1.0,
+                    );
+                }
             }
             let msg = |p: &mut Painter, text: &str| {
                 if shown(by + dpad, ch) {
@@ -464,11 +499,11 @@ impl ChangesPanel {
             let top_line = by + dpad;
             let biggest = d.lines.iter().map(|l| l.old.max(l.new)).max().unwrap_or(1);
             let digits = biggest.to_string().len().max(2);
-            let lx = x + (10.0 * s).round();
+            let lx = dx0 + (10.0 * s).round();
             let num_w = digits as f32 * cw;
             let sign_x = lx + num_w + 0.7 * cw;
             let text_x = sign_x + 1.5 * cw;
-            let text_w = (x + w - 8.0 * s - text_x).max(0.0);
+            let text_w = (dx1 - 8.0 * s - text_x).max(0.0);
             let first = ((body_y - top_line) / ch).floor().max(0.0) as usize;
             let rows = d.lines.len() + usize::from(d.cut);
             let last = (((y + h - top_line) / ch).ceil().max(0.0) as usize).min(rows);
@@ -490,7 +525,7 @@ impl ChangesPanel {
                 };
                 let (sign, tint) = match l.kind {
                     LineKind::Hunk => {
-                        p.rect(x + hair, ly, w - hair, ch, fg, 0.045);
+                        p.rect(dx0, ly, dx1 - dx0, ch, fg, 0.045);
                         p.text(lx, ly, &l.text, dimc, x + w - 8.0 * s - lx);
                         continue;
                     }
@@ -499,11 +534,11 @@ impl ChangesPanel {
                     LineKind::Context => (" ", None),
                 };
                 if let Some(c) = tint {
-                    p.rect(x + hair, ly, w - hair, ch, c, 0.13);
+                    p.rect(dx0, ly, dx1 - dx0, ch, c, 0.13);
                 }
                 if !deleted {
                     if self.hover == Some(Hit::Line(i, j)) {
-                        p.rect(x + hair, ly, w - hair, ch, fg, 0.08);
+                        p.rect(dx0, ly, dx1 - dx0, ch, fg, 0.08);
                     }
                     push(Hit::Line(i, j), [x + hair, ly, w - hair, ch]);
                 }
@@ -575,6 +610,13 @@ impl ChangesPanel {
 
         // Cabecera y resumen, encima: tapan lo que se desplazó hacia arriba.
         p.out.append(p.fg);
+        if chrome.floating {
+            self.draw_floating_header(p, theme, ok, rect, header_h + sum_h, s, chrome);
+            self.rects.extend(list_rects);
+            self.rects
+                .push((Hit::Divider, [x - 4.0 * s, y, 8.0 * s, h]));
+            return;
+        }
         p.rect(x, y, w, header_h + sum_h, theme.tab_bar, 1.0);
         p.rect(x, y, hair, h, fg, 0.10);
         let (iw, ih) = ((11.0 * s).round(), (14.0 * s).round());
@@ -641,6 +683,107 @@ impl ChangesPanel {
         // El borde, para arrastrarlo (por delante de todo).
         self.rects
             .push((Hit::Divider, [x - 4.0 * s, y, 8.0 * s, h]));
+    }
+}
+
+impl ChangesPanel {
+    /// Cabecera con la interfaz Flotante: "Cambios" y, debajo, la rama, los archivos y las
+    /// líneas; a la derecha, "Desplegar todo" en una píldora y el botón redondo de cerrar.
+    #[allow(clippy::too_many_arguments)]
+    fn draw_floating_header(
+        &mut self,
+        p: &mut Painter,
+        theme: &Theme,
+        ok: Option<&Status>,
+        rect: (f32, f32, f32, f32),
+        hh: f32,
+        s: f32,
+        chrome: &crate::chrome::Chrome,
+    ) {
+        use crate::atlas::UiVariant;
+        let (x, y, w, _) = rect;
+        let fg = theme.foreground;
+        let dimc = dim(theme);
+        let hair = s.round().max(1.0);
+        let pad = (16.0 * s).round();
+        // Tapa lo que se desplazó hacia arriba, dentro del borde de la tarjeta.
+        let r = (chrome.radius - hair).max(0.0);
+        p.rounded(
+            x + hair,
+            y + hair,
+            w - 2.0 * hair,
+            hh - hair,
+            theme.background,
+            1.0,
+            r,
+        );
+        let th = p.ui_line_h(UiVariant::Title);
+        let sh = p.ui_line_h(UiVariant::Small);
+        let ty = (y + (hh - th - sh - 2.0 * s) / 2.0).round();
+        p.ui_text_v(x + pad, ty, "Cambios", fg, w * 0.5, UiVariant::Title);
+        // Debajo: rama · archivos · +a −r
+        let mut sx = x + pad;
+        let sy = ty + th + 2.0 * s;
+        if let Some(st) = ok {
+            let n = st.files.len() + st.more;
+            let mut head = st.branch.clone().unwrap_or_default();
+            if n > 0 {
+                let files = if n == 1 {
+                    "1 archivo".to_string()
+                } else {
+                    format!("{n} archivos")
+                };
+                head = if head.is_empty() {
+                    files
+                } else {
+                    format!("{head} · {files}")
+                };
+            }
+            sx += p.ui_text_v(sx, sy, &head, dimc, w * 0.6, UiVariant::Small);
+            if n > 0 {
+                sx += p.ui_text_v(sx, sy, " · ", dimc, w, UiVariant::Small);
+                let plus = format!("+{}", st.added);
+                sx += p.ui_text_v(sx, sy, &plus, theme.palette[2], w, UiVariant::Small);
+                let minus = format!(" −{}", st.removed);
+                sx += p.ui_text_v(sx, sy, &minus, theme.palette[1], w, UiVariant::Small);
+            }
+        }
+        let cy = y + hh / 2.0;
+        // Cerrar: un círculo.
+        let cr = (14.0 * s).round();
+        let (cx, ccy) = ((x + w - pad - cr).round(), cy.round());
+        let over_close = self.hover == Some(Hit::Close);
+        p.circle(cx, ccy, cr, fg, if over_close { 0.12 } else { 0.05 });
+        cross(p, cx, ccy, 3.5 * s, 1.4 * s, dimc);
+        self.rects
+            .push((Hit::Close, [cx - cr, ccy - cr, 2.0 * cr, 2.0 * cr]));
+        // Desplegar o plegar todo: una píldora.
+        if let Some(st) = ok.filter(|st| !st.files.is_empty()) {
+            let label = if self.all_open(st) {
+                "Plegar todo"
+            } else {
+                "Desplegar todo"
+            };
+            let lw = p.ui_measure_v(label, UiVariant::Small);
+            let (bw, bh) = ((lw + 20.0 * s).round(), (28.0 * s).round());
+            let bx = (cx - cr - 8.0 * s - bw).round();
+            let by = (cy - bh / 2.0).round();
+            if bx > sx + 8.0 * s {
+                let over = self.hover == Some(Hit::ToggleAll);
+                p.rounded(
+                    bx,
+                    by,
+                    bw,
+                    bh,
+                    fg,
+                    if over { 0.12 } else { 0.07 },
+                    (9.0 * s).round(),
+                );
+                let ly = (cy - sh / 2.0).round();
+                p.ui_text_v(bx + 10.0 * s, ly, label, fg, lw + 2.0, UiVariant::Small);
+                self.rects.push((Hit::ToggleAll, [bx, by, bw, bh]));
+            }
+        }
     }
 }
 
