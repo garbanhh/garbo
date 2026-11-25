@@ -106,6 +106,8 @@ pub struct GlyphCache {
     ascii: Box<[Option<Option<AtlasGlyph>>; 4 * ASCII_GLYPHS]>,
     /// Avances de la fuente de interfaz por carácter y variante.
     ui_adv: FxHashMap<(char, u8), f32>,
+    /// Logos de los agentes por (logo, lado en píxeles).
+    logos: FxHashMap<(u8, u16), Option<AtlasGlyph>>,
     /// Se activa cuando el atlas se llenó y se vació: el frame debe repetirse.
     pub overflowed: bool,
 }
@@ -119,6 +121,7 @@ impl GlyphCache {
             map: FxHashMap::default(),
             ascii: Box::new([None; 4 * ASCII_GLYPHS]),
             ui_adv: FxHashMap::default(),
+            logos: FxHashMap::default(),
             overflowed: false,
         }
     }
@@ -128,6 +131,7 @@ impl GlyphCache {
         self.map.clear();
         self.ascii.fill(None);
         self.ui_adv.clear();
+        self.logos.clear();
     }
 
     /// Glifo de la rejilla del terminal.
@@ -188,6 +192,24 @@ impl GlyphCache {
         let glyph = raster.and_then(|r| self.upload(queue, texture, r));
         self.map.insert(key, glyph);
         (glyph, adv)
+    }
+
+    /// Logo de un agente en un cuadrado de `px` píxeles (se rasteriza la primera vez).
+    pub fn get_logo(
+        &mut self,
+        queue: &wgpu::Queue,
+        texture: &wgpu::Texture,
+        logo: crate::logos::Logo,
+        px: u16,
+    ) -> Option<AtlasGlyph> {
+        let key = (logo.id(), px);
+        if let Some(g) = self.logos.get(&key) {
+            return *g;
+        }
+        let raster = crate::logos::rasterize(logo, px.into());
+        let glyph = raster.and_then(|r| self.upload(queue, texture, r));
+        self.logos.insert(key, glyph);
+        glyph
     }
 
     pub fn ui_advance(&mut self, ch: char, v: UiVariant) -> f32 {

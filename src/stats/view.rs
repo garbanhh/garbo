@@ -926,7 +926,7 @@ impl StatsView {
         } else {
             p.rounded(bx0, by, bw_all, bar_h, theme.foreground, 0.06, bar_h / 2.0);
         }
-        let cols = Columns::new(mx, mw, s);
+        let cols = Columns::new(mx, mw, 0.0, s);
         let hy3 = my + px(TITLE_BAND + PROVIDER_BAND);
         cols.header(p, hy3, ["entrada", "salida", "respuestas"], dimc);
         let max_tokens = sm
@@ -1036,7 +1036,8 @@ impl StatsView {
             aw * 0.62,
             UiVariant::Small,
         );
-        let cols = Columns::new(ax, aw, s);
+        // El logo ocupa 8 px más que el punto de color de los modelos.
+        let cols = Columns::new(ax, aw, 8.0, s);
         let hy4 = ay + px(TITLE_BAND);
         cols.header(p, hy4, ["entrada", "salida", "tiempo"], dimc);
         let rows = self.agent_rows();
@@ -1073,20 +1074,23 @@ impl StatsView {
             let text_c = if faded { dimc } else { theme.foreground };
             let c = provider_color(theme, agent.provider());
             let ry = r[1];
-            p.circle(
-                ax + pad + px(4.0),
-                ry + px(ROW) / 2.0,
-                px(4.0),
-                c,
+            let logo = px(16.0);
+            p.agent_logo(
+                Some(agent.logo()),
+                agent.name(),
+                ax + pad,
+                ry + (px(ROW) - logo) / 2.0,
+                logo,
+                text_c,
                 if faded { 0.45 } else { 1.0 },
             );
             p.ui_text_in(
-                ax + pad + px(16.0),
+                ax + pad + px(24.0),
                 ry,
                 px(ROW),
                 agent.name(),
                 text_c,
-                cols.name_w - px(16.0),
+                cols.name_w - px(24.0),
             );
             cols.bar(
                 p,
@@ -1225,14 +1229,16 @@ struct Columns {
 }
 
 impl Columns {
-    fn new(x: f32, w: f32, s: f32) -> Self {
+    /// `extra`: píxeles lógicos de más para la columna del nombre (lo que ocupe lo que va delante
+    /// del nombre más allá del punto de color).
+    fn new(x: f32, w: f32, extra: f32, s: f32) -> Self {
         let pad = (16.0 * s).round();
         // Caben "respuestas" y "11,6 mil M" con la fuente de interfaz monoespaciada.
         let col = (COL_W * s).round();
         let right = x + w - pad;
         let rights = [right - 2.0 * col, right - col, right];
         let numbers = rights[0] - col;
-        let name_w = ((numbers - x - pad) * 0.48).max(110.0 * s).round();
+        let name_w = ((numbers - x - pad) * 0.48).max(110.0 * s).round() + (extra * s).round();
         let bar0 = x + pad + name_w + (8.0 * s).round();
         let bar1 = numbers - (14.0 * s).round();
         Self {

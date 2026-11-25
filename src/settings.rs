@@ -31,6 +31,7 @@ pub enum Field {
     CompleteAsYouType,
     Blocks,
     GarboPrompt,
+    SshIntegration,
     ShellIntegration,
     NotifyAgents,
     NotifyMinWork,
@@ -118,6 +119,7 @@ const CATEGORIES: &[(&str, &[(Field, &str)])] = &[
         &[
             (Field::Blocks, "Bloques de comandos"),
             (Field::GarboPrompt, "Prompt de Garbo"),
+            (Field::SshIntegration, "Garbo en sesiones ssh"),
             (Field::ShellIntegration, "Integración con el shell"),
         ],
     ),
@@ -425,6 +427,7 @@ impl Settings {
             Field::NotifyBlocked => cfg.notifications.blocked,
             Field::Blocks => cfg.terminal.blocks,
             Field::GarboPrompt => cfg.terminal.garbo_prompt,
+            Field::SshIntegration => cfg.terminal.ssh_integration,
             Field::ShellIntegration => cfg.terminal.shell_integration,
             Field::Decorations => cfg.window.decorations,
             Field::CheckUpdates => cfg.check_updates,
@@ -517,6 +520,11 @@ impl Settings {
             }
             Field::GarboPrompt => {
                 cfg.terminal.garbo_prompt = !cfg.terminal.garbo_prompt;
+                self.tabs_note = true;
+                Change::Redraw
+            }
+            Field::SshIntegration => {
+                cfg.terminal.ssh_integration = !cfg.terminal.ssh_integration;
                 self.tabs_note = true;
                 Change::Redraw
             }
@@ -947,7 +955,10 @@ impl Settings {
             let note = match f {
                 Field::CheckNow => update_button(upd).3,
                 Field::Decorations if self.restart_note => "Se aplica al reiniciar".into(),
-                Field::GarboPrompt if self.tabs_note => "Se aplica a las pestañas nuevas".into(),
+                Field::GarboPrompt | Field::SshIntegration if self.tabs_note => {
+                    "Se aplica a las pestañas nuevas".into()
+                }
+                Field::SshIntegration => "Bloques, prompt y agentes en el servidor".into(),
                 Field::Appearance => "Pestañas, prompt, bloques, botones…".into(),
                 Field::TabsPosition => "Arriba, abajo o a un lado".into(),
                 Field::TabsWidth if cfg.tabs.position.vertical() => {

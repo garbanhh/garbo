@@ -4,7 +4,9 @@
 //! de Warp que no tiene, o tiene en otras teclas, traducidos a lo que entiende cada programa:
 //! - **Shift+Intro**: salto de línea sin ejecutar. En bash y zsh, `Ctrl+V Ctrl+J` (inserción
 //!   literal: el comando de varias líneas se ejecuta entero al pulsar Intro); en fish, `Alt+Intro`
-//!   (su `Ctrl+V` pega). En Claude Code, Codex, Gemini…, `Ctrl+J`. En Aider, `Esc Intro`.
+//!   (su `Ctrl+V` pega). En Claude Code, Codex, Gemini…, `Ctrl+J`. En Aider, `Esc Intro`. Por
+//!   ssh o mosh no se sabe qué hay al otro lado: `Ctrl+J`, que los agentes toman como salto de
+//!   línea y un shell, como Intro.
 //! - **Ctrl+Retroceso / Ctrl+Supr**: borrar la palabra de la izquierda / de la derecha, como la
 //!   entiende cada shell. En bash y zsh, `Alt+Retroceso` y `Alt+D`; fish recibe las teclas tal cual
 //!   y actúan sus propias acciones.
@@ -29,6 +31,8 @@ pub enum Context {
     Prompt(Shell),
     /// Un agente en primer plano (por su nombre: "Claude Code", "Aider"…).
     Agent(&'static str),
+    /// Una sesión en otro equipo (ssh, mosh…): no se sabe qué programa hay al otro lado.
+    Remote,
     Other,
 }
 
@@ -68,6 +72,8 @@ pub fn shortcut(key: &Key, mods: ModifiersState, ctx: Context) -> Option<&'stati
         (Context::Prompt(_), Key::Character(c)) if ctrl && c.eq_ignore_ascii_case("z") => b"\x1f",
         (Context::Agent("Aider"), Key::Named(NamedKey::Enter)) if shift => b"\x1b\r",
         (Context::Agent(_), Key::Named(NamedKey::Enter)) if shift => b"\n",
+        // Al otro lado puede haber un agente (salto de línea) o un shell (Ctrl+J es Intro).
+        (Context::Remote, Key::Named(NamedKey::Enter)) if shift => b"\n",
         // Ctrl+W: "borrar la palabra anterior" en todos (en Linux, el ^H de Ctrl+Retroceso de
         // siempre solo borra un carácter en Claude Code).
         (Context::Agent(_), Key::Named(NamedKey::Backspace)) if ctrl => b"\x17",
@@ -328,6 +334,12 @@ mod tests {
             shortcut(&enter, shift, Context::Agent("Aider")),
             Some(&b"\x1b\r"[..])
         );
+        assert_eq!(
+            shortcut(&enter, shift, Context::Remote),
+            Some(&b"\n"[..]),
+            "por ssh, Ctrl+J: salto de línea en un agente, Intro en un shell"
+        );
+        assert_eq!(shortcut(&bs, ctrl, Context::Remote), None);
         assert_eq!(
             shortcut(&enter, shift, Context::Other),
             None,

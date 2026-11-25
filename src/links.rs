@@ -34,8 +34,10 @@ pub struct Found {
 const SCHEMES: [&str; 5] = ["https://", "http://", "ftp://", "file://", "mailto:"];
 
 /// Qué hay en `p` (celda de la rejilla). `cwd`: carpeta para las rutas relativas.
-pub fn find<T>(term: &Term<T>, p: Point, cwd: Option<&Path>) -> Option<Found> {
-    if let Some(found) = hyperlink(term, p) {
+/// `paths`: también rutas de archivos (no por ssh: serían del servidor).
+pub fn find<T>(term: &Term<T>, p: Point, cwd: Option<&Path>, paths: bool) -> Option<Found> {
+    if let Some(found) = hyperlink(term, p).filter(|f| paths || matches!(f.target, Target::Url(_)))
+    {
         return Some(found);
     }
     let (chars, at) = logical_line(term, p)?;
@@ -48,6 +50,9 @@ pub fn find<T>(term: &Term<T>, p: Point, cwd: Option<&Path>) -> Option<Found> {
             start,
             end,
         });
+    }
+    if !paths {
+        return None;
     }
     let (range, target) = path_at(&text, at, cwd)?;
     let (start, end) = span(range);

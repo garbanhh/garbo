@@ -1633,6 +1633,8 @@ impl App {
             }
         }
         let cwd = tab.cwd();
+        // Por ssh, una ruta es del servidor: abrirla aquí abriría otro archivo. Solo enlaces web.
+        let paths = !tab.session.remote;
         let found = {
             let term = tab.term.lock();
             let offset = term.grid().display_offset() as i32;
@@ -1640,6 +1642,7 @@ impl App {
                 &term,
                 Point::new(Line(cell.1 as i32 - offset), Column(cell.0)),
                 cwd.as_deref(),
+                paths,
             )
         };
         let changed = st.link.as_ref().map(|l| &l.2) != Some(&found);

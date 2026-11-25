@@ -61,6 +61,7 @@ impl Section {
             Section::Terminal => &[
                 Control::Prompt,
                 Control::BlockGap,
+                Control::LineGap,
                 Control::Gap,
                 Control::OutputGap,
                 Control::Blocks,
@@ -91,8 +92,10 @@ pub enum Control {
     /// Animación mientras trabaja un agente.
     Working,
     Prompt,
-    /// Espacio sobre la ruta (entre un bloque y el anterior).
+    /// Espacio entre la salida anterior y la línea que separa los bloques.
     BlockGap,
+    /// Espacio entre esa línea y la ruta.
+    LineGap,
     /// Espacio entre la ruta y el comando.
     Gap,
     /// Espacio entre el comando y su salida.
@@ -156,6 +159,7 @@ impl Control {
             | Control::Working
             | Control::Bar => Kind::Segmented,
             Control::BlockGap
+            | Control::LineGap
             | Control::Gap
             | Control::OutputGap
             | Control::Radius
@@ -173,7 +177,8 @@ impl Control {
             Control::Align => "Nombre",
             Control::Working => "Agente trabajando",
             Control::Prompt => "Prompt",
-            Control::BlockGap => "Espacio sobre la ruta",
+            Control::BlockGap => "Espacio sobre la línea",
+            Control::LineGap => "Espacio bajo la línea",
             Control::Gap => "Espacio bajo la ruta",
             Control::OutputGap => "Espacio antes de la salida",
             Control::Blocks => "Bloques de comandos",
@@ -196,7 +201,9 @@ impl Control {
             Control::Align => Align::ALL.len(),
             Control::Working => Working::ALL.len(),
             Control::Prompt => Prompt::ALL.len(),
-            Control::BlockGap | Control::Gap | Control::OutputGap => style::GAPS.len(),
+            Control::BlockGap | Control::LineGap | Control::Gap | Control::OutputGap => {
+                style::GAPS.len()
+            }
             Control::Blocks => Blocks::ALL.len(),
             Control::Cursor => CursorStyle::ALL.len(),
             Control::Bar => BarSize::ALL.len(),
@@ -217,7 +224,7 @@ impl Control {
             Control::Align => Align::ALL[i].label().into(),
             Control::Working => Working::ALL[i].label().into(),
             Control::Prompt => Prompt::ALL[i].label().into(),
-            Control::BlockGap | Control::Gap | Control::OutputGap => {
+            Control::BlockGap | Control::LineGap | Control::Gap | Control::OutputGap => {
                 format!("{} px", style::GAPS[i])
             }
             Control::Blocks => Blocks::ALL[i].label().into(),
@@ -245,6 +252,7 @@ impl Control {
             Control::Working => pos(Working::ALL, &cfg.tabs.working),
             Control::Prompt => pos(Prompt::ALL, &style.prompt),
             Control::BlockGap => nearest(&style::GAPS, style.block_gap as f32),
+            Control::LineGap => nearest(&style::GAPS, style.line_gap as f32),
             Control::Gap => nearest(&style::GAPS, style.prompt_gap as f32),
             Control::OutputGap => nearest(&style::GAPS, style.output_gap as f32),
             Control::Blocks => pos(Blocks::ALL, &style.blocks),
@@ -263,6 +271,7 @@ impl Control {
             Control::TabShape => pos(Tabs::ALL, &base.tabs),
             Control::Prompt => pos(Prompt::ALL, &base.prompt),
             Control::BlockGap => style::GAPS.iter().position(|g| *g == base.block_gap)?,
+            Control::LineGap => style::GAPS.iter().position(|g| *g == base.line_gap)?,
             Control::Gap => style::GAPS.iter().position(|g| *g == base.prompt_gap)?,
             Control::OutputGap => style::GAPS.iter().position(|g| *g == base.output_gap)?,
             Control::Blocks => pos(Blocks::ALL, &base.blocks),
@@ -297,6 +306,7 @@ fn diff(cur: &Style, base: &Style) -> StyleOverrides {
         radius: d(cur.radius, base.radius),
         prompt_gap: d(cur.prompt_gap, base.prompt_gap),
         block_gap: d(cur.block_gap, base.block_gap),
+        line_gap: d(cur.line_gap, base.line_gap),
         output_gap: d(cur.output_gap, base.output_gap),
     }
 }
@@ -621,6 +631,7 @@ impl LookEditor {
             Control::TabShape => set(&mut o.tabs, Tabs::ALL[i], base.tabs),
             Control::Prompt => set(&mut o.prompt, Prompt::ALL[i], base.prompt),
             Control::BlockGap => set(&mut o.block_gap, style::GAPS[i], base.block_gap),
+            Control::LineGap => set(&mut o.line_gap, style::GAPS[i], base.line_gap),
             Control::Gap => set(&mut o.prompt_gap, style::GAPS[i], base.prompt_gap),
             Control::OutputGap => set(&mut o.output_gap, style::GAPS[i], base.output_gap),
             Control::Blocks => set(&mut o.blocks, Blocks::ALL[i], base.blocks),
@@ -664,6 +675,7 @@ impl LookEditor {
             Control::TabShape => o.tabs = None,
             Control::Prompt => o.prompt = None,
             Control::BlockGap => o.block_gap = None,
+            Control::LineGap => o.line_gap = None,
             Control::Gap => o.prompt_gap = None,
             Control::OutputGap => o.output_gap = None,
             Control::Blocks => o.blocks = None,
@@ -1461,39 +1473,49 @@ fn option_icon(p: &mut Painter, c: Control, i: usize, r: [f32; 4], col: Rgb, s: 
 }
 
 /// Muestra de lo que ajusta un deslizador con la opción `i`: el hueco marcado en color entre la
-/// salida anterior, la ruta, el comando y su salida; las esquinas, o la transparencia.
+/// salida anterior, la línea entre bloques, la ruta, el comando y su salida; las esquinas, o la
+/// transparencia.
 fn slider_sample(p: &mut Painter, theme: &Theme, c: Control, i: usize, r: [f32; 4], s: f32) {
     let [x, y, w, h] = r;
     let fg = theme.foreground;
     let hair = s.round().max(1.0);
     let rad = (5.0 * s).round();
     match c {
-        Control::BlockGap | Control::Gap | Control::OutputGap => {
+        Control::BlockGap | Control::LineGap | Control::Gap | Control::OutputGap => {
             p.rounded(x, y, w, h, theme.background, 1.0, rad);
             p.outline(x, y, w, h, fg, 0.10, rad, hair);
             let line = (3.0 * s).round().max(2.0);
             let step = (3.0 * s).round();
+            let half = (step / 2.0).round();
             let v = (style::GAPS[i] as f32 * s * 0.55).round();
             let which = match c {
                 Control::BlockGap => 0,
-                Control::Gap => 1,
-                _ => 2,
+                Control::LineGap => 1,
+                Control::Gap => 2,
+                _ => 3,
             };
             let (lx, lw) = (x + (9.0 * s).round(), w - (18.0 * s).round());
-            // Salida anterior, ruta (con su carpeta), comando y salida.
-            let lines: [(f32, Rgb, f32); 4] = [
-                (0.75, fg, 0.30),
-                (0.55, theme.accent, 0.75),
-                (0.35, fg, 0.85),
-                (0.65, fg, 0.30),
+            // Salida anterior, línea entre bloques (fina y a todo lo ancho), ruta (con su
+            // carpeta), comando y salida; con los huecos de siempre entre ellos.
+            let rows: [(f32, Rgb, f32, f32); 5] = [
+                (0.75, fg, 0.30, line),
+                (1.0, fg, 0.30, hair),
+                (0.55, theme.accent, 0.75, line),
+                (0.35, fg, 0.85, line),
+                (0.65, fg, 0.30, line),
             ];
-            let total = 4.0 * line + 3.0 * step + v;
+            let gaps = [half, half, step, step];
+            let total = 4.0 * line + hair + gaps.iter().sum::<f32>() + v;
             let mut ly = (y + (h - total) / 2.0).round();
-            for (k, (frac, col, a)) in lines.into_iter().enumerate() {
-                p.rounded(lx, ly, (lw * frac).round(), line, col, a, line / 2.0);
-                ly += line;
-                if k < 3 {
-                    let g = step + if k == which { v } else { 0.0 };
+            for (k, (frac, col, a, th)) in rows.into_iter().enumerate() {
+                if k == 1 {
+                    p.rect(lx, ly, lw, th, col, a);
+                } else {
+                    p.rounded(lx, ly, (lw * frac).round(), th, col, a, th / 2.0);
+                }
+                ly += th;
+                if let Some(&base) = gaps.get(k) {
+                    let g = base + if k == which { v } else { 0.0 };
                     if k == which {
                         // El espacio que se ajusta, marcado.
                         let band = g.max(hair);

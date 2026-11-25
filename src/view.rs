@@ -281,6 +281,58 @@ impl Painter<'_> {
             .push(Instance::outline(x, y, w, h, c.to_f32(a), r, t));
     }
 
+    /// Logo de un agente en un cuadrado de lado `size` con la esquina en (x, y). Los logos de un
+    /// solo color se pintan de `text` (el del texto que lo acompaña); sin logo, la inicial de
+    /// `name` en un círculo.
+    #[allow(clippy::too_many_arguments)]
+    pub fn agent_logo(
+        &mut self,
+        logo: Option<crate::logos::Logo>,
+        name: &str,
+        x: f32,
+        y: f32,
+        size: f32,
+        text: Rgb,
+        alpha: f32,
+    ) {
+        let px = size.round().max(1.0);
+        let (x, y) = (x.round(), y.round());
+        let Some(logo) = logo else {
+            let r = px / 2.0;
+            self.circle(x + r, y + r, r, text, 0.18 * alpha);
+            let initial: String = name.chars().take(1).flat_map(char::to_uppercase).collect();
+            let v = UiVariant::Small;
+            let w = self.ui_measure_v(&initial, v);
+            let lh = self.ui_line_h(v);
+            let (lx, ly) = ((x + (px - w) / 2.0).round(), (y + (px - lh) / 2.0).round());
+            self.ui_text_v(lx, ly, &initial, text, w + 1.0, v);
+            return;
+        };
+        if let Some(g) = self
+            .glyphs
+            .get_logo(self.queue, self.atlas, logo, px as u16)
+        {
+            let (color, kind) = if g.is_color {
+                ([1.0, 1.0, 1.0, alpha], 2)
+            } else {
+                (text.to_f32(alpha), 1)
+            };
+            // Centrado: el pixel art puede no medir justo el cuadrado.
+            let (dx, dy) = (
+                ((px - g.width) / 2.0).round(),
+                ((px - g.height) / 2.0).round(),
+            );
+            self.fg.push(Instance {
+                pos: [x + dx, y + dy],
+                size: [g.width, g.height],
+                uv: g.uv,
+                color,
+                kind,
+                radius: 0.0,
+            });
+        }
+    }
+
     pub fn circle(&mut self, cx: f32, cy: f32, r: f32, c: Rgb, a: f32) {
         self.rounded(cx - r, cy - r, 2.0 * r, 2.0 * r, c, a, r);
     }
@@ -925,6 +977,7 @@ pub fn prompt_sample(p: &mut Painter, theme: &Theme, x: f32, y: f32, w: f32, s: 
         focused: true,
         cursor_on: false,
         rows: Rows::default(),
+        room: f32::INFINITY,
     };
     prompt_label(p, theme, cw, ch, cols, &v, y, end, Some(branch), None, s);
     let slash = path.rfind(crate::platform::is_separator).unwrap_or(0);
@@ -967,6 +1020,21 @@ pub fn prompt_sample(p: &mut Painter, theme: &Theme, x: f32, y: f32, w: f32, s: 
 
 /// Menú de completado bajo la palabra que se completa (encima si no cabe debajo). Guarda en
 /// `menu.rect` dónde quedó, para el ratón.
+/// Dónde empieza el menú de completado (de alto `h`) con el cursor en la fila `row`: debajo si
+/// cabe hasta el final de lo que se ve; si no, encima (y si tampoco cabe encima, debajo).
+fn menu_y(v: &TermView, row: i32, h: f32, ch: f32, s: f32) -> f32 {
+    // No el final de la última fila: con huecos puede quedar por debajo del panel.
+    let bottom = v.row_y(v.lines as i32, ch).min(v.y + v.room);
+    let below = v.row_y(row, ch) + ch + 2.0 * s;
+    let above = v.row_y(row, ch) - h - 2.0 * s;
+    if below + h <= bottom || above < v.y {
+        below
+    } else {
+        above
+    }
+    .round()
+}
+
 pub fn draw_menu<T: EventListener>(
     p: &mut Painter,
     term: &Term<T>,
@@ -1019,15 +1087,7 @@ pub fn draw_menu<T: EventListener>(
     let x = (v.x + col * m.width - pad - mark_w)
         .clamp(v.x, (v.x + area_w - w).max(v.x))
         .round();
-    let bottom = v.row_y(v.lines as i32, m.height);
-    let below = v.row_y(row, m.height) + m.height + 2.0 * s;
-    let above = v.row_y(row, m.height) - h - 2.0 * s;
-    let y = if below + h <= bottom || above < v.y {
-        below
-    } else {
-        above
-    }
-    .round();
+    let y = menu_y(v, row, h, m.height, s);
 
     p.card(
         x,
@@ -1135,6 +1195,9 @@ pub struct TermView {
     pub cursor_on: bool,
     /// Dónde va cada fila (con el hueco bajo la ruta del prompt de Garbo: ver `Rows`).
     pub rows: Rows,
+    /// Alto en el que se ven las filas desde `y` (el del panel sin sus márgenes). Con huecos, las
+    /// filas vacías bajo el cursor pueden quedar más abajo, fuera de la vista.
+    pub room: f32,
 }
 
 impl TermView {
@@ -1621,6 +1684,7 @@ pub fn draw_blocks<T: EventListener>(
     let width = span.1 - span.0;
     let line_w = scale.round().max(1.0);
     let style = theme.style;
+    let gaps = style.gaps(scale);
 
     for (i, a) in anchors.iter().enumerate() {
         let end_line = match anchors.get(i + 1) {
@@ -1637,14 +1701,15 @@ pub fn draw_blocks<T: EventListener>(
         let y0 = v.row_y(start_row, ch);
         let y1 = v.row_y(end_row + 1, ch);
         let starts_here = a.line.0 + offset >= first;
-        // La línea entre bloques va en medio del hueco sobre la ruta (`Style::block_gap`), no
-        // pegada a la ruta: así el espacio queda a los dos lados.
+        // La línea entre bloques parte el hueco sobre la ruta: `Style::block_gap` queda encima y
+        // `Style::line_gap` debajo, entre la línea y la ruta. Sin hueco (un bloque sin el prompt
+        // de Garbo, que no lleva huecos), pegada a la ruta.
         let above = if start_row > first {
             (y0 - v.row_y(start_row - 1, ch) - ch).max(0.0)
         } else {
             0.0
         };
-        let sep_y = (y0 - above / 2.0).round();
+        let sep_y = (y0 - gaps.line.min(above)).round();
         let info = bs.info(a.id);
         let status = info.map_or(Status::Idle, |i| i.status());
         let is_sel = selected == Some(a.id);
@@ -2046,6 +2111,67 @@ fn draw_special(p: &mut Painter, c: char, x: f32, y: f32, w: f32, h: f32, fg: Rg
 mod tests {
     use super::*;
 
+    /// Con huecos, las filas vacías bajo el cursor se dibujan más abajo y pueden quedar fuera del
+    /// panel: el menú de completado no puede contar con ellas. Como en la captura del propietario:
+    /// muchos `cd` (sin salida), la rejilla a medio llenar y el cursor ya abajo del todo por los
+    /// huecos; el menú se abría debajo y se cortaba.
+    #[test]
+    fn el_menu_no_se_sale_por_abajo_con_huecos() {
+        use alacritty_terminal::event::VoidListener;
+        use alacritty_terminal::term::test::TermSize;
+        let cfg = crate::config::Config::default();
+        let (cols, lines, ch) = (80, 40, 20.0);
+        let mut term = Term::new(
+            crate::terminal::term_config(&cfg),
+            &TermSize::new(cols, lines),
+            VoidListener,
+        );
+        let mut state = BlockState::default();
+        state.no_history = true;
+        let blocks = std::sync::Mutex::new(state);
+        let prompt = "\x1b]133;A;garbo\x07  ~\r\n\x1b]133;B\x07";
+        let mut text = String::new();
+        for _ in 0..14 {
+            text += &format!("{prompt}cd\r\n\x1b]133;C\x07\x1b]133;D;0\x07");
+        }
+        text += &format!("{prompt}cd ");
+        crate::pty_loop::feed_bytes(&mut term, &blocks, text.as_bytes(), &VoidListener);
+        let bs = blocks.into_inner().unwrap();
+        let cur = term.grid().cursor.point.line.0;
+        let gaps = crate::style::Gaps {
+            above: 16.0,
+            line: 0.0,
+            path: 16.0,
+            output: 16.0,
+        };
+        // El panel mide lo que la rejilla sin huecos.
+        let room = lines as f32 * ch;
+        let v = TermView {
+            x: 0.0,
+            y: 0.0,
+            lines,
+            focused: true,
+            cursor_on: true,
+            rows: Rows::layout(&term, &bs, lines, ch, gaps, room),
+            room,
+        };
+        assert!(v.rows.first > 0, "los huecos ocultan filas por arriba");
+        assert!(
+            v.row_y(lines as i32, ch) > room + 5.0 * ch,
+            "filas vacías bajo el cursor, fuera del panel"
+        );
+        let h = 5.0 * ch;
+        let y = menu_y(&v, cur, h, ch, 1.0);
+        assert!(
+            y + h <= room,
+            "el menú acaba en {} y el panel en {room}",
+            y + h
+        );
+        assert!(y < v.row_y(cur, ch), "va encima del cursor");
+        // Si cabe debajo, debajo.
+        assert!(menu_y(&v, cur, 0.5 * ch, ch, 1.0) > v.row_y(cur, ch));
+    }
+
     /// El hueco bajo la ruta baja lo de debajo; si no cabe, se ocultan filas enteras por arriba y
     /// el cursor sigue a la vista. El ratón cae en la fila que se ve.
     #[test]
@@ -2089,6 +2215,7 @@ mod tests {
         // desde la fila 2; el segundo bloque empieza en `b`.
         let g = Gaps {
             above: 4.0,
+            line: 0.0,
             path: 0.0,
             output: 6.0,
         };
@@ -2187,6 +2314,7 @@ mod tests {
                 focused: true,
                 cursor_on: true,
                 rows: Rows::default(),
+                room: f32::INFINITY,
             };
             let (mut out, mut fg) = (Vec::new(), Vec::new());
             let mut times = Vec::new();

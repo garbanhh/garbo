@@ -1138,7 +1138,7 @@ impl TabBar {
             }
             // Centrado: el mismo margen a los dos lados, guardando sitio para la × y el estado
             // aunque no se vean (así el nombre no salta al pasar el ratón).
-            let (x0, x1, centered) = match self.align {
+            let (mut x0, mut x1, mut centered) = match self.align {
                 Align::Center => {
                     let side = pad.max(self.close_w + status_w);
                     if end - start - 2.0 * side > 24.0 * s {
@@ -1149,6 +1149,29 @@ impl TabBar {
                 }
                 Align::Left => (start + pad, right, false),
             };
+            // Logo del agente delante del nombre mientras se ejecuta: centrado con el nombre si
+            // caben los dos; si no, a la izquierda, donde hay más sitio (el centrado guarda el de
+            // la × y el estado también a la izquierda), con lo que quepa del nombre.
+            let agent = tab.agent.filter(|_| tab.status != Status::Exited);
+            let size = (14.0 * s).round();
+            let lead = size + (6.0 * s).round();
+            if let Some(agent) = agent {
+                let tw = p.ui_measure(&label);
+                let lx = if centered && tw + lead <= x1 - x0 {
+                    Some((x0 + (x1 - x0 - tw - lead) / 2.0).round())
+                } else if right - (start + pad) >= lead + 12.0 * s {
+                    x1 = right;
+                    Some(start + pad)
+                } else {
+                    None
+                };
+                if let Some(lx) = lx {
+                    let y = cy - size / 2.0;
+                    p.agent_logo(agent.logo, agent.name, lx, y, size, color, 1.0);
+                    x0 = lx + lead;
+                    centered = false;
+                }
+            }
             self.draw_label(p, i, &label, color, (x0, x1), (ty, th), centered, s, extra);
         }
         // Línea entre las pestañas y el terminal, salvo junto a la pestaña que se une a él.

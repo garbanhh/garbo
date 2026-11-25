@@ -42,9 +42,12 @@
 - **Edición cómoda de la línea.** `Shift+Intro` para escribir un comando en varias líneas, borrar
   palabras con `Ctrl+Retroceso`, deshacer con `Ctrl+Z` y colocar el cursor con un clic.
 - **Hecha para agentes de código.** El panel muestra el estado de Claude Code, Codex, Gemini CLI,
-  Aider y otros, con un árbol de subagentes para las sesiones compatibles. Cuando un agente
+  Aider y otros, con su logo y un árbol de subagentes para las sesiones compatibles. Cuando un agente
   termina y no estás viendo su sesión, aparece un aviso del escritorio que permite volver a su
   pestaña. Las capturas de pantalla se pegan como imagen.
+- **También por SSH** (Linux). Al conectar con `ssh` o `mosh`, el shell del servidor se abre con
+  los bloques, el prompt de Garbo y la edición de la línea, y el agente que se lance allí se
+  reconoce como en local. No se instala nada en el servidor.
 - **Cambios de git al estilo Warp.** Junto a la rama del prompt se ve cuántos archivos
   y líneas has cambiado, y un panel a la derecha muestra cada archivo con su diff. Ideal para
   revisar lo que acaba de hacer un agente: se actualiza mientras trabaja.
@@ -212,8 +215,10 @@ tal como las entiende cada shell, sin cambiar su configuración (en bash y fish,
 `~/Documentos/Proyectos` solo se va `Proyectos`; zsh sigue su `WORDCHARS`), y `Ctrl+Z` deshace.
 
 Con un agente en primer plano, `Shift+Intro` también inserta un salto de línea (en Claude Code,
-Codex o Gemini CLI se envía `Ctrl+J`) y `Ctrl+Retroceso` borra la palabra anterior. En el resto de
-programas (vim, python…) las teclas funcionan como siempre.
+Codex o Gemini CLI se envía `Ctrl+J`) y `Ctrl+Retroceso` borra la palabra anterior. En una sesión
+por `ssh` o `mosh`, `Shift+Intro` envía `Ctrl+J`: es un salto de línea en esos agentes y un `Intro`
+en el shell del servidor. En el resto de programas (vim, python…) las teclas funcionan como
+siempre.
 
 En Windows, PowerShell ya trae estos atajos (`Shift+Intro`, `Ctrl+Retroceso`, `Ctrl+Supr`,
 `Ctrl+Z`): Garbo le envía las teclas tal cual, como eventos de teclado de Windows, y con el prompt
@@ -263,12 +268,22 @@ Cada bloque queda anclado al propio texto de la rejilla, así que
 conserva su sitio al desplazarse, al recortarse el historial y al redimensionar. Se desactiva con
 `shell_integration = false`, o solo su aspecto con `blocks = false`.
 
+**Por SSH** (Linux). La integración define `ssh` y `mosh` como funciones que, en una sesión
+interactiva, envían [`shell/remoto.sh`](shell/remoto.sh) con la propia conexión: el servidor abre
+tu shell de inicio de sesión (bash, zsh o fish) con la integración, y ese shell borra los archivos
+temporales al cargarlos. Así funcionan allí los bloques, el prompt de Garbo, la edición de la línea
+y el reconocimiento del agente que se lance. Lo que depende de este equipo (menú de completado,
+sugerencias, rama de git y rutas con `Ctrl+clic`) se desactiva en esas sesiones. No se aplica con
+`command ssh`, con una orden para el servidor (`ssh servidor tmux`), con `RemoteCommand` en
+`~/.ssh/config` ni dentro de tmux. Se desactiva en *Ajustes → Bloques → Garbo en sesiones ssh*
+(`ssh_integration = false`).
+
 ### Agentes de código
 
 Los botones de la barra de pestañas (o `Ctrl+Shift+A` y `Ctrl+Shift+E`) abren un panel lateral:
 
 - **Agentes**: pestañas con un agente de código (Claude Code, Codex, Gemini CLI, Aider, OpenCode,
-  entre otros), con su estado (*Trabajando*, *Necesita tu permiso*, *Terminado*, *Esperando tu
+  entre otros), con su logo, su estado (*Trabajando*, *Necesita tu permiso*, *Terminado*, *Esperando tu
   mensaje*) y el tiempo transcurrido. Un clic va a la pestaña; al pasar el ratón se ven las
   últimas líneas de la conversación sin cambiar de pestaña. Garbo omite el borrador y el pie
   cuando reconoce el editor del agente.
@@ -374,8 +389,8 @@ que el propio agente guarda (Claude Code y, en Linux, Codex): las respuestas com
 derecha con la terminal en vivo al lado. El panel tiene cuatro secciones:
 - **Temas**: los 19 temas, con la opción de conservar tus cambios al cambiar de tema.
 - **Pestañas**: forma, posición, ancho, nombre y la animación mientras trabaja un agente.
-- **Terminal**: etiqueta de la carpeta del prompt, espacio sobre la ruta, bajo ella y antes de la
-  salida de cada comando, marcas de los bloques y cursor.
+- **Terminal**: etiqueta de la carpeta del prompt; espacio a cada lado de la línea que separa los
+  bloques, bajo la ruta y antes de la salida de cada comando; marcas de los bloques y cursor.
 - **Ventana**: altura de la barra, botones de ventana, fondo liso o con degradado, esquinas y
   opacidad.
 
@@ -514,7 +529,8 @@ src/
   terminal.rs     pestaña: PTY, estado del terminal (alacritty_terminal) y bloques
   pty_loop.rs     E/S del PTY y detección de marcas OSC 133
   blocks.rs       bloques de comandos: marcas, anclas, rangos y copia
-  shell.rs        bash, zsh y fish: detección y carga de la integración
+  shell.rs        bash, zsh y fish: detección y carga de la integración (también por SSH)
+  logos.rs        logos de los agentes y su rasterizado
   renderer.rs     renderizador wgpu
   shader.wgsl     primitivas: rectángulos redondeados, glifos, emoji, arcos, segmentos, degradados
                   y contornos
@@ -538,7 +554,7 @@ src/
   suggest.rs      sugerencias en gris desde el historial (con la carpeta de cada comando)
   complete.rs     menú de completado: candidatos según el contexto y búsqueda
   clipboard.rs    pegado de imágenes del portapapeles
-  sessions.rs     detección de agentes en primer plano y su estado
+  sessions.rs     detección de agentes en primer plano, su estado y las sesiones por SSH
   ports.rs        puertos en escucha y detección de servidores web
   subagents.rs    subagentes a partir de los archivos locales de sesión
   notify.rs       avisos del escritorio cuando un agente termina
@@ -546,7 +562,7 @@ src/
   activation.rs   traer la ventana al frente al pulsar un aviso (Wayland)
   panel.rs        panel lateral de agentes y puertos, con vista previa al pasar el ratón
   platform/       lo que cambia entre Linux y Windows (procesos, carpeta del shell, abrir enlaces)
-shell/            integración con bash, zsh, fish y PowerShell
+shell/            integración con bash, zsh, fish y PowerShell, y su envío por SSH
 packaging/        icono, entrada de escritorio, metadatos AppStream e instalador de Windows
 assets/           logo y capturas del README
 scripts/          publicación de versiones
@@ -560,4 +576,6 @@ tools/            utilidades (capturas, sesiones simuladas, vectorizar el logo)
 Distribuida bajo la licencia MIT (véase [`LICENSE`](LICENSE)). `src/pty_loop.rs` deriva de
 alacritty_terminal, distribuido bajo la licencia Apache 2.0, y la versión para Windows incluye
 `conpty.dll` y `OpenConsole.exe` de Windows Terminal, bajo la licencia MIT, y la fuente Adwaita
-Mono, bajo la SIL Open Font License 1.1 (véase [`NOTICE`](NOTICE)).
+Mono, bajo la SIL Open Font License 1.1. Los logos de los agentes (salvo el de Gemini CLI,
+redibujado celda a celda) provienen de LobeHub Icons, bajo la licencia MIT, y todos son marcas de
+sus respectivos titulares (véase [`NOTICE`](NOTICE)).

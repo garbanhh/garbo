@@ -19,4 +19,9 @@ fi
         builtin source -- "${${(%):-%x}:A:h:h}/garbo.zsh"
     fi
     builtin unset __garbo_rc
+    # Por ssh (ver remoto.sh): la carpeta temporal con la integración ya no hace falta.
+    if [[ -n ${GARBO_REMOTE_TMP-} ]]; then
+        builtin command rm -rf -- "$GARBO_REMOTE_TMP"
+        builtin unset GARBO_REMOTE_TMP
+    fi
 }

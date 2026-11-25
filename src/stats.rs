@@ -45,6 +45,15 @@ impl AgentKind {
         }
     }
 
+    pub fn logo(self) -> crate::logos::Logo {
+        use crate::logos::Logo;
+        match self {
+            AgentKind::Claude => Logo::ClaudeCode,
+            AgentKind::Codex => Logo::Codex,
+            AgentKind::Gemini => Logo::GeminiCli,
+        }
+    }
+
     pub fn provider(self) -> Provider {
         match self {
             AgentKind::Claude => Provider::Anthropic,

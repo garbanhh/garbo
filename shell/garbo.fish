@@ -7,7 +7,8 @@
 # siempre, para que Garbo no lo tome por parte del comando. Con GARBO_PROMPT=1 (opción "Prompt de
 # Garbo") el prompt es el de Garbo: una línea con la carpeta, que Garbo dibuja como etiqueta
 # (`A;garbo` lo anuncia), y debajo lo que se escribe. Con GARBO_AUTOSUGGEST=1 (opción
-# "Sugerencias") se apagan las sugerencias propias de fish.
+# "Sugerencias") se apagan las sugerencias propias de fish. La A dice también qué shell es
+# (`s=fish`), para las teclas que Garbo le manda.
 
 status is-interactive; or return
 set -q __garbo_loaded; and return
@@ -32,7 +33,7 @@ function __garbo_prompt_line
     end
     set -l venv
     set -q VIRTUAL_ENV[1]; and set venv '  ('(string replace -r '.*/' '' -- $VIRTUAL_ENV)')'
-    printf '\e]133;A;garbo\a  %s%s\n' $dir "$venv"
+    printf '\e]133;A;garbo;s=fish\a  %s%s\n' $dir "$venv"
 end
 
 if test -n "$GARBO_PROMPT"
@@ -52,9 +53,29 @@ if test -n "$GARBO_PROMPT"
 else if set -q own_marks[1]
     functions -q fish_prompt; and functions -c fish_prompt __garbo_user_prompt
     function fish_prompt
-        printf '\e]133;A\a'
+        printf '\e]133;A;s=fish\a'
         functions -q __garbo_user_prompt; and __garbo_user_prompt
         printf '\e]133;B\a'
+    end
+else
+    # fish 4 marca el prompt por su cuenta sin decir qué shell es: se repite la A en el mismo sitio
+    # (para Garbo, el mismo prompt) diciéndolo.
+    functions -q fish_prompt; and functions -c fish_prompt __garbo_user_prompt
+    function fish_prompt
+        printf '\e]133;A;s=fish\a'
+        functions -q __garbo_user_prompt; and __garbo_user_prompt
+    end
+end
+
+# ssh y mosh con Garbo también en el servidor (ver ssh.sh, que solo está en este equipo: en el
+# servidor no se prepara otro ssh). No pisa una función tuya (en fish, los alias son funciones).
+set -g __garbo_ssh_sh (status dirname)/ssh.sh
+if test -r $__garbo_ssh_sh
+    functions -q ssh; or function ssh
+        command sh $__garbo_ssh_sh ssh $argv
+    end
+    functions -q mosh; or function mosh
+        command sh $__garbo_ssh_sh mosh $argv
     end
 end
 

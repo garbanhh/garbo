@@ -38,6 +38,7 @@ copy_on_select = false
 shell_integration = true # bash: marcas de comando para los bloques (no toca tu ~/.bashrc)
 blocks = true            # dibujar bloques: separadores, estado, duración
 garbo_prompt = true      # prompt de Garbo: carpeta como etiqueta y comandos en negrita (pestañas nuevas)
+ssh_integration = true   # ssh y mosh abren el shell del servidor con Garbo, sin instalar nada (Linux)
 autosuggest = true       # sugerir en gris el resto del comando (→ lo acepta, Ctrl+→ palabra a palabra)
 tab_key = "menu"         # menu: Tab abre el menú de completado | accept: Tab acepta la sugerencia
 complete_as_you_type = false # abrir el menú de completado solo, mientras se escribe
@@ -66,7 +67,8 @@ blocked = true           # avisar también cuando un agente espera tu permiso o 
 # bar        = "normal"    # compact | normal | tall
 # background = "solid"     # solid | gradient
 # radius     = 6           # radio de las esquinas en píxeles
-# block_gap  = 0           # hueco sobre la ruta (entre un bloque y el anterior), en píxeles (0-32)
+# block_gap  = 0           # hueco entre la salida anterior y la línea que separa los bloques, en píxeles (0-32)
+# line_gap   = 0           # hueco entre esa línea y la ruta, en píxeles (0-32); sin línea, se suman los dos
 # prompt_gap = 0           # hueco entre la ruta y el comando (prompt de Garbo), en píxeles (0-32)
 # output_gap = 0           # hueco entre el comando y su salida, en píxeles (0-32)
 

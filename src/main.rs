@@ -20,6 +20,7 @@ mod git;
 mod input;
 mod keybindings;
 mod links;
+mod logos;
 mod look;
 mod notify;
 mod palette;

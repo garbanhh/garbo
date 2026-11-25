@@ -271,6 +271,9 @@ pub struct TerminalConfig {
     /// Prompt de Garbo: la carpeta como etiqueta encima de lo que se escribe y, en los comandos ya
     /// ejecutados, en gris con su duración (con la integración del shell; en pestañas nuevas).
     pub garbo_prompt: bool,
+    /// `ssh` y `mosh` abren el shell del servidor con la integración de Garbo (bloques, prompt,
+    /// agentes), sin instalar nada allí. Ver shell/ssh.sh. En pestañas nuevas; de momento, Linux.
+    pub ssh_integration: bool,
 }
 
 impl Default for TerminalConfig {
@@ -287,6 +290,7 @@ impl Default for TerminalConfig {
             tab_key: TabKey::Menu,
             complete_as_you_type: false,
             garbo_prompt: true,
+            ssh_integration: true,
         }
     }
 }
@@ -537,6 +541,12 @@ impl Config {
             t.garbo_prompt == dt.garbo_prompt,
         );
         put(
+            "terminal",
+            "ssh_integration",
+            value(t.ssh_integration),
+            t.ssh_integration == dt.ssh_integration,
+        );
+        put(
             "tabs",
             "position",
             value(tb.position.key()),
@@ -722,6 +732,7 @@ mod tests {
         cfg.style.radius = Some(10);
         cfg.style.prompt_gap = Some(6);
         cfg.style.output_gap = Some(4);
+        cfg.style.line_gap = Some(8);
         cfg.save_at(&path).unwrap();
         let text = fs::read_to_string(&path).unwrap();
         assert!(text.contains("[style]"), "{text}");
@@ -729,10 +740,12 @@ mod tests {
         assert!(text.contains("radius = 10"), "{text}");
         assert!(text.contains("prompt_gap = 6"), "{text}");
         assert!(text.contains("output_gap = 4"), "{text}");
+        assert!(text.contains("line_gap = 8"), "{text}");
         let mut back = Config::load_at(&path);
         assert_eq!(back.style.tabs, Some(Tabs::Pill));
         assert_eq!(back.style.radius, Some(10));
         assert_eq!(back.style.prompt_gap, Some(6));
+        assert_eq!(back.style.line_gap, Some(8));
         back.style.radius = None;
         back.save_at(&path).unwrap();
         let text = fs::read_to_string(&path).unwrap();
@@ -1171,6 +1184,7 @@ impl Theme {
             radius,
             prompt_gap: 0,
             block_gap: 0,
+            line_gap: 0,
             output_gap: 0,
         };
         use Background::{Gradient, Solid};

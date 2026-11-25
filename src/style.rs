@@ -152,8 +152,11 @@ pub struct Style {
     pub radius: u8,
     /// Hueco entre la línea de la ruta del prompt de Garbo y la del comando, en píxeles lógicos.
     pub prompt_gap: u8,
-    /// Hueco sobre la ruta (entre un bloque y el anterior), en píxeles lógicos.
+    /// Hueco entre la salida del bloque anterior y la línea que los separa, en píxeles lógicos.
+    /// En los estilos de bloque sin línea, se suma a `line_gap`: es el hueco sobre la ruta.
     pub block_gap: u8,
+    /// Hueco entre la línea que separa los bloques y la ruta, en píxeles lógicos.
+    pub line_gap: u8,
     /// Hueco entre el comando y su salida, en píxeles lógicos.
     pub output_gap: u8,
 }
@@ -161,8 +164,10 @@ pub struct Style {
 /// Huecos de los bloques en píxeles físicos (ver `view::Rows`).
 #[derive(Clone, Copy, Default, Debug, PartialEq)]
 pub struct Gaps {
-    /// Sobre la ruta.
+    /// Sobre la ruta (los dos lados de la línea entre bloques: `block_gap` + `line_gap`).
     pub above: f32,
+    /// Lo que de `above` queda bajo la línea entre bloques (`line_gap`).
+    pub line: f32,
     /// Bajo la ruta (antes del comando).
     pub path: f32,
     /// Entre el comando y su salida.
@@ -194,6 +199,7 @@ impl Default for Style {
             radius: 6,
             prompt_gap: 0,
             block_gap: 0,
+            line_gap: 0,
             output_gap: 0,
         }
     }
@@ -214,7 +220,8 @@ impl Style {
     pub fn gaps(&self, scale: f32) -> Gaps {
         let px = |v: u8| (v as f32 * scale).round();
         Gaps {
-            above: px(self.block_gap),
+            above: px(self.block_gap) + px(self.line_gap),
+            line: px(self.line_gap),
             path: px(self.prompt_gap),
             output: px(self.output_gap),
         }
@@ -244,6 +251,7 @@ pub struct StyleOverrides {
     pub radius: Option<u8>,
     pub prompt_gap: Option<u8>,
     pub block_gap: Option<u8>,
+    pub line_gap: Option<u8>,
     pub output_gap: Option<u8>,
 }
 
@@ -259,6 +267,7 @@ struct RawStyle {
     radius: Option<f64>,
     prompt_gap: Option<f64>,
     block_gap: Option<f64>,
+    line_gap: Option<f64>,
     output_gap: Option<f64>,
 }
 
@@ -288,6 +297,7 @@ impl From<RawStyle> for StyleOverrides {
             radius: r.radius.map(|v| v.clamp(0.0, 24.0).round() as u8),
             prompt_gap: gap(r.prompt_gap),
             block_gap: gap(r.block_gap),
+            line_gap: gap(r.line_gap),
             output_gap: gap(r.output_gap),
         }
     }
@@ -306,6 +316,7 @@ impl StyleOverrides {
             radius: self.radius.unwrap_or(base.radius),
             prompt_gap: self.prompt_gap.unwrap_or(base.prompt_gap),
             block_gap: self.block_gap.unwrap_or(base.block_gap),
+            line_gap: self.line_gap.unwrap_or(base.line_gap),
             output_gap: self.output_gap.unwrap_or(base.output_gap),
         }
     }
@@ -315,7 +326,7 @@ impl StyleOverrides {
     }
 
     /// Las claves y su valor para config.toml (`None` = no escribir y borrar si estaba).
-    pub fn entries(&self) -> [(&'static str, Option<toml_edit::Item>); 10] {
+    pub fn entries(&self) -> [(&'static str, Option<toml_edit::Item>); 11] {
         use toml_edit::value;
         let s = |v: Option<&'static str>| v.map(value);
         [
@@ -328,6 +339,7 @@ impl StyleOverrides {
             ("radius", self.radius.map(|r| value(r as i64))),
             ("prompt_gap", self.prompt_gap.map(|g| value(g as i64))),
             ("block_gap", self.block_gap.map(|g| value(g as i64))),
+            ("line_gap", self.line_gap.map(|g| value(g as i64))),
             ("output_gap", self.output_gap.map(|g| value(g as i64))),
         ]
     }
@@ -340,7 +352,7 @@ mod tests {
     #[test]
     fn valores_desconocidos_no_invalidan_el_archivo() {
         let o: StyleOverrides = toml::from_str(
-            "tabs = \"pill\"\nprompt = \"nada\"\nradius = 99\nbar = \"TALL\"\nprompt_gap = 7.6\nblock_gap = 4\noutput_gap = 40",
+            "tabs = \"pill\"\nprompt = \"nada\"\nradius = 99\nbar = \"TALL\"\nprompt_gap = 7.6\nblock_gap = 4\nline_gap = 2.4\noutput_gap = 40",
         )
         .unwrap();
         assert_eq!(o.tabs, Some(Tabs::Pill));
@@ -349,12 +361,30 @@ mod tests {
         assert_eq!(o.bar, Some(BarSize::Tall));
         assert_eq!(o.prompt_gap, Some(8));
         assert_eq!((o.block_gap, o.output_gap), (Some(4), Some(32)));
+        assert_eq!(o.line_gap, Some(2));
         let s = o.apply(Style::default());
         assert_eq!(s.tabs, Tabs::Pill);
         assert_eq!(s.prompt, Prompt::Border);
         assert_eq!(s.prompt_gap, 8);
         let lejos: StyleOverrides = toml::from_str("prompt_gap = -3").unwrap();
         assert_eq!(lejos.prompt_gap, Some(0));
+    }
+
+    /// El hueco sobre la ruta son los dos lados de la línea entre bloques.
+    #[test]
+    fn la_linea_parte_el_hueco_sobre_la_ruta() {
+        let s = Style {
+            block_gap: 10,
+            line_gap: 4,
+            ..Style::default()
+        };
+        let g = s.gaps(2.0);
+        assert_eq!((g.above, g.line), (28.0, 8.0));
+        let solo_linea = Style {
+            line_gap: 6,
+            ..Style::default()
+        };
+        assert!(solo_linea.gaps(1.0).any());
     }
 
     #[test]

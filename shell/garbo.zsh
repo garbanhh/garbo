@@ -28,9 +28,9 @@ __garbo_prompt() {
     if [[ -n ${GARBO_PROMPT-} ]]; then
         builtin local venv=
         [[ -n ${VIRTUAL_ENV-} ]] && venv="  (${${VIRTUAL_ENV:t}//\%/%%})"
-        PS1=$'%{\e]133;A;garbo\a%}  %~'"$venv"$'\n%{\e]133;B\a%}'
+        PS1=$'%{\e]133;A;garbo;s=zsh\a%}  %~'"$venv"$'\n%{\e]133;B\a%}'
     elif [[ $PS1 != *$'\e]133;A'* ]]; then
-        PS1=$'%{\e]133;A\a%}'"$PS1"$'%{\e]133;B\a%}'
+        PS1=$'%{\e]133;A;s=zsh\a%}'"$PS1"$'%{\e]133;B\a%}'
     fi
     # RPROMPT y RPS1 no siempre se reflejan el uno en el otro: se miran los dos.
     if [[ -n ${RPROMPT-} && $RPROMPT != *$'\e]133;P'* ]]; then
@@ -48,3 +48,11 @@ __garbo_preexec() {
 typeset -ga precmd_functions preexec_functions
 precmd_functions=(__garbo_precmd ${${precmd_functions:#__garbo_precmd}:#__garbo_prompt} __garbo_prompt)
 preexec_functions=(${preexec_functions:#__garbo_preexec} __garbo_preexec)
+
+# ssh y mosh con Garbo también en el servidor (ver ssh.sh, que solo está en este equipo: en el
+# servidor no se prepara otro ssh). No pisa un alias ni una función tuyos.
+typeset -g __garbo_ssh_sh=${${(%):-%x}:A:h}/ssh.sh
+if [[ -r $__garbo_ssh_sh ]]; then
+    (( ${+functions[ssh]} || ${+aliases[ssh]} )) || ssh() { command sh "$__garbo_ssh_sh" ssh "$@"; }
+    (( ${+functions[mosh]} || ${+aliases[mosh]} )) || mosh() { command sh "$__garbo_ssh_sh" mosh "$@"; }
+fi

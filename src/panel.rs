@@ -627,12 +627,23 @@ impl PanelState {
             dimc,
             tw + 2.0,
         );
-        p.ui_text_v(
+        let logo = (m.th * 0.85).round();
+        p.agent_logo(
+            a.agent.logo,
+            a.agent.name,
             tx,
+            top + (m.th - logo) / 2.0,
+            logo,
+            theme.foreground,
+            1.0,
+        );
+        let nx = tx + logo + (7.0 * s).round();
+        p.ui_text_v(
+            nx,
             top,
             a.agent.name,
             theme.foreground,
-            right - tw - 12.0 * s - tx,
+            right - tw - 12.0 * s - nx,
             UiVariant::Title,
         );
 

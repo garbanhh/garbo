@@ -4,9 +4,21 @@
 #   A = empieza el prompt   B = empieza el comando   C = empieza la salida   D;n = terminó (código n)
 # Con GARBO_PROMPT=1 (opción "Prompt de Garbo") el prompt es el de Garbo: una línea con la carpeta,
 # que Garbo dibuja como etiqueta (`A;garbo` lo anuncia), y debajo, desde la primera columna, lo que
-# se escribe.
+# se escribe. La A dice también qué shell es (`s=bash`), para las teclas que Garbo le manda.
+# Por ssh, el servidor recibe este mismo archivo (ver remoto.sh) y lo carga como el shell de inicio
+# de sesión que abriría ssh.
 
-if [[ -f ~/.bashrc ]]; then
+if [[ -n "${__garbo_login:-}" ]]; then
+    builtin unset __garbo_login
+    [[ -f /etc/profile ]] && builtin source /etc/profile
+    for __garbo_rc in ~/.bash_profile ~/.bash_login ~/.profile; do
+        if [[ -f "$__garbo_rc" ]]; then
+            builtin source "$__garbo_rc"
+            break
+        fi
+    done
+    builtin unset __garbo_rc
+elif [[ -f ~/.bashrc ]]; then
     builtin source ~/.bashrc
 fi
 
@@ -29,9 +41,9 @@ if [[ $- == *i* && -z "${__garbo_loaded:-}" ]]; then
     # Último en PROMPT_COMMAND: (re)envuelve PS1 por si otro script lo regenera (starship...).
     __garbo_wrap_ps1() {
         if [[ -n "${GARBO_PROMPT:-}" ]]; then
-            PS1='\[\e]133;A;garbo\a\]  \w${VIRTUAL_ENV:+  (${VIRTUAL_ENV##*/})}\n\[\e]133;B\a\]'
+            PS1='\[\e]133;A;garbo;s=bash\a\]  \w${VIRTUAL_ENV:+  (${VIRTUAL_ENV##*/})}\n\[\e]133;B\a\]'
         elif [[ "$PS1" != *'133;A'* ]]; then
-            PS1='\[\e]133;A\a\]'"$PS1"'\[\e]133;B\a\]'
+            PS1='\[\e]133;A;s=bash\a\]'"$PS1"'\[\e]133;B\a\]'
         fi
     }
 
@@ -43,4 +55,16 @@ if [[ $- == *i* && -z "${__garbo_loaded:-}" ]]; then
 
     # PS0 se imprime justo antes de ejecutar cada comando (bash >= 4.4).
     PS0='\e]133;C\a'"${PS0:-}"
+
+    # ssh y mosh con Garbo también en el servidor (ver ssh.sh, que solo está en este equipo: en el
+    # servidor no se prepara otro ssh). No pisa un alias ni una función tuyos.
+    if [[ -r "${BASH_SOURCE[0]%/*}/ssh.sh" ]]; then
+        __garbo_ssh_sh="${BASH_SOURCE[0]%/*}/ssh.sh"
+        if ! builtin alias ssh &>/dev/null && ! builtin declare -F ssh >/dev/null; then
+            ssh() { command sh "$__garbo_ssh_sh" ssh "$@"; }
+        fi
+        if ! builtin alias mosh &>/dev/null && ! builtin declare -F mosh >/dev/null; then
+            mosh() { command sh "$__garbo_ssh_sh" mosh "$@"; }
+        fi
+    fi
 fi

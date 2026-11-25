@@ -13,6 +13,7 @@
 //! Así la posición de cada bloque viaja con el contenido: sobrevive al scroll, al recorte
 //! del historial y al reflow al redimensionar, sin llevar cuentas de líneas.
 
+use crate::shell::Shell;
 use alacritty_terminal::event::EventListener;
 use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::index::{Column, Line, Point};
@@ -28,8 +29,8 @@ const MAX_BLOCKS: usize = 4096;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mark {
-    /// `true` = prompt de Garbo.
-    PromptStart(bool),
+    /// `true` = prompt de Garbo; y el shell que lo dice (`s=bash`, de la integración de Garbo).
+    PromptStart(bool, Option<Shell>),
     /// Prompt derecho; lo cierra la siguiente `CommandStart`.
     RightPrompt,
     CommandStart,
@@ -165,7 +166,16 @@ impl MarkScanner {
             return;
         };
         let mark = match rest.first() {
-            Some(b'A') => Mark::PromptStart(rest[1..].split(|&b| b == b';').any(|p| p == b"garbo")),
+            Some(b'A') => {
+                let params = || rest[1..].split(|&b| b == b';');
+                let shell = params().find_map(|p| match p.strip_prefix(b"s=")? {
+                    b"bash" => Some(Shell::Bash),
+                    b"zsh" => Some(Shell::Zsh),
+                    b"fish" => Some(Shell::Fish),
+                    _ => None,
+                });
+                Mark::PromptStart(params().any(|p| p == b"garbo"), shell)
+            }
             Some(b'B') => Mark::CommandStart,
             Some(b'P') if rest[1..].split(|&b| b == b';').any(|p| p == b"k=r") => Mark::RightPrompt,
             Some(b'C') => Mark::OutputStart,
@@ -300,6 +310,12 @@ pub struct BlockState {
     right_prompt: bool,
     /// Bloques de muestra (editor de aspecto): sus comandos no van al historial de sugerencias.
     pub no_history: bool,
+    /// Shell del prompt actual, si lo dijo su marca A: puede no ser el de la pestaña (por ssh, el
+    /// del servidor).
+    pub prompt_shell: Option<Shell>,
+    /// Sesión en otro equipo en primer plano (`Session::remote`): lo que se ejecuta allí no va al
+    /// historial de sugerencias de este equipo.
+    pub remote: bool,
 }
 
 impl BlockState {
@@ -350,6 +366,11 @@ impl BlockState {
             .iter()
             .map(|b| (b.styled, b.started.is_some(), b.exit))
             .collect()
+    }
+
+    /// Comando en marcha (entre las marcas C y D), del shell que sea: por ssh, el del servidor.
+    pub fn running_command(&self) -> Option<&str> {
+        self.pending_cmd.as_ref().map(|(c, _)| c.as_str())
     }
 
     /// ¿Usa el bloque el prompt de Garbo?
@@ -419,15 +440,15 @@ impl BlockState {
             uri: LINK_URI.into(),
         };
         match mark {
-            Mark::PromptStart(styled) => {
+            Mark::PromptStart(styled, shell) => {
                 // Vuelve el prompt: el programa que informaba ya no está en marcha.
                 self.program.drop_live();
                 self.right_prompt = false;
                 let here = crate::suggest::cursor_mark(term);
-                let id = match self.repainted(term, here) {
+                let (id, repainted) = match self.repainted(term, here) {
                     Some(info) => {
                         info.styled = styled;
-                        info.id
+                        (info.id, true)
                     }
                     None => {
                         self.next_id += 1;
@@ -442,9 +463,14 @@ impl BlockState {
                         if self.infos.len() > MAX_BLOCKS {
                             self.infos.pop_front();
                         }
-                        id
+                        (id, false)
                     }
                 };
+                // fish 4 pone su A y la integración repite otra en el mismo sitio diciendo el shell:
+                // es el mismo prompt, así que una A sin shell no lo olvida.
+                if shell.is_some() || !repainted {
+                    self.prompt_shell = shell;
+                }
                 self.prompt_at = Some(here);
                 self.current = Some(id);
                 self.input_start = None;
@@ -491,7 +517,7 @@ impl BlockState {
                 term.set_hyperlink(None);
                 self.input_start = None;
                 if let Some((cmd, dir)) = self.pending_cmd.take() {
-                    if !self.no_history {
+                    if !self.no_history && !self.remote {
                         crate::suggest::record(&cmd, code, dir.as_deref());
                     }
                 }
@@ -820,7 +846,7 @@ mod tests {
         assert_eq!(
             marks.iter().map(|m| m.1).collect::<Vec<_>>(),
             [
-                Mark::PromptStart(false),
+                Mark::PromptStart(false, None),
                 Mark::CommandStart,
                 Mark::CommandEnd(Some(0))
             ]
@@ -836,14 +862,22 @@ mod tests {
             b"\x1b]133;A;garbo\x07  ~/x\n\x1b]133;B\x07ls\x1b]133;A\x07$ \x1b]133;D;1\x1b\\",
             &mut out,
         );
+        // El shell que lo dice (por ssh, puede no ser el de la pestaña); uno desconocido, nada.
+        sc.scan(
+            b"\x1b]133;A;garbo;s=zsh\x07\x1b]133;A;s=fish\x07\x1b]133;A;s=nu\x07",
+            &mut out,
+        );
         let marks: Vec<Mark> = out.into_iter().map(|(_, m)| m).collect();
         assert_eq!(
             marks,
             [
-                Mark::PromptStart(true),
+                Mark::PromptStart(true, None),
                 Mark::CommandStart,
-                Mark::PromptStart(false),
-                Mark::CommandEnd(Some(1))
+                Mark::PromptStart(false, None),
+                Mark::CommandEnd(Some(1)),
+                Mark::PromptStart(true, Some(Shell::Zsh)),
+                Mark::PromptStart(false, Some(Shell::Fish)),
+                Mark::PromptStart(false, None),
             ]
         );
     }

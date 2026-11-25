@@ -34,3 +34,11 @@ La versión para Windows lleva dentro de garbo.exe la fuente Adwaita Mono 50.0, 
 Copyright (c) 2015-2025 Renzhi Li (aka. Belleve Invis), Copyright (c) 2025 Jamie Gravendeel y
 Copyright (c) 2025 Florian Müllner, distribuida bajo la SIL Open Font License 1.1 (texto
 completo en OFL-AdwaitaMono.txt).
+
+src/logos.rs incluye los trazados de los logos de los agentes de código de LobeHub Icons
+(https://github.com/lobehub/lobe-icons, paquete npm @lobehub/icons-static-svg 1.106.0),
+Copyright (c) 2023 LobeHub, distribuidos bajo la licencia MIT (el mismo aviso de permiso que
+el de Windows Terminal, arriba). El de Codex se rellena con el degradado de su versión a color.
+El de Gemini CLI no viene de ahí: es su pixel art, redibujado celda a celda. Los logos son marcas
+de sus respectivos dueños: Garbo los muestra solo para indicar qué agente se está ejecutando y no
+está afiliado a ninguno de ellos.

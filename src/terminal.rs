@@ -210,6 +210,12 @@ impl Tab {
         } else {
             env.remove("GARBO_PROMPT");
         }
+        // `ssh` y `mosh` con Garbo también en el servidor (ver shell/ssh.sh). De momento, Linux.
+        if cfg!(target_os = "linux") && cfg.terminal.ssh_integration {
+            env.insert("GARBO_SSH".into(), "1".into());
+        } else {
+            env.remove("GARBO_SSH");
+        }
         // Con las sugerencias de Garbo, la integración de fish apaga las suyas: se pisarían.
         if cfg.terminal.autosuggest {
             env.insert("GARBO_AUTOSUGGEST".into(), "1".into());
@@ -323,18 +329,30 @@ impl Tab {
                 .contains(alacritty_terminal::term::TermMode::ALT_SCREEN)
     }
 
-    /// A quién van los atajos de edición (ver `edit.rs`): el prompt, un agente o lo de siempre.
+    /// A quién van los atajos de edición (ver `edit.rs`): el prompt, un agente, una sesión en
+    /// otro equipo o lo de siempre.
     pub fn edit_context(&self) -> crate::edit::Context {
+        use crate::edit::Context;
         if self.at_prompt() {
-            return crate::edit::Context::Prompt(self.shell);
+            // El shell que dijo su prompt: por ssh, el del servidor.
+            let shell = self.blocks.lock().unwrap().prompt_shell;
+            return Context::Prompt(shell.unwrap_or(self.shell));
         }
-        match self
-            .probe
-            .foreground()
-            .and_then(crate::sessions::identify_agent)
-        {
-            Some(a) => crate::edit::Context::Agent(a.name),
-            None => crate::edit::Context::Other,
+        let Some(pid) = self.probe.foreground() else {
+            return Context::Other;
+        };
+        match crate::sessions::identify_agent(pid) {
+            Some(a) => Context::Agent(a.name),
+            None if crate::sessions::is_remote_session(pid) => {
+                // El agente del servidor, si se sabe cuál (ver `Session::refresh`).
+                match self.session.agent.filter(|_| {
+                    self.session.remote && self.session.status != crate::sessions::Status::Exited
+                }) {
+                    Some(a) => Context::Agent(a.name),
+                    None => Context::Remote,
+                }
+            }
+            None => Context::Other,
         }
     }
 
@@ -358,6 +376,10 @@ impl Tab {
 
     /// Candidatos del menú de completado para lo escrito en el prompt (y lo escrito).
     pub fn completions(&self) -> Option<(String, crate::complete::Completions)> {
+        // Por ssh, las carpetas y órdenes de este equipo no son las del servidor.
+        if self.session.remote {
+            return None;
+        }
         let input = self.prompt_input()?;
         let cwd = self.cwd();
         let comp = crate::complete::complete(&input, cwd.as_deref())?;
@@ -376,10 +398,24 @@ impl Tab {
 
     /// Actualiza sesión (agente y estado) y directorio. Devuelve `true` si cambió algo visible.
     pub fn refresh_session(&mut self, viewing: bool, now: std::time::Instant) -> bool {
-        let report = self.blocks.lock().unwrap().program.summary();
-        let mut changed =
-            self.session
-                .refresh(Some(&self.probe), self.last_output, viewing, now, report);
+        let (report, running) = {
+            let bs = self.blocks.lock().unwrap();
+            (
+                bs.program.summary(),
+                bs.running_command().map(str::to_owned),
+            )
+        };
+        let mut changed = self.session.refresh(
+            Some(&self.probe),
+            self.last_output,
+            viewing,
+            now,
+            report,
+            running.as_deref(),
+        );
+        if changed {
+            self.blocks.lock().unwrap().remote = self.session.remote;
+        }
         // Lo que se le pidió al agente, para el nombre de la pestaña.
         let asked = self
             .session

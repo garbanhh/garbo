@@ -182,9 +182,13 @@ impl PaneGeo {
         ch: f32,
         gaps: crate::style::Gaps,
     ) -> Rows {
-        let pad = self.y - self.rect[1];
         let lines = self.ws.num_lines as usize;
-        Rows::layout(term, bs, lines, ch, gaps, self.rect[3] - 2.0 * pad)
+        Rows::layout(term, bs, lines, ch, gaps, self.room())
+    }
+
+    /// Alto en el que se ven las filas: el del panel sin sus márgenes.
+    pub fn room(&self) -> f32 {
+        self.rect[3] - 2.0 * (self.y - self.rect[1])
     }
 }
 
@@ -293,6 +297,10 @@ impl App {
             .unwrap_or(1);
         for _ in 1..extra_tabs.min(12) {
             self.new_tab();
+        }
+        // Igual con el panel de agentes.
+        if std::env::var_os("GARBO_OPEN_AGENTS").is_some() {
+            self.toggle_panel(true);
         }
         crate::update::ENABLED.store(self.cfg.check_updates, std::sync::atomic::Ordering::Relaxed);
         if self.cfg.check_updates {
@@ -1416,7 +1424,13 @@ impl App {
             .map(|g| g.layout.leaves())
             .unwrap_or_default();
         for tab in st.tabs.iter().filter(|t| visible.contains(&t.id)) {
-            let prompt = tab.blocks.lock().unwrap().idle_current();
+            // Por ssh, el repositorio de la carpeta de este equipo no es el del servidor.
+            let prompt = tab
+                .blocks
+                .lock()
+                .unwrap()
+                .idle_current()
+                .filter(|_| !tab.session.remote);
             st.git.track(tab.id, prompt, || tab.cwd());
         }
         if st.git.tracked() > st.tabs.len() {
@@ -1427,8 +1441,8 @@ impl App {
             return;
         }
         let root = match st.tabs.get(st.active) {
-            Some(tab) => st.git.root_of(tab.id, || tab.cwd()),
-            None => None,
+            Some(tab) if !tab.session.remote => st.git.root_of(tab.id, || tab.cwd()),
+            _ => None,
         };
         if root != st.changes.root {
             st.changes.set_root(root.clone());
@@ -1919,6 +1933,7 @@ impl App {
                     focused: st.focused,
                     cursor_on: st.cursor_on || !st.focused,
                     rows,
+                    room: f32::INFINITY,
                 };
                 let (term, bs) = (&sample.term, &sample.blocks);
                 view::draw_prompts(
@@ -1957,12 +1972,14 @@ impl App {
                         && st.settings.is_none(),
                     cursor_on: st.cursor_on || !st.focused,
                     rows: pane.rows(&term, &bs, m.height, gaps),
+                    room: pane.room(),
                 };
                 // Rama de git para la etiqueta del prompt de Garbo (solo mientras se escribe) y, a
                 // su lado, cuántos cambios hay sin confirmar.
+                // Por ssh, la carpeta de este equipo no es la del servidor: sin rama.
                 let branch = bs
                     .idle_current()
-                    .filter(|id| bs.styled(*id))
+                    .filter(|id| bs.styled(*id) && !tab.session.remote)
                     .and_then(|_| bs.shell_cwd())
                     .and_then(|d| crate::complete::git_branch(&d));
                 let summary = branch.as_ref().and_then(|_| st.git.summary_for(tab.id));
@@ -1995,7 +2012,12 @@ impl App {
                 }
                 let start = bs.input_start;
                 // Menú de completado: se refina con lo que se escribe y se cierra si deja de aplicar.
-                if is_focus && (st.menu.is_some() || st.menu_auto.is_some()) {
+                // Por ssh no hay menú (listaría lo de este equipo, ver `Tab::completions`).
+                if tab.session.remote && st.menu.as_ref().is_some_and(|m| m.tab == tab.id) {
+                    st.menu = None;
+                }
+                if is_focus && !tab.session.remote && (st.menu.is_some() || st.menu_auto.is_some())
+                {
                     let input = crate::terminal::input_for(&term, start);
                     let cwd = input.as_ref().and_then(|_| bs.shell_cwd());
                     if let Some(menu) = st.menu.as_mut() {
@@ -2025,7 +2047,9 @@ impl App {
                     }
                 }
                 // Sugerencia en gris tras el cursor (no con el menú abierto).
-                if cfg.terminal.autosuggest && v.focused && st.menu.is_none() {
+                // Ni sugerencia: saldría del historial y las carpetas de este equipo.
+                if cfg.terminal.autosuggest && v.focused && st.menu.is_none() && !tab.session.remote
+                {
                     let cwd = start.and_then(|_| bs.shell_cwd());
                     if let Some(rest) =
                         crate::terminal::suggestion_for(&term, start, cwd.as_deref())
