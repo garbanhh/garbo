@@ -45,7 +45,7 @@
   Aider y otros, con su logo y un árbol de subagentes para las sesiones compatibles. Cuando un agente
   termina y no estás viendo su sesión, aparece un aviso del escritorio que permite volver a su
   pestaña. Las capturas de pantalla se pegan como imagen.
-- **También por SSH** (Linux). Al conectar con `ssh` o `mosh`, el shell del servidor se abre con
+- **También por SSH.** Al conectar con `ssh` (y `mosh` en Linux), el shell del servidor se abre con
   los bloques, el prompt de Garbo y la edición de la línea, y el agente que se lance allí se
   reconoce como en local. No se instala nada en el servidor.
 - **Cambios de git al estilo Warp.** Junto a la rama del prompt se ve cuántos archivos
@@ -270,14 +270,15 @@ Cada bloque queda anclado al propio texto de la rejilla, así que
 conserva su sitio al desplazarse, al recortarse el historial y al redimensionar. Se desactiva con
 `shell_integration = false`, o solo su aspecto con `blocks = false`.
 
-**Por SSH** (Linux). La integración define `ssh` y `mosh` como funciones que, en una sesión
-interactiva, envían [`shell/remoto.sh`](shell/remoto.sh) con la propia conexión: el servidor abre
+**Por SSH.** La integración define `ssh` y `mosh` como funciones (en PowerShell, solo `ssh`) que,
+en una sesión interactiva, envían [`shell/remoto.sh`](shell/remoto.sh) con la propia conexión: el servidor abre
 tu shell de inicio de sesión (bash, zsh o fish) con la integración, y ese shell borra los archivos
 temporales al cargarlos. Así funcionan allí los bloques, el prompt de Garbo, la edición de la línea
 y el reconocimiento del agente que se lance. Lo que depende de este equipo (menú de completado,
 sugerencias, rama de git y rutas con `Ctrl+clic`) se desactiva en esas sesiones. No se aplica con
-`command ssh`, con una orden para el servidor (`ssh servidor tmux`), con `RemoteCommand` en
-`~/.ssh/config` ni dentro de tmux. Se desactiva en *Ajustes → Bloques → Garbo en sesiones ssh*
+`command ssh` (en PowerShell, `ssh.exe`), con una orden para el servidor (`ssh servidor tmux`),
+con `RemoteCommand` en `~/.ssh/config` ni dentro de tmux. En Windows funciona desde PowerShell con
+el `ssh.exe` de OpenSSH que trae el sistema; el servidor necesita bash, zsh o fish. Se desactiva en *Ajustes → Bloques → Garbo en sesiones ssh*
 (`ssh_integration = false`).
 
 ### Agentes de código
@@ -387,15 +388,14 @@ que el propio agente guarda (Claude Code y, en Linux, Codex): las respuestas com
 
 ### Aspecto
 
-**Interfaz.** En Linux, Garbo usa de serie la interfaz *Flotante*: el terminal, los paneles
+**Interfaz.** Garbo usa de serie la interfaz *Flotante*: el terminal, los paneles
 (agentes, puertos, cambios de git, editor de aspecto) y las estadísticas son tarjetas con margen y
 esquinas redondeadas sobre el fondo de la ventana; los iconos de la barra van juntos en una
 cápsula; la paleta y los ajustes son hojas sobre el fondo oscurecido; y el texto de la interfaz usa
-la letra del sistema (Adwaita Sans en GNOME). Con los temas que no traen forma propia, las
-pestañas son píldoras y cada bloque de comandos una tarjeta con la carpeta en una etiqueta y el
-resultado en una píldora (*Etiquetas*). La de siempre sigue disponible como *Clásica*, en
-*Ajustes → Tema → Interfaz* o en el editor de aspecto (sección *Ventana*). En Windows, de
-momento, solo la Clásica.
+la letra del sistema (Adwaita Sans en GNOME, Segoe UI en Windows). Con los temas que no traen
+forma propia, las pestañas son píldoras y cada bloque de comandos una tarjeta con la carpeta en una
+etiqueta y el resultado en una píldora (*Etiquetas*). La de siempre sigue disponible como
+*Clásica*, en *Ajustes → Tema → Interfaz* o en el editor de aspecto (sección *Ventana*).
 
 *Ajustes → Tema → Aspecto*, o "Editar el aspecto" en la paleta de comandos, abre un panel a la
 derecha con la terminal en vivo al lado. El panel tiene cuatro secciones:
@@ -541,7 +541,7 @@ src/
   terminal.rs     pestaña: PTY, estado del terminal (alacritty_terminal) y bloques
   pty_loop.rs     E/S del PTY y detección de marcas OSC 133
   blocks.rs       bloques de comandos: marcas, anclas, rangos y copia
-  shell.rs        bash, zsh y fish: detección y carga de la integración (también por SSH)
+  shell.rs        bash, zsh, fish y PowerShell: detección y carga de la integración (también por SSH)
   logos.rs        logos de los agentes y su rasterizado
   renderer.rs     renderizador wgpu
   shader.wgsl     primitivas: rectángulos redondeados, glifos, emoji, arcos, segmentos, degradados

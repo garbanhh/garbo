@@ -5,6 +5,10 @@
 # fish. Ese shell borra la carpeta al cargarla: no queda nada instalado. Con otro shell, o si algo
 # falla, tu shell de siempre. Garbo pone aquí los scripts al arrancar (ver `shell::remote_boot`).
 
+# Desde PowerShell (garbo.ps1) llega con IFS vacío y sin comodines (`set -f`), para leerlo sin
+# comillas dobles: todo como siempre.
+unset IFS
+set +f
 s=${SHELL:-/bin/sh}
 t=$(umask 077 && mktemp -d "${TMPDIR:-/tmp}/garbo-ssh.XXXXXX" 2>/dev/null) || exec "$s" -l
 GARBO_REMOTE_TMP=$t

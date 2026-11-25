@@ -51,9 +51,12 @@ impl Shell {
     /// Argumentos y entorno para cargar la integración. `zdotdir`: el ZDOTDIR que tendría zsh sin
     /// Garbo (de la configuración o del entorno), que la integración le devuelve al arrancar.
     pub fn injection(self, zdotdir: Option<&str>) -> Option<Injection> {
-        // Junto a la integración, lo que lleva Garbo al servidor por ssh (Linux, de momento).
-        if cfg!(target_os = "linux") && matches!(self, Shell::Bash | Shell::Zsh | Shell::Fish) {
+        // Junto a la integración, lo que lleva Garbo al servidor por ssh: el arranque y, para bash,
+        // zsh y fish, `ssh.sh` (PowerShell lo hace en garbo.ps1).
+        if matches!(self, Shell::Bash | Shell::Zsh | Shell::Fish) {
             write_script("ssh.sh", include_str!("../shell/ssh.sh"));
+        }
+        if self != Shell::Other {
             write_script("remoto.b64", &remote_boot_b64());
         }
         match self {
@@ -90,10 +93,13 @@ impl Shell {
                 let script = write_script("garbo.ps1", include_str!("../shell/garbo.ps1"))?;
                 // Como bloque de código y no con `. archivo.ps1`: la directiva de ejecución de serie
                 // de Windows PowerShell (`Restricted`) no deja cargar archivos de script, y así no
-                // hace falta cambiarla (ni se cambia para los del usuario).
+                // hace falta cambiarla (ni se cambia para los del usuario). Así el script no sabe
+                // dónde está: `$__GarboDir` le dice dónde está `remoto.b64` (ssh).
+                let quote = |p: &Path| path_str(p).replace('\'', "''");
                 let load = format!(
-                    ". ([scriptblock]::Create([IO.File]::ReadAllText('{}')))",
-                    path_str(&script).replace('\'', "''")
+                    "$global:__GarboDir = '{}'; . ([scriptblock]::Create([IO.File]::ReadAllText('{}')))",
+                    quote(script.parent()?),
+                    quote(&script)
                 );
                 Some(Injection {
                     args: vec!["-NoLogo".into(), "-NoExit".into(), "-Command".into(), load],
@@ -912,6 +918,323 @@ while True:
         prueba_powershell("powershell.exe", false);
         prueba_powershell("powershell.exe", true);
         prueba_powershell("pwsh.exe", false);
+    }
+
+    /// `ssh` en PowerShell decide como `ssh.sh` si es una sesión interactiva (con Garbo en el
+    /// servidor) o va tal cual.
+    #[cfg(windows)]
+    #[test]
+    fn ssh_de_powershell_decide_como_ssh_sh() {
+        let Some(ps) = crate::platform::find_program("powershell.exe") else {
+            return;
+        };
+        let inj = Shell::PowerShell.injection(None).unwrap();
+        let cases: &[(&[&str], bool)] = &[
+            (&["servidor"], true),
+            (&["usuario@servidor"], true),
+            (&["-p", "22", "usuario@servidor"], true),
+            (&["-p22", "servidor"], true),
+            (&["servidor", "-p", "22"], true),
+            (&["-t", "servidor"], true),
+            (&["-tt", "servidor"], true),
+            (&["-A", "-i", "clave", "servidor"], true),
+            (&["-oUser=ana", "servidor"], true),
+            (&["-o", "User=ana", "servidor"], true),
+            (&["-L", "8080:localhost:80", "servidor"], true),
+            (&["-4Cv", "servidor"], true),
+            (&["--", "servidor"], true),
+            (&["servidor", "ls"], false),
+            (&["servidor", "ls", "-la"], false),
+            (&["-N", "servidor"], false),
+            (&["-f", "servidor"], false),
+            (&["-T", "servidor"], false),
+            (&["-nT", "servidor"], false),
+            (&["-W", "equipo:22", "servidor"], false),
+            (&["-G", "servidor"], false),
+            (&["-V"], false),
+            (&["-s", "servidor", "sftp"], false),
+            (&["-O", "check", "servidor"], false),
+            (&["-o", "RemoteCommand=tmux", "servidor"], false),
+            (&["-oRequestTTY=no", "servidor"], false),
+            (&["-o", "sessiontype=none", "servidor"], false),
+            (&[], false),
+            (&["-p"], false),
+            (&["-Z", "servidor"], false),
+        ];
+        let lit = |s: &str| format!("'{}'", s.replace('\'', "''"));
+        let list = cases
+            .iter()
+            .map(|(a, _)| {
+                let items: Vec<String> = a.iter().map(|s| lit(s)).collect();
+                format!("@({})", items.join(","))
+            })
+            .collect::<Vec<_>>()
+            .join(",");
+        // La integración tal cual la carga Garbo (con su `$__GarboDir`), y una línea por caso.
+        let script = format!(
+            "{}; foreach ($c in @({list})) {{ [string](__GarboSshInteractive $c) }}",
+            inj.args.last().unwrap()
+        );
+        let out = crate::platform::command(ps)
+            .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+            .env("GARBO_SSH", "1")
+            .output()
+            .unwrap();
+        let got: Vec<String> = String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .filter(|l| !l.trim().is_empty() && !l.contains("133;"))
+            .map(|l| l.trim().to_string())
+            .collect();
+        assert_eq!(
+            got.len(),
+            cases.len(),
+            "{got:?}\n{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        for ((args, want), got) in cases.iter().zip(&got) {
+            let want = if *want { "True" } else { "False" };
+            assert_eq!(got, want, "ssh {}", args.join(" "));
+        }
+    }
+
+    /// ssh desde PowerShell de punta a punta sin servidor: la función `ssh` de garbo.ps1 con un
+    /// `ssh.exe` falso que, como sshd, ejecuta la orden con un shell POSIX (el bash de Git para
+    /// Windows). Comprueba lo que recibe `ssh.exe` (sin comillas dobles ni barras, que Windows
+    /// PowerShell no pasa bien; con la salida en la consola) y que el shell "del servidor" arranca
+    /// con la integración: prompt de Garbo de bash, sus archivos de inicio de sesión, la carpeta
+    /// temporal borrada, la pestaña como remota y un agente lanzado allí reconocido.
+    #[cfg(windows)]
+    fn prueba_ssh_powershell(program: &str) {
+        use crate::blocks::BlockState;
+        use alacritty_terminal::event::WindowSize;
+        use alacritty_terminal::event_loop::Msg;
+        use alacritty_terminal::sync::FairMutex;
+        use alacritty_terminal::term::{test::TermSize, Term};
+        use alacritty_terminal::tty;
+        use std::sync::{Arc, Mutex};
+        use std::time::{Duration, Instant};
+
+        let Some(exe) = crate::platform::find_program(program) else {
+            eprintln!("{program} no está instalado: se omite");
+            return;
+        };
+        let bash = crate::platform::find_program("git")
+            .and_then(|git| Some(git.parent()?.parent()?.join("bin").join("bash.exe")))
+            .filter(|b| b.is_file())
+            .or_else(|| {
+                let pf = std::env::var_os("ProgramFiles")?;
+                Some(PathBuf::from(pf).join(r"Git\bin\bash.exe")).filter(|b| b.is_file())
+            });
+        let (Some(bash), Some(rustc)) = (bash, crate::platform::find_program("rustc")) else {
+            eprintln!("sin el bash de Git o sin rustc: se omite");
+            return;
+        };
+        let dir = std::env::temp_dir().join(format!(
+            "garbo-prueba-ssh-ps-{}-{}",
+            crate::platform::base_name(program),
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        let (home, bin, tmp) = (dir.join("home"), dir.join("bin"), dir.join("tmp"));
+        for d in [&home, &bin, &tmp] {
+            std::fs::create_dir_all(d).unwrap();
+        }
+        // El `ssh.exe` falso: anota lo que recibe y si su salida es la consola; con -G contesta
+        // como el de verdad; si no, ejecuta la última palabra con bash, como sshd con `$SHELL -c`.
+        let src = dir.join("ssh.rs");
+        std::fs::write(
+            &src,
+            r#"
+#[link(name = "kernel32")]
+extern "system" {
+    fn GetStdHandle(n: u32) -> *mut u8;
+    fn GetConsoleMode(h: *mut u8, m: *mut u32) -> i32;
+}
+fn main() {
+    use std::io::Write;
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let mut mode = 0;
+    let console = unsafe { GetConsoleMode(GetStdHandle(-11i32 as u32), &mut mode) } != 0;
+    let mut log = std::fs::OpenOptions::new().create(true).append(true)
+        .open(std::env::var("GARBO_SSH_FALSO_LOG").unwrap()).unwrap();
+    writeln!(log, "{}\x1f{}", console, args.join("\x1f")).unwrap();
+    if args.iter().any(|a| a == "-G") {
+        println!("hostname servidor");
+        return;
+    }
+    // En un archivo: el bash de Git (Cygwin) volvería a partir las comillas simples de su línea
+    // de órdenes, cosa que sshd no hace.
+    let order = std::env::var("GARBO_SSH_FALSO_LOG").unwrap() + ".sh";
+    std::fs::write(&order, args.last().unwrap()).unwrap();
+    let st = std::process::Command::new(std::env::var("GARBO_SSH_FALSO_BASH").unwrap())
+        .arg(&order).status().unwrap();
+    std::process::exit(st.code().unwrap_or(1));
+}
+"#,
+        )
+        .unwrap();
+        let built = crate::platform::command(&rustc)
+            .arg(&src)
+            .arg("-o")
+            .arg(bin.join("ssh.exe"))
+            .output()
+            .unwrap();
+        assert!(
+            built.status.success(),
+            "{}",
+            String::from_utf8_lossy(&built.stderr)
+        );
+        // "Servidor": sus archivos de inicio de sesión y un agente.
+        std::fs::write(home.join(".bash_profile"), "export DE_INICIO=si\n").unwrap();
+        std::fs::write(
+            bin.join("claude"),
+            "#!/bin/sh\necho 'agente de prueba'\nsleep 30\n",
+        )
+        .unwrap();
+        let log = dir.join("ssh.log");
+
+        let mut inj = Shell::PowerShell.injection(None).unwrap();
+        inj.args.insert(0, "-NoProfile".into());
+        let path = std::env::var_os("PATH").unwrap();
+        let mut paths = vec![bin.clone()];
+        paths.extend(std::env::split_paths(&path));
+        let env = [
+            ("PATH", std::env::join_paths(paths).unwrap()),
+            ("HOME", home.clone().into_os_string()),
+            ("TMPDIR", tmp.clone().into_os_string()),
+            ("SHELL", "/usr/bin/bash".into()),
+            ("TERM", "xterm-256color".into()),
+            ("GARBO_SSH", "1".into()),
+            ("GARBO_PROMPT", "1".into()),
+            ("GARBO_SSH_FALSO_LOG", log.clone().into_os_string()),
+            ("GARBO_SSH_FALSO_BASH", bash.clone().into_os_string()),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v.to_string_lossy().into_owned()))
+        .collect();
+        let responder = Responder(Default::default());
+        let term = Arc::new(FairMutex::new(Term::new(
+            Default::default(),
+            &TermSize::new(100, 30),
+            responder.clone(),
+        )));
+        let ws = WindowSize {
+            num_lines: 30,
+            num_cols: 100,
+            cell_width: 10,
+            cell_height: 20,
+        };
+        let opts = tty::Options {
+            shell: Some(tty::Shell::new(path_str(&exe), inj.args)),
+            working_directory: Some(home.clone()),
+            drain_on_exit: false,
+            env,
+            escape_args: true,
+        };
+        let pty = tty::new(&opts, ws, 0).unwrap();
+        let probe = crate::platform::Probe::new(&pty);
+        let blocks = Arc::new(Mutex::new(BlockState::new(crate::platform::child_pid(
+            &pty,
+        ))));
+        let lp =
+            crate::pty_loop::PtyLoop::new(term.clone(), responder.clone(), pty, blocks.clone())
+                .unwrap();
+        let tx = lp.sender();
+        *responder.0.lock().unwrap() = Some(tx.clone());
+        lp.spawn();
+
+        let screen = || {
+            let t = term.lock();
+            (0..30)
+                .map(|l| {
+                    let row = &t.grid()[alacritty_terminal::index::Line(l)];
+                    row[..].iter().map(|c| c.c).collect::<String>()
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        let wait = |what: &str, ok: &dyn Fn() -> bool| {
+            let end = Instant::now() + Duration::from_secs(30);
+            while !ok() {
+                if Instant::now() > end {
+                    panic!(
+                        "ssh desde {program}: no llegó «{what}». Bloques: {:?}\n{}\nssh.exe: {:?}",
+                        blocks.lock().unwrap().summary(),
+                        screen(),
+                        std::fs::read_to_string(&log).unwrap_or_default()
+                    );
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+        };
+        let send = |s: &str| tx.send(Msg::Input(s.as_bytes().to_vec().into()));
+
+        wait("el prompt de PowerShell", &|| {
+            blocks.lock().unwrap().input_start.is_some()
+        });
+        send("ssh -p 22 usuario@servidor\r");
+        // El prompt del servidor, con la integración: el de Garbo, y diciendo qué shell es.
+        wait("el prompt de Garbo del servidor", &|| {
+            let bs = blocks.lock().unwrap();
+            bs.input_start.is_some() && bs.prompt_shell == Some(Shell::Bash)
+        });
+        // Lo que recibió `ssh.exe`: primero `-G`; después, la conexión con la orden de arranque.
+        let calls: Vec<Vec<String>> = std::fs::read_to_string(&log)
+            .unwrap()
+            .lines()
+            .map(|l| l.split('\x1f').map(str::to_owned).collect())
+            .collect();
+        assert_eq!(calls.len(), 2, "{calls:?}");
+        assert_eq!(calls[0][1..], ["-G", "-p", "22", "usuario@servidor"]);
+        let connect = &calls[1];
+        assert_eq!(connect[0], "true", "la salida de ssh.exe no era la consola");
+        assert_eq!(connect[1..5], ["-t", "-p", "22", "usuario@servidor"]);
+        assert_eq!(connect.len(), 6, "{connect:?}");
+        let order = &connect[5];
+        assert!(
+            order.starts_with("exec env GARBO_PROMPT=1 sh -c '"),
+            "{order}"
+        );
+        assert!(!order.contains(['"', '\\']), "{order}");
+        // Lo que se ve: una sesión remota (el `ssh` en primer plano) y su nombre, el de la orden.
+        let fg = probe.foreground().unwrap();
+        assert!(crate::sessions::is_remote_session(fg));
+        assert_eq!(
+            crate::sessions::command_label(fg).as_deref(),
+            Some("ssh -p 22 usuario@servidor")
+        );
+        // Sus archivos de inicio de sesión, y nada en la carpeta temporal.
+        send("echo inicio=$DE_INICIO\r");
+        wait("los archivos de inicio de sesión", &|| {
+            screen().contains("inicio=si")
+        });
+        assert_eq!(
+            std::fs::read_dir(&tmp).unwrap().count(),
+            0,
+            "carpeta temporal"
+        );
+        // Un agente lanzado en el servidor: se sabe cuál es por lo que se escribió.
+        send("claude\r");
+        wait("el agente", &|| screen().contains("agente de prueba"));
+        let running = blocks.lock().unwrap().running_command().map(str::to_owned);
+        assert_eq!(running.as_deref(), Some("claude"));
+        let mut session = crate::sessions::Session::default();
+        let now = Instant::now();
+        session.refresh(Some(&probe), now, true, now, None, running.as_deref());
+        assert!(session.remote);
+        assert_eq!(session.agent.map(|a| a.name), Some("Claude Code"));
+
+        // Al cerrar la ConPTY se cierra todo lo que corre en ella (también el "servidor").
+        tx.send(Msg::Shutdown);
+        std::thread::sleep(Duration::from_millis(500));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn ssh_desde_powershell() {
+        prueba_ssh_powershell("powershell.exe");
+        prueba_ssh_powershell("pwsh.exe");
     }
 
     #[test]

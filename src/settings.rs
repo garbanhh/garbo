@@ -604,12 +604,10 @@ impl Settings {
             Field::RenameTab => Change::None,
             Field::Appearance if dir == 0 => Change::OpenLook,
             Field::Appearance => Change::None,
-            // En Windows, de momento, siempre la Clásica.
-            Field::Interface if cfg!(windows) => Change::None,
             Field::Interface => {
                 use crate::style::Interface;
                 let v = cycle_opt(Interface::ALL, cfg.interface(), d);
-                cfg.style.interface = (v != Interface::default_here()).then_some(v);
+                cfg.style.interface = (v != Interface::DEFAULT).then_some(v);
                 Change::Style
             }
             Field::NotifyAgents => {
@@ -1681,10 +1679,6 @@ mod tests {
         // La primera opción de Tema.
         assert_eq!(set.field(set.selected), Field::Interface);
         let ch = set.adjust(idx(Field::Interface), 1, &mut cfg);
-        if cfg!(windows) {
-            assert_eq!(ch, Change::None);
-            return;
-        }
         assert_eq!(ch, Change::Style);
         assert_eq!(cfg.interface(), Interface::Classic);
         assert_eq!(cfg.style.interface, Some(Interface::Classic));

@@ -645,28 +645,30 @@ impl Config {
 
     /// Letra de la interfaz (familia y alternativas) si es proporcional; `None` = la del terminal.
     /// `[font] ui_family` manda; si está vacía, la interfaz Flotante usa la proporcional del
-    /// sistema (Adwaita Sans, la de GNOME, derivada de Inter) y la Clásica, la del terminal.
+    /// sistema y la Clásica, la del terminal. La del sistema: Adwaita Sans (la de GNOME, derivada
+    /// de Inter) en Linux y Segoe UI en Windows (la de Segoe UI Variable es una sola fuente
+    /// variable, que se dibujaría siempre con su grosor de serie).
     pub fn ui_font(&self) -> Option<(String, Vec<String>)> {
         let f = &self.font;
         if !f.ui_family.trim().is_empty() {
             return Some((f.ui_family.clone(), f.ui_fallback()));
         }
-        (self.interface() == Interface::Floating)
-            .then(|| ("Adwaita Sans".to_string(), f.ui_fallback()))
+        let system = if cfg!(windows) {
+            "Segoe UI"
+        } else {
+            "Adwaita Sans"
+        };
+        (self.interface() == Interface::Floating).then(|| (system.to_string(), f.ui_fallback()))
     }
 
-    /// Interfaz de la ventana: la elegida en `[style]` o la de este sistema. En Windows, de
-    /// momento, siempre la Clásica.
+    /// Interfaz de la ventana: la elegida en `[style]` o la de serie (Flotante).
     pub fn interface(&self) -> Interface {
-        if cfg!(windows) {
-            return Interface::Classic;
-        }
-        self.style.interface.unwrap_or_else(Interface::default_here)
+        self.style.interface.unwrap_or(Interface::DEFAULT)
     }
 
     /// La forma de la que parte `[style]`: la del tema o, con la interfaz Flotante y un tema sin
-    /// forma propia, la de Flotante. Su interfaz es la de este sistema, así lo que se guarde en
-    /// `[style]` es solo lo que el usuario cambió.
+    /// forma propia, la de Flotante. Su interfaz es la de serie, así lo que se guarde en `[style]`
+    /// es solo lo que el usuario cambió.
     pub fn base_style(&self) -> Style {
         let theme = Theme::builtin(&self.theme)
             .map(|t| t.style)
@@ -677,7 +679,7 @@ impl Config {
             theme
         };
         Style {
-            interface: Interface::default_here(),
+            interface: Interface::DEFAULT,
             ..base
         }
     }
@@ -826,35 +828,27 @@ mod tests {
         use crate::style::{Buttons, Interface};
         let cfg = Config::default();
         let s = cfg.theme().style;
+        // Los temas de siempre estrenan la forma de Flotante, en Linux y en Windows, con los
+        // botones de ventana del sistema.
+        assert_eq!(s.interface, Interface::Floating);
+        let system = Style::default().buttons;
+        assert_eq!((s.tabs, s.buttons, s.radius), (Tabs::Pill, system, 10));
         if cfg!(windows) {
-            // En Windows, siempre la Clásica, diga lo que diga el archivo.
-            assert_eq!(s.interface, Interface::Classic);
-            let f = Config {
-                style: toml::from_str("interface = \"floating\"").unwrap(),
-                ..Config::default()
-            };
-            assert_eq!(f.theme().style.interface, Interface::Classic);
-        } else {
-            // Los temas de siempre estrenan la forma de Flotante.
-            assert_eq!(s.interface, Interface::Floating);
-            assert_eq!(
-                (s.tabs, s.buttons, s.radius),
-                (Tabs::Pill, Buttons::Round, 10)
-            );
-            // Un tema con forma propia la conserva.
-            let bosque = Config {
-                theme: "bosque".into(),
-                ..Config::default()
-            };
-            let b = bosque.theme().style;
-            assert_eq!((b.tabs, b.interface), (Tabs::Folder, Interface::Floating));
-            // Lo que el usuario fija en [style] manda.
-            let mio = Config {
-                style: toml::from_str("tabs = \"underline\"").unwrap(),
-                ..Config::default()
-            };
-            assert_eq!(mio.theme().style.tabs, Tabs::Underline);
+            assert_eq!(system, Buttons::Flat);
         }
+        // Un tema con forma propia la conserva.
+        let bosque = Config {
+            theme: "bosque".into(),
+            ..Config::default()
+        };
+        let b = bosque.theme().style;
+        assert_eq!((b.tabs, b.interface), (Tabs::Folder, Interface::Floating));
+        // Lo que el usuario fija en [style] manda.
+        let mio = Config {
+            style: toml::from_str("tabs = \"underline\"").unwrap(),
+            ..Config::default()
+        };
+        assert_eq!(mio.theme().style.tabs, Tabs::Underline);
         // Clásica: la forma de siempre, tal cual.
         let clasica = Config {
             style: toml::from_str("interface = \"classic\"").unwrap(),
@@ -866,9 +860,11 @@ mod tests {
     #[test]
     fn letra_de_la_interfaz() {
         let mut cfg = Config::default();
-        if !cfg!(windows) {
-            // Flotante: la proporcional del sistema (la de GNOME primero).
-            let (family, fallback) = cfg.ui_font().unwrap();
+        // Flotante: la proporcional del sistema (en Linux, la de GNOME primero).
+        let (family, fallback) = cfg.ui_font().unwrap();
+        if cfg!(windows) {
+            assert_eq!(family, "Segoe UI");
+        } else {
             assert_eq!(family, "Adwaita Sans");
             assert!(fallback.iter().any(|f| f == "Cantarell"));
         }

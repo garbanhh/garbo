@@ -210,8 +210,9 @@ impl Tab {
         } else {
             env.remove("GARBO_PROMPT");
         }
-        // `ssh` y `mosh` con Garbo también en el servidor (ver shell/ssh.sh). De momento, Linux.
-        if cfg!(target_os = "linux") && cfg.terminal.ssh_integration {
+        // `ssh` y `mosh` con Garbo también en el servidor (ver shell/ssh.sh y, en PowerShell, el
+        // final de shell/garbo.ps1).
+        if cfg.terminal.ssh_integration {
             env.insert("GARBO_SSH".into(), "1".into());
         } else {
             env.remove("GARBO_SSH");

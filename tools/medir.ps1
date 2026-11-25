@@ -1,10 +1,13 @@
-param([string]$Exe = "target\release\garbo.exe", [string]$Backend = "", [int]$Wait = 8, [string]$Label = "")
+param([string]$Exe = "target\release\garbo.exe", [string]$Backend = "", [int]$Wait = 8, [string]$Label = "",
+      [string]$Extra = "")
 # Windows: arranca Garbo con una configuración temporal (GARBO_CONFIG, sin buscar actualizaciones),
 # espera, mide memoria y CPU en reposo de Garbo y de sus hijos (conhost y el shell) y lo cierra.
-# -Backend dx12|vulkan|gl fuerza la API gráfica (WGPU_BACKEND). Ver docs/Procesos/Compilar y probar.md.
+# -Backend dx12|vulkan|gl fuerza la API gráfica (WGPU_BACKEND). -Extra añade líneas a esa
+# configuración (p. ej. -Extra "[style]`ninterface = 'classic'" para medir la interfaz Clásica).
+# Ver docs/Procesos/Compilar y probar.md.
 $dir = Join-Path $env:TEMP "garbo-medida"
 New-Item -ItemType Directory -Force $dir | Out-Null
-Set-Content -Encoding utf8 "$dir\config.toml" "check_updates = false`n"
+Set-Content -Encoding utf8 "$dir\config.toml" "check_updates = false`n$Extra`n"
 $env:GARBO_CONFIG = "$dir\config.toml"
 $env:GARBO_HISTORY = "$dir\history.tsv"
 Remove-Item Env:GARBO_SCREENSHOT -ErrorAction SilentlyContinue

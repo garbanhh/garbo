@@ -144,15 +144,8 @@ options! {
 }
 
 impl Interface {
-    /// La de cada sistema si el usuario no elige: Flotante en Linux; en Windows, de momento,
-    /// siempre la Clásica.
-    pub fn default_here() -> Self {
-        if cfg!(windows) {
-            Interface::Classic
-        } else {
-            Interface::Floating
-        }
-    }
+    /// La de serie si el usuario no elige, en Linux y en Windows.
+    pub const DEFAULT: Interface = Interface::Floating;
 }
 
 /// Radios de esquina que ofrece el editor (píxeles lógicos).
@@ -240,12 +233,12 @@ impl Default for Style {
 
 impl Style {
     /// La forma por defecto con la interfaz Flotante (la de los temas que no traen forma propia):
-    /// pestañas en píldora, botones redondos y esquinas de 10 px.
+    /// pestañas en píldora, botones del sistema (redondos en Linux, "Planos" en Windows) y
+    /// esquinas de 10 px.
     pub fn floating() -> Self {
         Self {
             tabs: Tabs::Pill,
             prompt: Prompt::Plain,
-            buttons: Buttons::Round,
             blocks: Blocks::Chips,
             radius: 10,
             block_gap: 16,
@@ -479,13 +472,16 @@ mod tests {
             .any(|(k, v)| *k == "interface" && v.is_some()));
         let raro: StyleOverrides = toml::from_str("interface = \"isla\"").unwrap();
         assert_eq!(raro.interface, None);
-        // La forma de Flotante: la de siempre con píldoras, botones redondos y radio 10.
+        // La forma de Flotante: la de siempre con píldoras, los botones del sistema (redondos en
+        // Linux, "Planos" en Windows) y radio 10.
         let f = Style::floating();
         assert_eq!(f.interface, Interface::Floating);
-        assert_eq!(
-            (f.tabs, f.buttons, f.radius),
-            (Tabs::Pill, Buttons::Round, 10)
-        );
+        let system = if cfg!(windows) {
+            Buttons::Flat
+        } else {
+            Buttons::Round
+        };
+        assert_eq!((f.tabs, f.buttons, f.radius), (Tabs::Pill, system, 10));
         assert_eq!(f.blocks, Blocks::Chips);
         // Hueco entre tarjetas: más que lo que cada tarjeta sobresale de sus filas.
         assert!(f.block_gap >= 12);
